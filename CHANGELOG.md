@@ -248,3 +248,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its terminal open.
 - Guided logins join the Sessions rail list under "Sign-ins" and open
   in the same panel; ended items keep replayable scrollback.
+
+### Changed (design iteration 6 — rail polish: responsive by construction)
+
+- Tabs reflow instead of clipping: labels truncate cleanly down to a
+  threshold, then fade to icon-only with tooltips (rail widths
+  208–360px); collapsed shows stacked icon tabs. Nothing overflows at
+  any width.
+- Drag-resize restored on the rail (hairline handle that lights up on
+  hover/drag, persisted width; double-click collapses), with the
+  layout audit-driven at default/narrow/collapsed states.
+- Tighter design-system pass on the rail: 7px row rhythm, 12.5/10.5px
+  type pair, Linear-style 2px accent selection bars, focus-visible
+  rings, proper aria tablist semantics, tooltips only when labels are
+  hidden.
+- Thin overlay-style scrollbars across rail and panels.

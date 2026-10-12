@@ -53,7 +53,15 @@ type Selection =
 
 export default function App() {
   const [tab, setTab] = useState<WorkTab>("projects");
-  const [railCollapsed, setRailCollapsed] = useState(false);
+  const [railCollapsed, setRailCollapsed] = useState(
+    () => localStorage.getItem("aij.rail.collapsed") === "1",
+  );
+  const toggleRail = useCallback(() => {
+    setRailCollapsed((was) => {
+      localStorage.setItem("aij.rail.collapsed", was ? "0" : "1");
+      return !was;
+    });
+  }, []);
   const [selection, setSelection] = useState<Selection>({ kind: "none" });
   const [global, setGlobal] = useState<GlobalId | null>(null);
   const [info, setInfo] = useState<AppInfo | null>(null);
@@ -150,7 +158,7 @@ export default function App() {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "b") {
         event.preventDefault();
-        setRailCollapsed((was) => !was);
+        toggleRail();
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
@@ -182,6 +190,7 @@ export default function App() {
         tab={tab}
         onTab={setTab}
         collapsed={railCollapsed}
+        onToggleCollapsed={toggleRail}
         projects={projects}
         sessions={sessions}
         loginTerminals={loginTerminals}
@@ -201,7 +210,7 @@ export default function App() {
             <button
               type="button"
               title={collapsed ? "Expand (⌘B)" : "Collapse (⌘B)"}
-              onClick={() => setRailCollapsed((was) => !was)}
+              onClick={toggleRail}
               className="shrink-0 rounded-md p-1 text-accent hover:bg-surface"
             >
               <span className="block drop-shadow-[0_0_10px_#7c7cf466]">
