@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the per-task Definition of Done applied to every requirement.
 - Architecture decision records (docs/adr/): Tauri 2, adapter
   architecture, automation policy, fleet transport, MIT license.
+- Autonomous build runbook (docs/plan/RUNBOOK.md): the operating
+  contract for unattended build runs — PR flow, DoD, gate stops, hard
+  rails.
 
 ### Changed
 

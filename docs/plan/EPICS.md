@@ -15,6 +15,7 @@ This is the execution companion to the [spec](../SPEC.md): the spec defines *wha
 2. Each task closes with its issue's acceptance checklist green and the DoD checklist green.
 3. Each milestone closes with a **validation gate** (below) — a full validation pass, a committed report (`docs/qa/gate-MX.md`), and **user confirmation before the next milestone starts**.
 4. Scope changes go through the spec first (PR), then this plan — never sideways into code.
+5. Autonomous operation: unattended build runs follow the contract in [RUNBOOK.md](./RUNBOOK.md) — same PR flow, same DoD, hard stops at gates and genuine blockages.
 
 **Milestone status**
 
