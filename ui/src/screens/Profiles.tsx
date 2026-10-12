@@ -12,6 +12,8 @@ import {
   hasLiveBackend,
   harnessesList,
   launchSession,
+  loginOpenWeb,
+  terminalSpawnLogin,
   profilesList,
   type AccountInfo,
   type HarnessInfo,
@@ -25,7 +27,11 @@ import {
  * no-ops so the design can be reviewed without a backend.
  */
 
-export function ProfilesScreen() {
+export function ProfilesScreen({
+  openTerminal,
+}: {
+  openTerminal: (id: string, title: string) => void;
+}) {
   const [accounts, setAccounts] = useState<AccountInfo[] | null>(null);
   const [profiles, setProfiles] = useState<ProfileInfo[] | null>(null);
   const [harnesses, setHarnesses] = useState<HarnessInfo[]>([]);
@@ -59,7 +65,13 @@ export function ProfilesScreen() {
       const result = await launchSession(profile.id, null);
       if (!result) {
         setError("Preview mode: no backend connected — nothing launched.");
+        return;
       }
+      // Interactive sessions stream straight into the terminal dock.
+      openTerminal(
+        result.session_id,
+        `${profile.account_label} · ${profile.name}`,
+      );
     } catch (cause) {
       setError(String(cause));
     }
@@ -138,6 +150,7 @@ export function ProfilesScreen() {
       {loginFor && (
         <LoginModal
           account={loginFor}
+          openTerminal={openTerminal}
           onClose={() => setLoginFor(null)}
           onRecheck={async () => {
             await accountLoginState(loginFor.id);
@@ -405,15 +418,18 @@ function NewProfileModal({
 
 function LoginModal({
   account,
+  openTerminal,
   onClose,
   onRecheck,
 }: {
   account: AccountInfo;
+  openTerminal: (id: string, title: string) => void;
   onClose: () => void;
   onRecheck: () => Promise<void>;
 }) {
   const [command, setCommand] = useState("…");
   const [copied, setCopied] = useState(false);
+  const [starting, setStarting] = useState(false);
 
   useEffect(() => {
     void accountLoginCommand(account.id).then(setCommand);
@@ -421,21 +437,36 @@ function LoginModal({
 
   const preview = !hasLiveBackend();
 
+  const signInHere = async () => {
+    setStarting(true);
+    try {
+      const terminal = await terminalSpawnLogin(account.id);
+      openTerminal(terminal.id, `Sign in · ${account.label}`);
+      onClose();
+    } catch (cause) {
+      setStarting(false);
+      window.alert(`Could not start the login terminal: ${String(cause)}`);
+    }
+  };
+
   return (
     <Modal
       title={`Log in · ${account.label}`}
-      subtitle={
-        preview
-          ? "Preview mode — the guided terminal ships in M1-4."
-          : "Run the vendor's own login once in your terminal; AI Juggler never sees your credentials."
-      }
+      subtitle="Claude's own sign-in, opened for you — AI Juggler never sees your credentials."
       onClose={onClose}
     >
       <div className="flex flex-col gap-4">
         <div className="rounded-xl border border-hairline bg-canvas px-3 py-2.5 font-mono text-[11px] leading-relaxed text-live">
           {command}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="primary" onClick={() => void signInHere()} disabled={starting}>
+            <IconTerminal width={14} height={14} />
+            {starting ? "Opening…" : preview ? "Sign in (preview)" : "Sign in inside AI Juggler"}
+          </Button>
+          <Button size="sm" variant="secondary" onClick={() => void loginOpenWeb(account.harness)}>
+            Open claude.ai
+          </Button>
           <Button
             size="sm"
             variant="secondary"
@@ -450,10 +481,11 @@ function LoginModal({
           <Button size="sm" variant="secondary" onClick={() => void onRecheck()}>
             Re-check login
           </Button>
-          <span className="ml-auto text-[11px] text-faint">
-            state stays isolated under AI Juggler
-          </span>
         </div>
+        <p className="text-[11px] text-faint">
+          The isolated login terminal opens at the bottom of the window —
+          complete Anthropic's sign-in there and you're done.
+        </p>
       </div>
     </Modal>
   );

@@ -16,6 +16,7 @@ import type { ProfileInfo } from "../types/generated/ProfileInfo";
 import type { SessionInfo } from "../types/generated/SessionInfo";
 import type { HarnessInfo } from "../types/generated/HarnessInfo";
 import type { StatsInfo } from "../types/generated/StatsInfo";
+import type { TerminalInfo } from "../types/generated/TerminalInfo";
 
 export type {
   AppInfo,
@@ -27,6 +28,7 @@ export type {
   SessionInfo,
   HarnessInfo,
   StatsInfo,
+  TerminalInfo,
 };
 
 /** Event names mirrored from juggler_app constants (single source: Rust). */
@@ -268,6 +270,86 @@ export function onAppReady(handler: (info: AppInfo) => void): () => void {
       }
     })
     .catch(() => {});
+  return () => {
+    disposed = true;
+    unlisten?.();
+  };
+}
+
+// ---- embedded terminal (M1-4) --------------------------------------------
+
+export const TERMINAL_EVENTS = {
+  output: "terminal://output",
+  exit: "terminal://exit",
+} as const;
+
+/** Spawns the guided login for an account inside an embedded terminal. */
+export async function terminalSpawnLogin(accountId: string): Promise<TerminalInfo> {
+  return invoke<TerminalInfo>("terminal_spawn_login", { accountId });
+}
+
+/** Starts streaming a supervised session into the dock (idempotent). */
+export async function terminalAttach(id: string): Promise<TerminalInfo> {
+  return invoke<TerminalInfo>("terminal_attach", { id });
+}
+
+/** Sends keystrokes to a terminal. */
+export async function terminalWrite(id: string, data: string): Promise<void> {
+  return invoke<void>("terminal_write", { id, data });
+}
+
+/** Resizes a terminal's PTY. */
+export async function terminalResize(
+  id: string,
+  cols: number,
+  rows: number,
+): Promise<void> {
+  return invoke<void>("terminal_resize", { id, cols, rows });
+}
+
+/** Stops a terminal's process (graceful ladder). */
+export async function terminalKill(id: string): Promise<void> {
+  return invoke<void>("terminal_kill", { id });
+}
+
+/** The retained output tail (base64) for replay on panel reopen. */
+export async function terminalSnapshot(id: string): Promise<string> {
+  return invoke<string>("terminal_snapshot", { id });
+}
+
+/** Live output stream for one terminal (base64 chunks). */
+export function onTerminalOutput(
+  id: string,
+  handler: (base64: string) => void,
+): () => void {
+  return listenScoped(TERMINAL_EVENTS.output, (payload: { id: string; data: string }) => {
+    if (payload.id === id) handler(payload.data);
+  });
+}
+
+/** A terminal's process exited. */
+export function onTerminalExit(handler: (id: string) => void): () => void {
+  return listenScoped(TERMINAL_EVENTS.exit, (payload: { id: string }) =>
+    handler(payload.id),
+  );
+}
+
+function listenScoped<T>(
+  event: string,
+  handler: (payload: T) => void,
+): () => void {
+  if (!hasBackend) {
+    return () => {};
+  }
+  let unlisten: (() => void) | null = null;
+  let disposed = false;
+  listen<T>(event, (event_) => handler(event_.payload)).then((stop) => {
+    if (disposed) {
+      stop();
+    } else {
+      unlisten = stop;
+    }
+  });
   return () => {
     disposed = true;
     unlisten?.();

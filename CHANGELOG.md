@@ -189,3 +189,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Integration tests: scan classification/dedup/sorting, import
   correctness + source immutability + ceiling, and the command-level
   onboarding path (import → launch → session recorded).
+
+### Added (M1-4)
+
+- Embedded terminal (xterm.js + PTY streaming, issue #20): tabbed
+  terminal dock at the bottom of the window — drag-resizable, collapsible
+  with ⌘J, layout persisted. Live sessions and guided logins stream into
+  it; closing a tab's panel and reopening replays the retained tail.
+- Supervisor: PTY keyboard input (`write_input`), resize (`resize_pty`),
+  live output taps (ring listeners, one forwarder per terminal), and
+  exit probes (`is_finished`).
+- App surface: `terminal_spawn_login` (vendor login in an isolated PTY),
+  `terminal_attach` (idempotent streaming), `terminal_write/resize/kill/
+  snapshot`; base64 chunk events batched at a 16 ms flush — the 60 fps
+  UI budget. Guided login now runs fully in-app; the login modal also
+  opens the vendor's sign-in page (claude.ai) or copies the command.
+- Launch flows land in the dock: clicking Launch opens a terminal tab
+  attached to the interactive session.
+- Tests: PTY input/resize/tap round-trip; 20 concurrent streaming
+  sessions fan-out without deadlock (M1-4 perf floor); app-level
+  terminal cores (echo → snapshot replay → stop ladder); login spec
+  env-scoping proof.

@@ -400,6 +400,87 @@ pub fn account_import_impl(
     })
 }
 
+/// Spawns the guided login for an account inside an embedded terminal.
+#[tauri::command]
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on failure.
+pub fn terminal_spawn_login(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    account_id: String,
+) -> AppResult<crate::terminal::TerminalInfo> {
+    crate::terminal::spawn_login_terminal_impl(&app, state.inner(), &account_id)
+}
+
+/// Starts streaming a supervised session into the terminal dock
+/// (idempotent per terminal).
+#[tauri::command]
+#[must_use]
+pub fn terminal_attach(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    id: String,
+) -> crate::terminal::TerminalInfo {
+    let info = crate::terminal::TerminalInfo { id: id.clone() };
+    crate::terminal::attach_forwarder(
+        &app,
+        state.inner(),
+        &juggler_core::model::SessionId::new(id),
+    );
+    info
+}
+
+/// Feeds keystrokes to a terminal.
+#[tauri::command]
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on failure.
+pub fn terminal_write(
+    state: tauri::State<'_, Arc<AppState>>,
+    id: String,
+    data: String,
+) -> AppResult<()> {
+    crate::terminal::terminal_write_impl(state.inner(), &id, &data)
+}
+
+/// Resizes a terminal.
+#[tauri::command]
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on failure.
+pub fn terminal_resize(
+    state: tauri::State<'_, Arc<AppState>>,
+    id: String,
+    cols: u16,
+    rows: u16,
+) -> AppResult<()> {
+    crate::terminal::terminal_resize_impl(state.inner(), &id, cols, rows)
+}
+
+/// Stops a terminal's process (graceful ladder).
+#[tauri::command]
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on failure.
+pub fn terminal_kill(state: tauri::State<'_, Arc<AppState>>, id: String) -> AppResult<()> {
+    crate::terminal::terminal_kill_impl(state.inner(), &id)
+}
+
+/// The retained output tail (base64) for replay on panel reopen.
+#[tauri::command]
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on failure.
+pub fn terminal_snapshot(state: tauri::State<'_, Arc<AppState>>, id: String) -> AppResult<String> {
+    crate::terminal::terminal_snapshot_impl(state.inner(), &id)
+}
+
 /// Opens the vendor's own web sign-in page in the system browser — the
 /// maximum login aid allowed (ADR-0003): the user completes the vendor's
 /// flow; credentials never touch AI Juggler.
@@ -827,7 +908,16 @@ fn find_account(
     state: &tauri::State<'_, Arc<AppState>>,
     account_id: &str,
 ) -> Result<Account, AppError> {
-    lock_storage(state)?
+    find_account_arc(state.inner(), account_id)
+}
+
+/// Core account lookup shared with the terminal module and tests.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the account does not exist.
+pub fn find_account_arc(state: &Arc<AppState>, account_id: &str) -> Result<Account, AppError> {
+    lock_storage_arc(state)?
         .accounts()
         .get(&AccountId::new(account_id))
         .map_err(|error| not_found_or_core(error, "account", account_id))
@@ -859,7 +949,7 @@ fn not_found_or_core(error: juggler_core::CoreError, entity: &'static str, id: &
     }
 }
 
-fn unique_suffix() -> u128 {
+pub(crate) fn unique_suffix() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())

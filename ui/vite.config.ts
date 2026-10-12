@@ -14,5 +14,13 @@ export default defineConfig({
     target: "es2022",
     outDir: "dist",
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // xterm is heavy and terminal-first paint doesn't need it.
+          xterm: ["@xterm/xterm", "@xterm/addon-fit"],
+        },
+      },
+    },
   },
 });

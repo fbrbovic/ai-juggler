@@ -211,3 +211,127 @@ fn unknown_sessions_error_cleanly() {
     assert!(supervisor.stop(&ghost, Duration::from_secs(1)).is_err());
     assert!(supervisor.descendants(&ghost).is_err());
 }
+
+#[test]
+fn pty_sessions_roundtrip_input_output_and_resize() {
+    let workdir = tempfile::tempdir().unwrap();
+    let supervisor = Supervisor::new();
+    let session = SessionId::new("s-pty-cat");
+
+    // cat under a PTY: everything we write is echoed back through the tap.
+    let spec = LaunchSpec {
+        program: PathBuf::from("/bin/sh"),
+        args: vec!["-c".into(), "cat".into()],
+        env: EnvMap::new(),
+        cwd: workdir.path().to_path_buf(),
+        needs_pty: true,
+    };
+    supervisor.spawn(&session, &spec).unwrap();
+    let tap = supervisor.tap(&session).unwrap();
+
+    supervisor
+        .write_input(&session, b"juggler-pty-roundtrip\n")
+        .unwrap();
+    let mut collected = Vec::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if let Ok(chunk) = tap.recv_timeout(Duration::from_millis(200)) {
+            collected.extend_from_slice(&chunk);
+            if collected.windows(21).any(|w| w == b"juggler-pty-roundtrip") {
+                break;
+            }
+        }
+    }
+    assert!(
+        collected.windows(21).any(|w| w == b"juggler-pty-roundtrip"),
+        "typed input must stream back through the tap: {:?}",
+        String::from_utf8_lossy(&collected)
+    );
+
+    // Resize is accepted (the kernel owns the winsize; no error means the
+    // master is live).
+    supervisor.resize_pty(&session, 120, 40).unwrap();
+
+    // The ring snapshot contains the same stream (replay-after-reopen).
+    supervisor.write_input(&session, b"tail-marker\n").unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        let snapshot = supervisor.output(&session).unwrap();
+        if snapshot.windows(11).any(|w| w == b"tail-marker") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        supervisor
+            .output(&session)
+            .unwrap()
+            .windows(11)
+            .any(|w| w == b"tail-marker")
+    );
+
+    supervisor.stop(&session, Duration::from_secs(2)).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline && !supervisor.is_finished(&session) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(supervisor.is_finished(&session));
+
+    // Piped sessions have no PTY: the typed error says so.
+    let piped = SessionId::new("s-piped");
+    supervisor
+        .spawn(&piped, &sh_spec("true", workdir.path()))
+        .unwrap();
+    let err = supervisor.write_input(&piped, b"x").unwrap_err();
+    assert!(err.to_string().contains("no pty"), "{err}");
+}
+
+#[test]
+fn twenty_streaming_sessions_fan_out_without_deadlock() {
+    // M1-4 perf floor: 20 concurrent PTY sessions each streaming output
+    // through a tap; every stream must deliver within the deadline and
+    // the supervisor must stay responsive (60 fps UI budget depends on
+    // this path never wedging).
+    let workdir = tempfile::tempdir().unwrap();
+    let supervisor = Supervisor::new();
+    let mut sessions = Vec::new();
+    for i in 0..20 {
+        let session = SessionId::new(format!("s-stream-{i}"));
+        let spec = LaunchSpec {
+            program: PathBuf::from("/bin/sh"),
+            args: vec![
+                "-c".into(),
+                "i=0; while [ $i -lt 50 ]; do echo line-$i; i=$((i+1)); done".to_string(),
+            ],
+            env: EnvMap::new(),
+            cwd: workdir.path().to_path_buf(),
+            needs_pty: true,
+        };
+        supervisor.spawn(&session, &spec).unwrap();
+        let tap = supervisor.tap(&session).unwrap();
+        sessions.push((session, tap));
+    }
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    for (session, rx) in sessions {
+        let mut tail = Vec::new();
+        let mut got_last = false;
+        while std::time::Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(300)) {
+                Ok(chunk) => {
+                    tail.extend_from_slice(&chunk);
+                    if tail.windows(7).any(|w| w == b"line-49") {
+                        got_last = true;
+                        break;
+                    }
+                }
+                Err(_) if supervisor.is_finished(&session) => break,
+                Err(_) => continue,
+            }
+        }
+        assert!(
+            got_last || tail.windows(7).any(|w| w == b"line-49"),
+            "stream for {session} never delivered its final line"
+        );
+    }
+}

@@ -11,6 +11,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+base64 = "0.22"
 dirs = "7.0.0"
 juggler-adapter = { version = "0.0.1", path = "../juggler-adapter" }
 juggler-adapters = { version = "0.0.1", path = "../juggler-adapters" }

@@ -104,6 +104,23 @@ pub trait HarnessAdapter: Send + Sync {
     fn login_url(&self) -> Option<LoginUrl> {
         None
     }
+
+    /// Builds the launch spec for the vendor's own interactive login flow
+    /// against a config dir — the guided-terminal login primitive (spec
+    /// §4.1): AI Juggler spawns it in an embedded terminal; the user
+    /// completes the OAuth flow; nothing is automated.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError::Unsupported`] when the harness has no
+    /// terminal login flow, [`AdapterError::InvalidLaunch`] when the
+    /// binary cannot be resolved.
+    fn login_spec(&self, state_dir: &Path) -> Result<LaunchSpec, AdapterError> {
+        let _ = state_dir;
+        Err(AdapterError::Unsupported(
+            "this harness has no terminal login flow".into(),
+        ))
+    }
 }
 
 /// Shared adapter handle type used by the registry and supervisor.
