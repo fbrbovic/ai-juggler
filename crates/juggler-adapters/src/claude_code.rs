@@ -1,0 +1,447 @@
+//! Claude Code adapter (spec §4.1) — the first real harness integration.
+//!
+//! Isolation model (research `docs/research/claude-code.md` §2–§3): each
+//! managed account gets its own `CLAUDE_CONFIG_DIR`; since Claude Code
+//! v2.1.56 the macOS keychain entry is namespaced per config dir, so
+//! parallel accounts no longer clobber each other's OAuth tokens.
+//!
+//! Guardrails (ADR-0003): this adapter never reads credential *contents* —
+//! login detection checks file presence/size and macOS keychain entry
+//! existence only; login itself always runs through the vendor's own
+//! interactive `claude` flow launched in a guided terminal.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use juggler_adapter::{
+    AdapterError, Capabilities, DiscoveryReport, EnvMap, HarnessAdapter, InstallStatus, LaunchMode,
+    LaunchSpec, SessionEvent, SessionWatcher, VerificationStatus,
+};
+use juggler_core::model::{Account, HarnessId, Profile};
+
+/// Harness id: `claude-code`.
+pub const CLAUDE_CODE_ID: &str = "claude-code";
+
+/// Versions this adapter's launch/watch behavior was verified against
+/// (research pinned 2.1.296, 2026-10-12). Other 2.1.x versions run with an
+/// unverified-drift note — never a hard failure (spec §4 rules).
+const VERIFIED_AGAINST: &[&str] = &["2.1.296"];
+
+/// Marker file identifying a directory as managed by AI Juggler.
+const MANAGED_MARKER: &str = ".ai-juggler-managed";
+
+/// Environment variable naming the isolated config dir (spec §3).
+const ENV_CONFIG_DIR: &str = "CLAUDE_CONFIG_DIR";
+
+/// Optional test/dev override for the harness binary path.
+const ENV_BIN_OVERRIDE: &str = "AI_JUGGLER_CLAUDE_BIN";
+
+/// Adapter for Anthropic's Claude Code CLI.
+#[derive(Debug, Clone, Default)]
+pub struct ClaudeCodeAdapter {
+    bin: Option<PathBuf>,
+}
+
+impl ClaudeCodeAdapter {
+    /// Creates the adapter, resolving the binary at call time.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Creates the adapter pinned to a specific binary (tests/fixtures).
+    #[must_use]
+    pub fn with_bin(bin: impl Into<PathBuf>) -> Self {
+        Self {
+            bin: Some(bin.into()),
+        }
+    }
+
+    fn resolve_bin(&self) -> Option<PathBuf> {
+        if let Some(bin) = &self.bin {
+            return Some(bin.clone());
+        }
+        if let Some(override_path) = std::env::var_os(ENV_BIN_OVERRIDE) {
+            let path = PathBuf::from(override_path);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+        find_on_path("claude").or_else(|| {
+            // GUI launches don't inherit the shell PATH (spec §4.1
+            // discovery robustness); cover the installer's defaults.
+            home_relative(".local/bin/claude")
+                .filter(|p| p.is_file())
+                .or_else(|| existing(&["/opt/homebrew/bin/claude", "/usr/local/bin/claude"]))
+        })
+    }
+
+    fn report(&self, bin: PathBuf, version: String) -> DiscoveryReport {
+        let verification = if VERIFIED_AGAINST.contains(&version.as_str()) {
+            VerificationStatus::Verified
+        } else {
+            VerificationStatus::Unverified
+        };
+        let notes = if matches!(verification, VerificationStatus::Unverified) {
+            vec![format!(
+                "version drift: {version}; this adapter was verified against {VERIFIED_AGAINST:?}"
+            )]
+        } else {
+            Vec::new()
+        };
+        DiscoveryReport {
+            adapter: self.id(),
+            install: InstallStatus::Installed { version },
+            verification,
+            binary: Some(bin),
+            notes,
+        }
+    }
+}
+
+impl HarnessAdapter for ClaudeCodeAdapter {
+    fn id(&self) -> HarnessId {
+        HarnessId::new(CLAUDE_CODE_ID)
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::HEADLESS
+            | Capabilities::RESUME
+            | Capabilities::TRANSCRIPT_EXPORT
+            | Capabilities::TRANSCRIPT_WATCH
+            | Capabilities::USAGE_TOKENS
+            | Capabilities::USAGE_QUOTA_FEED
+            | Capabilities::FORK
+            | Capabilities::TRANSPLANT
+    }
+
+    fn verified_against(&self) -> &'static [&'static str] {
+        VERIFIED_AGAINST
+    }
+
+    fn discover(&self) -> DiscoveryReport {
+        let Some(bin) = self.resolve_bin() else {
+            return DiscoveryReport {
+                adapter: self.id(),
+                install: InstallStatus::NotFound,
+                verification: VerificationStatus::Unverified,
+                binary: None,
+                notes: vec![
+                    "looked on PATH, ~/.local/bin, /opt/homebrew/bin, /usr/local/bin".into(),
+                ],
+            };
+        };
+        if !bin.is_file() {
+            return DiscoveryReport {
+                adapter: self.id(),
+                install: InstallStatus::NotFound,
+                verification: VerificationStatus::Unverified,
+                binary: None,
+                notes: vec![format!(
+                    "resolved {} but the file does not exist",
+                    bin.display()
+                )],
+            };
+        }
+        match std::process::Command::new(&bin).arg("--version").output() {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let version = stdout
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .to_string();
+                if version.is_empty() {
+                    DiscoveryReport {
+                        adapter: self.id(),
+                        install: InstallStatus::Failed {
+                            message: format!("empty --version output: {stdout:?}"),
+                        },
+                        verification: VerificationStatus::Unverified,
+                        binary: Some(bin),
+                        notes: Vec::new(),
+                    }
+                } else {
+                    self.report(bin, version)
+                }
+            }
+            Ok(output) => DiscoveryReport {
+                adapter: self.id(),
+                install: InstallStatus::Failed {
+                    message: format!("--version exited with {status}", status = output.status),
+                },
+                verification: VerificationStatus::Unverified,
+                binary: Some(bin),
+                notes: Vec::new(),
+            },
+            Err(error) => DiscoveryReport {
+                adapter: self.id(),
+                install: InstallStatus::Failed {
+                    message: error.to_string(),
+                },
+                verification: VerificationStatus::Unverified,
+                binary: Some(bin),
+                notes: Vec::new(),
+            },
+        }
+    }
+
+    fn prepare_account(&self, state_dir: &Path) -> Result<EnvMap, AdapterError> {
+        create_private_dir(state_dir).map_err(|error| AdapterError::AccountDir {
+            path: state_dir.to_path_buf(),
+            message: error.to_string(),
+        })?;
+        // Marker identifies the directory as ours — guardrail primitive for
+        // "never touch unmanaged dirs" checks (ADR-0003).
+        let marker = state_dir.join(MANAGED_MARKER);
+        std::fs::write(&marker, "managed-by: ai-juggler\nharness: claude-code\n")
+            .and_then(|()| restrict_to_owner(&marker))
+            .map_err(|error| AdapterError::AccountDir {
+                path: state_dir.to_path_buf(),
+                message: format!("cannot write marker: {error}"),
+            })?;
+        let mut env = EnvMap::new();
+        env.insert(
+            ENV_CONFIG_DIR.to_string(),
+            state_dir.to_string_lossy().into_owned(),
+        );
+        Ok(env)
+    }
+
+    fn launch_spec(
+        &self,
+        account: &Account,
+        profile: &Profile,
+        cwd: &Path,
+        mode: &LaunchMode,
+    ) -> Result<LaunchSpec, AdapterError> {
+        let Some(bin) = self.resolve_bin() else {
+            return Err(AdapterError::InvalidLaunch(
+                "claude binary not found; run discovery for details".into(),
+            ));
+        };
+        let effective_cwd = profile
+            .default_cwd
+            .clone()
+            .unwrap_or_else(|| cwd.to_path_buf());
+        let mut env = EnvMap::new();
+        env.insert(
+            ENV_CONFIG_DIR.to_string(),
+            account.state_dir.to_string_lossy().into_owned(),
+        );
+        env.extend(profile.settings_overlay.env.clone());
+        let (args, needs_pty) = match mode {
+            LaunchMode::Interactive => (Vec::new(), true),
+            LaunchMode::Headless { prompt } => (
+                vec![
+                    "-p".into(),
+                    prompt.clone(),
+                    "--output-format".into(),
+                    "stream-json".into(),
+                ],
+                false,
+            ),
+        };
+        Ok(LaunchSpec {
+            program: bin,
+            args,
+            env,
+            cwd: effective_cwd,
+            needs_pty,
+        })
+    }
+
+    fn watcher(&self, transcript_root: &Path) -> Result<Box<dyn SessionWatcher>, AdapterError> {
+        Ok(Box::new(ClaudeTranscriptWatcher {
+            root: transcript_root.to_path_buf(),
+            seen: BTreeMap::new(),
+        }))
+    }
+}
+
+/// Login state of a managed account, detected without reading credential
+/// contents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginState {
+    /// Credentials are present (file or keychain entry exists).
+    LoggedIn,
+    /// No credentials found for this config dir.
+    LoggedOut,
+}
+
+impl ClaudeCodeAdapter {
+    /// Probes whether the account in `state_dir` is logged in.
+    ///
+    /// Detection is metadata-only (ADR-0003): a non-empty
+    /// `.credentials.json` inside the config dir, or — on macOS — the
+    /// per-config-dir keychain entry (`Claude Code-credentials-{sha8}`,
+    /// namespaced since Claude Code v2.1.56). A missing keychain entry
+    /// simply reports `LoggedOut`; the user re-runs the vendor's own login.
+    #[must_use]
+    pub fn login_state(&self, state_dir: &Path) -> LoginState {
+        let credentials = state_dir.join(".credentials.json");
+        if let Ok(meta) = std::fs::metadata(&credentials)
+            && meta.len() > 0
+        {
+            return LoginState::LoggedIn;
+        }
+        #[cfg(target_os = "macos")]
+        if keychain_entry_exists(&namespaced_service(state_dir)) {
+            return LoginState::LoggedIn;
+        }
+        LoginState::LoggedOut
+    }
+
+    /// Builds the launch spec for the vendor's own interactive login flow —
+    /// the "guided terminal login" primitive (spec §4.1). AI Juggler spawns
+    /// it; the user completes the OAuth flow; nothing is automated.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError::InvalidLaunch`] when no claude binary is
+    /// resolvable.
+    pub fn login_spec(&self, state_dir: &Path) -> Result<LaunchSpec, AdapterError> {
+        let Some(bin) = self.resolve_bin() else {
+            return Err(AdapterError::InvalidLaunch(
+                "claude binary not found; run discovery for details".into(),
+            ));
+        };
+        let mut env = EnvMap::new();
+        env.insert(
+            ENV_CONFIG_DIR.to_string(),
+            state_dir.to_string_lossy().into_owned(),
+        );
+        Ok(LaunchSpec {
+            program: bin,
+            args: Vec::new(),
+            env,
+            cwd: state_dir.to_path_buf(),
+            needs_pty: true,
+        })
+    }
+}
+
+/// True when the directory carries the AI Juggler management marker.
+#[must_use]
+pub fn is_managed_dir(state_dir: &Path) -> bool {
+    state_dir.join(MANAGED_MARKER).is_file()
+}
+
+/// Minimal polling watcher over `<config>/projects/**/*.jsonl` (the
+/// M1-5 notify-based watcher supersedes it; kept for the contract).
+struct ClaudeTranscriptWatcher {
+    root: PathBuf,
+    seen: BTreeMap<PathBuf, usize>,
+}
+
+impl SessionWatcher for ClaudeTranscriptWatcher {
+    fn poll(
+        &mut self,
+        _timeout: std::time::Duration,
+    ) -> Result<Option<SessionEvent>, AdapterError> {
+        let Ok(entries) = std::fs::read_dir(&self.root) else {
+            return Ok(None);
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "jsonl") {
+                let lines = std::fs::read(&path).map_or(0, |bytes| {
+                    bytes.split(|b| *b == b'\n').count().saturating_sub(1)
+                });
+                let known = self.seen.entry(path.clone()).or_insert(0);
+                if *known == 0 && lines > 0 {
+                    let native_id = path
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    *known = lines;
+                    return Ok(Some(SessionEvent::Discovered {
+                        native_id,
+                        transcript_path: path,
+                    }));
+                }
+                *known = lines;
+            }
+        }
+        Ok(None)
+    }
+}
+
+// ---- helpers -------------------------------------------------------------
+
+fn find_on_path(program: &str) -> Option<PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    let exe = if cfg!(windows) {
+        format!("{program}.exe")
+    } else {
+        program.to_string()
+    };
+    std::env::split_paths(&path_var)
+        .map(|dir| dir.join(&exe))
+        .find(|candidate| candidate.is_file())
+}
+
+fn home_relative(relative: &str) -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    Some(PathBuf::from(home).join(relative))
+}
+
+fn existing(candidates: &[&str]) -> Option<PathBuf> {
+    candidates.iter().map(PathBuf::from).find(|p| p.is_file())
+}
+
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::fs::DirBuilder;
+        use std::os::unix::fs::DirBuilderExt;
+        DirBuilder::new().recursive(true).mode(0o700).create(dir)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(dir)
+    }
+}
+
+fn restrict_to_owner(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(())
+    }
+}
+
+/// The macOS keychain service name Claude Code namespaces per config dir
+/// (since v2.1.56): `Claude Code-credentials-{first 8 hex of sha256(path)}`.
+#[cfg(target_os = "macos")]
+fn namespaced_service(state_dir: &Path) -> String {
+    use sha2::{Digest, Sha256};
+
+    let digest = Sha256::digest(state_dir.to_string_lossy().as_bytes());
+    let hex = digest.iter().fold(String::new(), |mut out, b| {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{b:02x}");
+        out
+    });
+    format!("Claude Code-credentials-{}", &hex[..8])
+}
+
+/// Probes keychain entry existence via `security find-generic-password`
+/// **without** extracting any secret (`-w` deliberately absent).
+#[cfg(target_os = "macos")]
+fn keychain_entry_exists(service: &str) -> bool {
+    std::process::Command::new("security")
+        .args(["find-generic-password", "-s", service])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
