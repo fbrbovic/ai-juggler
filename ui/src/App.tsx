@@ -49,24 +49,36 @@ export default function App() {
         items={[...NAV]}
         active={nav}
         onSelect={(id) => setNav(id as NavId)}
-        header={
-          <div className="flex h-14 items-center gap-2.5 overflow-hidden px-4">
+        header={(collapsed) => (
+          <div
+            className={`flex h-14 items-center gap-2.5 overflow-hidden ${
+              collapsed ? "justify-center px-0" : "px-4"
+            }`}
+          >
             <span className="shrink-0 text-accent drop-shadow-[0_0_10px_#7c7cf466]">
               <IconJuggler width={22} height={22} />
             </span>
-            <span className="whitespace-nowrap text-[15px] font-semibold tracking-tight">
-              AI Juggler
-            </span>
+            {!collapsed && (
+              <span className="whitespace-nowrap text-[15px] font-semibold tracking-tight">
+                AI Juggler
+              </span>
+            )}
           </div>
-        }
-        footer={
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-2">
-              <span className="dot-live size-1.5 shrink-0 rounded-full bg-success" />
-              <span className="truncate">this-mac · healthy</span>
+        )}
+        footer={(collapsed) =>
+          collapsed ? (
+            <div className="flex justify-center" title="this-mac · healthy">
+              <span className="dot-live size-1.5 rounded-full bg-success" />
             </div>
-            <div className="truncate font-mono">v{info?.version ?? "0.0.0"}</div>
-          </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2">
+                <span className="dot-live size-1.5 shrink-0 rounded-full bg-success" />
+                <span className="truncate">this-mac · healthy</span>
+              </div>
+              <div className="truncate font-mono">v{info?.version ?? "0.0.0"}</div>
+            </div>
+          )
         }
       />
 

@@ -83,15 +83,21 @@ export function IconTerminal(props: SVGProps<SVGSVGElement>) {
 }
 
 export function IconJuggler(props: SVGProps<SVGSVGElement>) {
-  // Wordmark mark: three orbiting nodes around a core — "juggling".
+  // Mark: three balls mid-juggle over a dashed throw arc. The balls are
+  // the three harnesses in flight (violet, bright violet, live cyan).
   return (
-    <svg {...base(props)} strokeWidth={2}>
-      <circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none" />
-      <ellipse cx="12" cy="12" rx="9" ry="4.5" transform="rotate(-24 12 12)" />
-      <ellipse cx="12" cy="12" rx="9" ry="4.5" transform="rotate(24 12 12)" />
-      <circle cx="19" cy="8.5" r="1.75" fill="currentColor" stroke="none" />
-      <circle cx="5" cy="8.5" r="1.75" fill="currentColor" stroke="none" />
-      <circle cx="12" cy="16.2" r="1.75" fill="currentColor" stroke="none" />
+    <svg {...base(props)}>
+      <path
+        d="M6.8 16C8.4 7.4 15.6 7.4 17.2 16"
+        stroke="currentColor"
+        strokeOpacity={0.35}
+        strokeWidth={1.25}
+        strokeDasharray="2.2 2.6"
+        fill="none"
+      />
+      <circle cx={6.8} cy={16} r={2.3} fill="var(--color-accent)" />
+      <circle cx={12} cy={8.6} r={2.5} fill="var(--color-accent-hi)" />
+      <circle cx={17.2} cy={16} r={2.3} fill="var(--color-live)" />
     </svg>
   );
 }
