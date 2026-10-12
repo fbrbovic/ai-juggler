@@ -38,6 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contract for unattended build runs — PR flow, DoD, gate stops, hard
   rails.
 
+### Added (M0-1)
+
+- Cargo workspace with the seven `juggler-*` crates; workspace lint
+  baseline (clippy pedantic subset, `unwrap/expect/panic/todo` warnings,
+  `missing_docs` deny, `unsafe_code` forbid); pinned toolchain
+  (1.99.0, MSRV 1.99); cargo-deny policy; `just` task runner
+  (`just verify` = the CI gate, locally).
+
 ### Changed
 
 - Handover model upgraded from summary packs to tiered session sync:

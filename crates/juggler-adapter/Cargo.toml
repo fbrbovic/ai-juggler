@@ -1,0 +1,11 @@
+[package]
+name = "juggler-adapter"
+description = "The HarnessAdapter contract: capabilities, discovery, launch specs, session watching."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
