@@ -231,3 +231,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the juggling integration proof — two accounts, one shared
   directory, one tracked project with both accounts in its history and
   the live instance surfaced.
+
+### Changed (design iteration 5 — workflow navigator)
+
+- The left rail is now the workflow itself (ADR-0007): three tabs —
+  Projects / Instances / Sessions — whose live list lives inside the
+  rail (collapsing to icons with ⌘B), plus a New session action
+  (⌘N) anchored in the navigator.
+- Selecting anything loads its panel on the right; selecting a session
+  or instance embeds its **terminal directly in the panel** — the
+  bottom dock is gone. Panels cross-link: session → its project,
+  project → its sessions, project → launch-with-another-account (the
+  one-click juggle), all drill-in-place.
+- New-session modal: profile picker + optional directory (launching
+  into a directory creates/reuses its project), lands selected with
+  its terminal open.
+- Guided logins join the Sessions rail list under "Sign-ins" and open
+  in the same panel; ended items keep replayable scrollback.
