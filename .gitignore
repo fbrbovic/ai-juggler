@@ -44,3 +44,6 @@ Icon?
 *.log
 tmp/
 scratch/
+
+# TypeScript incremental build state
+ui/tsconfig.tsbuildinfo
