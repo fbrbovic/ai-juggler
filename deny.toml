@@ -31,3 +31,11 @@ unknown-git = "deny"
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+    # RUSTSEC-2024-0370 — proc-macro-error 1.0.4 is unmaintained (build-time
+    # proc-macro crate, not a vulnerability). Transitive via gtk3-macros /
+    # webkit2gtk in Tauri's Linux webview stack; no fixed release exists
+    # upstream. Risk assessed 2026-10-12: compile-time only, zero runtime
+    # exposure. Remove when gtk-rs ships an update.
+    "RUSTSEC-2024-0370",
+]
