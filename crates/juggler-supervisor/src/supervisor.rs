@@ -180,6 +180,13 @@ impl Supervisor {
         let mut builder = CommandBuilder::new(&spec.program);
         builder.cwd(&spec.cwd);
         builder.args(&spec.args);
+        // Env semantics (spec §4): the overlay merges over the supervisor's
+        // base environment. portable-pty's builder does not reliably inherit
+        // the parent env on all platforms, so inherit explicitly, then apply
+        // the overlay last so it wins.
+        for (key, value) in std::env::vars_os() {
+            builder.env(key, value);
+        }
         for (key, value) in &spec.env {
             builder.env(key, value);
         }

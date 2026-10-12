@@ -11,10 +11,18 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+dirs = "7.0.0"
+juggler-adapter = { version = "0.0.1", path = "../juggler-adapter" }
+juggler-adapters = { version = "0.0.1", path = "../juggler-adapters" }
 juggler-core = { version = "0.0.1", path = "../juggler-core" }
+juggler-supervisor = { version = "0.0.1", path = "../juggler-supervisor" }
 serde = { version = "1.0.229", features = ["derive"] }
 tauri = "2.12.3"
+thiserror = "2.0.21"
 ts-rs = { version = "12.0.1", features = ["serde-json-impl", "no-serde-warnings"] }
 
 [build-dependencies]
 tauri-build = "2.7.2"
+
+[dev-dependencies]
+tempfile = "3.27.0"

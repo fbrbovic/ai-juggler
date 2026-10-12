@@ -44,6 +44,7 @@ fn test_account(state_dir: &std::path::Path) -> juggler_core::model::Account {
 fn test_profile() -> Profile {
     Profile {
         id: ProfileId::new("fake-profile"),
+        name: "fake profile".into(),
         account: AccountId::new("fake-account"),
         settings_overlay: SettingsOverlay::default(),
         default_cwd: None,

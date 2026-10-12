@@ -1876,10 +1876,16 @@ dependencies = [
 name = "juggler-app"
 version = "0.0.1"
 dependencies = [
+ "dirs",
+ "juggler-adapter",
+ "juggler-adapters",
  "juggler-core",
+ "juggler-supervisor",
  "serde",
  "tauri",
  "tauri-build",
+ "tempfile",
+ "thiserror 2.0.21",
  "ts-rs",
 ]
 

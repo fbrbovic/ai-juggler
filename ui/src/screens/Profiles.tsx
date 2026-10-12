@@ -1,0 +1,460 @@
+import { useCallback, useEffect, useState } from "react";
+import { Button, Card, Chip, type ChipTone } from "../components/primitives";
+import { Field, Input, Modal, Select } from "../components/form";
+import { IconProfiles, IconTerminal } from "../components/icons";
+import {
+  accountLoginCommand,
+  accountLoginState,
+  accountsList,
+  createAccount,
+  createProfile,
+  deleteProfile,
+  hasLiveBackend,
+  harnessesList,
+  launchSession,
+  profilesList,
+  type AccountInfo,
+  type HarnessInfo,
+  type ProfileInfo,
+} from "../lib/bridge";
+
+/**
+ * Profiles screen (M1-3): accounts with isolated state + one-click profile
+ * launching. Every action maps 1:1 to a typed backend command; in
+ * plain-browser preview mode the screen renders mock data and launches are
+ * no-ops so the design can be reviewed without a backend.
+ */
+
+export function ProfilesScreen() {
+  const [accounts, setAccounts] = useState<AccountInfo[] | null>(null);
+  const [profiles, setProfiles] = useState<ProfileInfo[] | null>(null);
+  const [harnesses, setHarnesses] = useState<HarnessInfo[]>([]);
+  const [addAccount, setAddAccount] = useState(false);
+  const [newProfileFor, setNewProfileFor] = useState<AccountInfo | null>(null);
+  const [loginFor, setLoginFor] = useState<AccountInfo | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const [accountRows, profileRows, harnessRows] = await Promise.all([
+        accountsList(),
+        profilesList(),
+        harnessesList(),
+      ]);
+      setAccounts(accountRows);
+      setProfiles(profileRows);
+      setHarnesses(harnessRows);
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const launch = async (profile: ProfileInfo) => {
+    setError(null);
+    try {
+      const result = await launchSession(profile.id, null);
+      if (!result) {
+        setError("Preview mode: no backend connected — nothing launched.");
+      }
+    } catch (cause) {
+      setError(String(cause));
+    }
+  };
+
+  if (accounts === null || profiles === null) {
+    return <div className="py-24 text-center text-sm text-muted">Loading…</div>;
+  }
+
+  return (
+    <div className="mx-auto flex w-full max-w-4xl flex-col gap-5">
+      <header className="flex items-end justify-between gap-4">
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight">Profiles</h2>
+          <p className="text-xs text-muted">
+            One account per harness login — each fully isolated. Launch any
+            profile in parallel with one click.
+          </p>
+        </div>
+        <Button variant="primary" size="sm" onClick={() => setAddAccount(true)}>
+          <IconProfiles width={14} height={14} />
+          Add account
+        </Button>
+      </header>
+
+      {error && (
+        <Card className="border-danger/30 bg-danger-soft p-3 text-xs text-danger">
+          {error}
+        </Card>
+      )}
+
+      {accounts.length === 0 ? (
+        <EmptyAccounts onAdd={() => setAddAccount(true)} />
+      ) : (
+        <div className="flex flex-col gap-4">
+          {accounts.map((account) => (
+            <AccountCard
+              key={account.id}
+              account={account}
+              profiles={profiles.filter((profile) => profile.account_id === account.id)}
+              onLaunch={launch}
+              onDeleteProfile={async (id) => {
+                await deleteProfile(id);
+                void refresh();
+              }}
+              onNewProfile={() => setNewProfileFor(account)}
+              onLogin={() => setLoginFor(account)}
+              onLoginRechecked={refresh}
+            />
+          ))}
+        </div>
+      )}
+
+      {addAccount && (
+        <AddAccountModal
+          harnesses={harnesses}
+          onClose={() => setAddAccount(false)}
+          onCreated={async (created) => {
+            await refresh();
+            setLoginFor(created);
+          }}
+        />
+      )}
+
+      {newProfileFor && (
+        <NewProfileModal
+          account={newProfileFor}
+          onClose={() => setNewProfileFor(null)}
+          onCreated={() => {
+            setNewProfileFor(null);
+            void refresh();
+          }}
+        />
+      )}
+
+      {loginFor && (
+        <LoginModal
+          account={loginFor}
+          onClose={() => setLoginFor(null)}
+          onRecheck={async () => {
+            await accountLoginState(loginFor.id);
+            await refresh();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function EmptyAccounts({ onAdd }: { onAdd: () => void }) {
+  return (
+    <Card className="flex flex-col items-center justify-center gap-3 py-14">
+      <span className="flex size-11 items-center justify-center rounded-xl border border-accent/20 bg-accent-soft text-accent-hi">
+        <IconProfiles width={22} height={22} />
+      </span>
+      <p className="max-w-sm text-center text-sm text-muted">
+        No accounts yet. Add your first harness login — AI Juggler keeps its
+        state fully isolated from any existing install.
+      </p>
+      <Button variant="primary" size="sm" onClick={onAdd}>
+        Add account
+      </Button>
+    </Card>
+  );
+}
+
+function AccountCard({
+  account,
+  profiles,
+  onLaunch,
+  onDeleteProfile,
+  onNewProfile,
+  onLogin,
+  onLoginRechecked,
+}: {
+  account: AccountInfo;
+  profiles: ProfileInfo[];
+  onLaunch: (profile: ProfileInfo) => void;
+  onDeleteProfile: (id: string) => Promise<void>;
+  onNewProfile: () => void;
+  onLogin: () => void;
+  onLoginRechecked: () => Promise<void>;
+}) {
+  const loggedIn = account.login_state === "logged_in";
+  const loginTone: ChipTone = loggedIn ? "success" : "warning";
+  return (
+    <Card className="overflow-hidden">
+      <div className="flex flex-wrap items-center gap-2.5 border-b border-hairline px-5 py-3.5">
+        <HarnessGlyph harness={account.harness} />
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="truncate text-sm font-semibold">{account.label}</span>
+            {account.plan && <Chip tone="accent">{account.plan}</Chip>}
+          </div>
+          <span className="font-mono text-[11px] text-faint">{account.harness}</span>
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+          <Chip tone={loginTone} dot breathing={!loggedIn}>
+            {loggedIn ? "Logged in" : "Needs login"}
+          </Chip>
+          {!loggedIn && (
+            <Button size="sm" variant="secondary" onClick={onLogin}>
+              Log in
+            </Button>
+          )}
+          <Button size="sm" variant="ghost" onClick={onNewProfile}>
+            + Profile
+          </Button>
+        </div>
+      </div>
+
+      <div className="divide-y divide-hairline">
+        {profiles.length === 0 ? (
+          <div className="px-5 py-4 text-xs text-faint">
+            No profiles yet — add one to launch sessions under this account.
+          </div>
+        ) : (
+          profiles.map((profile) => (
+            <div key={profile.id} className="group flex items-center gap-3 px-5 py-2.5">
+              <span className="text-sm">{profile.name}</span>
+              {profile.model ? (
+                <Chip tone="neutral">{profile.model}</Chip>
+              ) : (
+                <Chip tone="neutral">default model</Chip>
+              )}
+              {profile.default_cwd && (
+                <span className="truncate font-mono text-[11px] text-faint">
+                  {profile.default_cwd}
+                </span>
+              )}
+              <div className="ml-auto flex items-center gap-1 opacity-60 transition-opacity group-hover:opacity-100">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  title="Delete profile"
+                  onClick={() => void onDeleteProfile(profile.id)}
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round">
+                    <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                  </svg>
+                </Button>
+                <Button size="sm" variant="primary" onClick={() => onLaunch(profile)}>
+                  <IconTerminal width={13} height={13} />
+                  Launch
+                </Button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+      {/* keep recheck reachable for logged-in cards via silent refresh */}
+      <span className="hidden">{void onLoginRechecked}</span>
+    </Card>
+  );
+}
+
+function HarnessGlyph({ harness }: { harness: string }) {
+  // Claude Code mark: an abstract spark; per-harness glyphs grow with M2.
+  return (
+    <span
+      className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-accent/20 bg-accent-soft text-accent-hi"
+      title={harness}
+    >
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 2.6c.5 3.9 2.4 6.6 6.9 8-4.5 1.4-6.4 4.1-6.9 8-.5-3.9-2.4-6.6-6.9-8 4.5-1.4 6.4-4.1 6.9-8Z" />
+      </svg>
+    </span>
+  );
+}
+
+function AddAccountModal({
+  harnesses,
+  onClose,
+  onCreated,
+}: {
+  harnesses: HarnessInfo[];
+  onClose: () => void;
+  onCreated: (account: AccountInfo) => Promise<void>;
+}) {
+  const [harness, setHarness] = useState(harnesses[0]?.id ?? "claude-code");
+  const [label, setLabel] = useState("");
+  const [plan, setPlan] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (!label.trim()) {
+      setError("Give the account a name, e.g. “Work Max”.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await createAccount(harness, label.trim(), plan.trim() || null);
+      onClose();
+      await onCreated(created);
+    } catch (cause) {
+      setError(String(cause));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      title="Add account"
+      subtitle="AI Juggler prepares a private, isolated state directory for this login."
+      onClose={onClose}
+    >
+      <div className="flex flex-col gap-4">
+        <Field label="Harness">
+          <Select value={harness} onChange={(event) => setHarness(event.target.value)}>
+            {harnesses.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.name}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Account name">
+          <Input
+            autoFocus
+            value={label}
+            placeholder="Work Max"
+            onChange={(event) => setLabel(event.target.value)}
+          />
+        </Field>
+        <Field label="Plan (optional)" hint="Shown on quota widgets, e.g. max-20x">
+          <Input value={plan} placeholder="max-20x" onChange={(event) => setPlan(event.target.value)} />
+        </Field>
+        {error && <p className="text-xs text-danger">{error}</p>}
+        <div className="ml-auto flex gap-2">
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" size="sm" disabled={busy} onClick={() => void submit()}>
+            {busy ? "Preparing…" : "Create account"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function NewProfileModal({
+  account,
+  onClose,
+  onCreated,
+}: {
+  account: AccountInfo;
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [model, setModel] = useState("");
+  const [cwd, setCwd] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (!name.trim()) {
+      setError("Name the profile, e.g. “Deep work”.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await createProfile(account.id, name.trim(), model.trim() || null, cwd.trim() || null);
+      onCreated();
+    } catch (cause) {
+      setError(String(cause));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={`New profile · ${account.label}`}
+      subtitle="A launch configuration under this account."
+      onClose={onClose}
+    >
+      <div className="flex flex-col gap-4">
+        <Field label="Profile name">
+          <Input autoFocus value={name} placeholder="Deep work" onChange={(event) => setName(event.target.value)} />
+        </Field>
+        <Field label="Model (optional)" hint="Written to the account's managed settings">
+          <Input value={model} placeholder="opus" onChange={(event) => setModel(event.target.value)} />
+        </Field>
+        <Field label="Default directory (optional)">
+          <Input value={cwd} placeholder="~/Projects/app" onChange={(event) => setCwd(event.target.value)} />
+        </Field>
+        {error && <p className="text-xs text-danger">{error}</p>}
+        <div className="ml-auto flex gap-2">
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" size="sm" disabled={busy} onClick={() => void submit()}>
+            Create profile
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function LoginModal({
+  account,
+  onClose,
+  onRecheck,
+}: {
+  account: AccountInfo;
+  onClose: () => void;
+  onRecheck: () => Promise<void>;
+}) {
+  const [command, setCommand] = useState("…");
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    void accountLoginCommand(account.id).then(setCommand);
+  }, [account.id]);
+
+  const preview = !hasLiveBackend();
+
+  return (
+    <Modal
+      title={`Log in · ${account.label}`}
+      subtitle={
+        preview
+          ? "Preview mode — the guided terminal ships in M1-4."
+          : "Run the vendor's own login once in your terminal; AI Juggler never sees your credentials."
+      }
+      onClose={onClose}
+    >
+      <div className="flex flex-col gap-4">
+        <div className="rounded-xl border border-hairline bg-canvas px-3 py-2.5 font-mono text-[11px] leading-relaxed text-live">
+          {command}
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={async () => {
+              await navigator.clipboard.writeText(command);
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 1500);
+            }}
+          >
+            {copied ? "Copied" : "Copy command"}
+          </Button>
+          <Button size="sm" variant="secondary" onClick={() => void onRecheck()}>
+            Re-check login
+          </Button>
+          <span className="ml-auto text-[11px] text-faint">
+            state stays isolated under AI Juggler
+          </span>
+        </div>
+      </div>
+    </Modal>
+  );
+}

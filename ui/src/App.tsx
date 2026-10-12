@@ -16,7 +16,14 @@ import {
   IconTerminal,
   IconUsage,
 } from "./components/icons";
-import { fetchAppInfo, onAppReady, type AppInfo } from "./lib/bridge";
+import { ProfilesScreen } from "./screens/Profiles";
+import {
+  dashboardStats,
+  fetchAppInfo,
+  onAppReady,
+  type AppInfo,
+  type StatsInfo,
+} from "./lib/bridge";
 
 /**
  * App shell: collapsible/resizable rail, floating-glass status bar over an
@@ -107,7 +114,7 @@ export default function App() {
 
         {/* Content */}
         <main className="min-h-0 flex-1 overflow-y-auto p-6">
-          {nav === "dashboard" ? <Dashboard /> : <ComingSoon screen={nav} />}
+          {nav === "dashboard" ? <Dashboard /> : nav === "profiles" ? <ProfilesScreen /> : <ComingSoon screen={nav} />}
         </main>
       </div>
     </div>
@@ -115,20 +122,25 @@ export default function App() {
 }
 
 function Dashboard() {
+  const [stats, setStats] = useState<StatsInfo | null>(null);
+  useEffect(() => {
+    void dashboardStats().then(setStats);
+  }, []);
+
   return (
     <div className="flex flex-col gap-6">
       {/* Health strip */}
       <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
         <StatCard
           label="Profiles"
-          value="0"
-          hint="no accounts yet"
+          value={String(stats?.profiles ?? 0)}
+          hint={`${stats?.accounts ?? 0} accounts`}
           icon={<IconProfiles width={15} height={15} />}
         />
         <StatCard
           label="Active sessions"
-          value="0"
-          hint="nothing running"
+          value={String(stats?.active_sessions ?? 0)}
+          hint="live across all harnesses"
           tone="live"
           icon={<IconTerminal width={15} height={15} />}
         />

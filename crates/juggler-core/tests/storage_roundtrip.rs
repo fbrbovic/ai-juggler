@@ -178,6 +178,7 @@ fn seed_chain(storage: &Storage) -> (Account, Profile) {
     let profile = Profile {
         id: ProfileId::new("seed-profile"),
         account: account.id.clone(),
+        name: "Seed profile".into(),
         settings_overlay: SettingsOverlay::default(),
         default_cwd: None,
     };
@@ -201,7 +202,7 @@ proptest! {
     fn profile_roundtrip(overlay in arb_overlay(), id in id_str()) {
         let storage = Storage::open_in_memory().unwrap();
         let (account, _) = seed_chain(&storage);
-        let profile = Profile { id: ProfileId::new(id), account: account.id, settings_overlay: overlay, default_cwd: None };
+        let profile = Profile { id: ProfileId::new(id.clone()), name: format!("p-{id}"), account: account.id, settings_overlay: overlay, default_cwd: None };
         storage.profiles().insert(&profile).unwrap();
         prop_assert_eq!(storage.profiles().get(&profile.id).unwrap(), profile);
     }
@@ -358,6 +359,7 @@ fn profile_update_and_delete() {
     let (account, _) = seed_chain(&storage);
     let mut profile = Profile {
         id: ProfileId::new("p-upd"),
+        name: "updatable".into(),
         account: account.id.clone(),
         settings_overlay: SettingsOverlay::default(),
         default_cwd: None,

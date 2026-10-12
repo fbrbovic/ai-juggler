@@ -146,3 +146,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   events recover on the next poll); emits Discovered/MessageAppended.
 - Fuzz scaffold (`fuzz/`): `transcript_parse` target exercising parser +
   dedupe on arbitrary bytes (cargo-fuzz, nightly; outside the workspace).
+
+### Added (M1-3)
+
+- App backend: `AppState` (SQLite storage, adapter registry, journaling
+  supervisor) with per-platform data-dir resolution; 13 typed Tauri
+  commands (accounts, profiles, sessions, launch/stop, login state and
+  copyable vendor-login command, dashboard stats); lifecycle forwarder
+  persisting session status transitions; `Profile.name` (schema v2
+  migration).
+- Supervisor fix surfaced by integration testing: the PTY path now
+  inherits the base environment and applies the profile overlay on top
+  (spec §4 env semantics).
+- Launcher UI (Profiles screen): account cards with harness glyph, plan
+  and login chips; per-profile rows with model chips and one-click
+  Launch; add-account and new-profile modals; guided-login modal with
+  copyable isolated login command (external-terminal fallback) and
+  re-check; empty states; dashboard shows live counts. Typed bridge with
+  plain-browser design-preview mocks.
+- Integration tests (unix): two accounts launch in parallel through the
+  full app stack with complete config-dir isolation and per-account
+  settings overlays; write containment verified across the sandbox
+  (zero writes outside the app data dir).

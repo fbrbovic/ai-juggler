@@ -168,6 +168,7 @@ fn launch_specs_merge_overlay_env() {
     overlay.env.insert("ANTHROPIC_MODEL".into(), "opus".into());
     let profile = Profile {
         id: ProfileId::new("p1"),
+        name: "p1".into(),
         account: acct.id.clone(),
         settings_overlay: overlay,
         default_cwd: None,
