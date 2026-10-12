@@ -18,7 +18,6 @@ use juggler_adapter::{
     LaunchSpec, SessionEvent, SessionWatcher, VerificationStatus,
 };
 use juggler_core::model::{Account, HarnessId, Profile};
-use sha2::{Digest, Sha256};
 
 /// Harness id: `claude-code`.
 pub const CLAUDE_CODE_ID: &str = "claude-code";
@@ -424,6 +423,8 @@ fn restrict_to_owner(path: &Path) -> std::io::Result<()> {
 /// (since v2.1.56): `Claude Code-credentials-{first 8 hex of sha256(path)}`.
 #[cfg(target_os = "macos")]
 fn namespaced_service(state_dir: &Path) -> String {
+    use sha2::{Digest, Sha256};
+
     let digest = Sha256::digest(state_dir.to_string_lossy().as_bytes());
     let hex = digest.iter().fold(String::new(), |mut out, b| {
         use std::fmt::Write as _;
