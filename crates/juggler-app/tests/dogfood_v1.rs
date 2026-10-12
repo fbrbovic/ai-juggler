@@ -218,3 +218,21 @@ fn base64_decode_for_test(data: &str) -> Vec<u8> {
     }
     out
 }
+
+#[test]
+#[ignore = "operational: backfills the user's real project history"]
+fn backfill_real_projects() {
+    let data_dir = expand("Library/Application Support/AI Juggler");
+    let state = Arc::new(AppState::init(data_dir).expect("app state"));
+    let enriched = commands::projects_backfill_impl(&state).expect("backfill");
+    println!("BACKFILLED {enriched} projects from imported transcripts");
+    for project in commands::projects_list_impl(&state).expect("projects") {
+        println!(
+            "  {} | via {:?} | {} prior sessions | active: {:?}",
+            project.root,
+            project.accounts_used,
+            project.history_sessions,
+            project.active_instance.as_ref().map(|i| i.label.clone())
+        );
+    }
+}

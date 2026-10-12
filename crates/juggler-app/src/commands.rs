@@ -5,6 +5,7 @@
 //! Commands take `tauri::State` by value per the framework's convention.
 #![allow(clippy::needless_pass_by_value)]
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -12,8 +13,9 @@ use serde::{Deserialize, Serialize};
 use tauri_plugin_opener::OpenerExt;
 use ts_rs::TS;
 
+use juggler_adapter::LaunchMode;
 use juggler_core::model::{
-    Account, AccountId, Profile, ProfileId, SessionId, SessionRecord, SessionStatus,
+    Account, AccountId, MachineId, Profile, ProfileId, SessionId, SessionRecord, SessionStatus,
     SettingsOverlay, Timestamp,
 };
 use juggler_core::storage::Storage;
@@ -138,11 +140,15 @@ pub struct ProjectInfo {
     pub last_activity_ms: Option<i64>,
     /// The instance currently managing this project, when live.
     pub active_instance: Option<SessionInfo>,
-    /// Account labels that have ever run in this project.
+    /// Account labels that have ever run in this project (AI Juggler runs
+    /// plus imported pre-existing history).
     pub accounts_used: Vec<String>,
-    /// Total instances ever run in this project.
+    /// Total instances run through AI Juggler in this project.
     #[ts(type = "number")]
     pub instance_count: u64,
+    /// Sessions discovered in imported transcripts (pre-AI-Juggler work).
+    #[ts(type = "number")]
+    pub history_sessions: u64,
 }
 
 /// Dashboard counts.
@@ -954,6 +960,239 @@ fn session_infos(storage: &Storage) -> AppResult<Vec<SessionInfo>> {
         .collect())
 }
 
+/// Scans imported transcripts and backfills the projects rail with the
+/// user's REAL history: every project directory found in any account's
+/// `projects/` transcripts (cwd read from the transcript itself, never
+/// guessed from the encoded dir name), with per-account history merged.
+/// Idempotent; safe to run at every startup.
+#[tauri::command]
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on failure.
+pub fn projects_backfill(state: tauri::State<'_, Arc<AppState>>) -> AppResult<u32> {
+    projects_backfill_impl(state.inner())
+}
+
+/// Core implementation shared with tests.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on failure.
+pub fn projects_backfill_impl(state: &Arc<AppState>) -> AppResult<u32> {
+    use std::collections::BTreeMap;
+
+    // root → (labels, native session count)
+    let mut found: BTreeMap<PathBuf, (Vec<String>, u64)> = BTreeMap::new();
+    let accounts = lock_storage_arc(state)?.accounts().list()?;
+    for account in &accounts {
+        let projects_root = account.state_dir.join("projects");
+        let Ok(entries) = std::fs::read_dir(&projects_root) else {
+            continue;
+        };
+        for project_dir in entries.flatten().filter(|e| e.path().is_dir()) {
+            let jsonl = newest_jsonl(&project_dir.path());
+            let Some(jsonl) = jsonl else { continue };
+            let Some(cwd) = transcript_cwd(&jsonl) else {
+                continue; // cannot decode the dir name unambiguously
+            };
+            let entry = found
+                .entry(PathBuf::from(&cwd))
+                .or_insert_with(|| (Vec::new(), 0));
+            if !entry.0.contains(&account.label) {
+                entry.0.push(account.label.clone());
+            }
+            entry.1 += count_jsonl(&project_dir.path());
+        }
+    }
+
+    let storage = lock_storage_arc(state)?;
+    let mut enriched = 0;
+    for (root, (labels, sessions)) in found {
+        let record = storage.projects().touch(&root, None)?;
+        storage.projects().merge_history(
+            &record.id,
+            &juggler_core::model::ProjectHistory {
+                accounts: labels,
+                native_sessions: sessions,
+            },
+        )?;
+        enriched += 1;
+    }
+    Ok(enriched)
+}
+
+/// Newest `.jsonl` in a project transcript dir by mtime.
+fn newest_jsonl(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter(|entry| entry.path().extension().is_some_and(|e| e == "jsonl"))
+        .max_by_key(|entry| entry.metadata().ok().and_then(|m| m.modified().ok()))
+        .map(|entry| entry.path())
+}
+
+fn count_jsonl(dir: &std::path::Path) -> u64 {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| entry.path().extension().is_some_and(|e| e == "jsonl"))
+                .count() as u64
+        })
+        .unwrap_or_default()
+}
+
+/// Reads a transcript's true working directory from its first lines
+/// (`"cwd"` is recorded on message records) — the only unambiguous decode.
+fn transcript_cwd(jsonl: &std::path::Path) -> Option<String> {
+    use std::io::BufRead;
+    let file = std::fs::File::open(jsonl).ok()?;
+    for line in std::io::BufReader::new(file).lines().take(25).flatten() {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line)
+            && let Some(cwd) = value.get("cwd").and_then(|v| v.as_str())
+            && !cwd.is_empty()
+        {
+            return Some(cwd.to_string());
+        }
+    }
+    None
+}
+
+/// The juggle (spec §7 T1/T2 v0): move a live session's transcript to
+/// another account and resume it there — same project, same context, one
+/// click. User-initiated only (automation policy).
+#[tauri::command]
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on failure.
+pub fn session_handover(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    session_id: String,
+    target_profile_id: String,
+) -> AppResult<LaunchResult> {
+    let result = session_handover_impl(state.inner(), &session_id, &target_profile_id)?;
+    emit_sessions(&app, state.inner())?;
+    Ok(result)
+}
+
+/// Core implementation shared with tests.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message when the source session, its
+/// transcript, or the target profile cannot be resolved, or on copy or
+/// launch failure.
+pub fn session_handover_impl(
+    state: &Arc<AppState>,
+    session_id: &str,
+    target_profile_id: &str,
+) -> AppResult<LaunchResult> {
+    let (profile_b, account_b) = find_profile_with_account_arc(state, target_profile_id)?;
+
+    let (source, account_a) = {
+        let storage = lock_storage_arc(state)?;
+        let source = storage
+            .sessions()
+            .get(&SessionId::new(session_id))
+            .map_err(|error| not_found_or_core(error, "session", session_id))?;
+        let source_profile = storage
+            .profiles()
+            .get(&source.profile)
+            .map_err(|error| not_found_or_core(error, "profile", &source.profile.to_string()))?;
+        let account_a = storage
+            .accounts()
+            .get(&source_profile.account)
+            .map_err(|error| {
+                not_found_or_core(error, "account", &source_profile.account.to_string())
+            })?;
+        (source, account_a)
+    };
+    if source.project.is_none() {
+        return Err(AppError::Io {
+            context: "hand over",
+            message: "session has no project link".into(),
+        });
+    }
+
+    // The newest transcript for the source cwd in account A's config.
+    let encoded = source.cwd.to_string_lossy().replace('/', "-");
+    let dir_a = account_a.state_dir.join("projects").join(&encoded);
+    let transcript = newest_jsonl(&dir_a).ok_or_else(|| AppError::Io {
+        context: "hand over",
+        message: "no transcript found for this session's project".into(),
+    })?;
+    let native_id = transcript
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .ok_or_else(|| AppError::Io {
+            context: "hand over",
+            message: "transcript has no session id".into(),
+        })?;
+
+    // Transplant: same encoded subpath under account B (same cwd → same
+    // encoding), byte copy, credentials never involved.
+    let dir_b = account_b.state_dir.join("projects").join(&encoded);
+    std::fs::create_dir_all(&dir_b).map_err(|e| AppError::Io {
+        context: "hand over",
+        message: format!("cannot create target dir: {e}"),
+    })?;
+    let dest = dir_b.join(transcript.file_name().unwrap_or_default());
+    std::fs::copy(&transcript, &dest).map_err(|e| AppError::Io {
+        context: "hand over",
+        message: format!("cannot copy transcript: {e}"),
+    })?;
+
+    // Resume under account B in the same project directory.
+    let adapter = state
+        .registry
+        .get(&account_b.harness)
+        .ok_or_else(|| AppError::UnknownHarness(account_b.harness.to_string()))?;
+    let spec = adapter.launch_spec(
+        &account_b,
+        &profile_b,
+        &source.cwd,
+        &LaunchMode::Resume {
+            session_id: native_id.clone(),
+        },
+    )?;
+    let new_session = SessionId::new(format!("sess-{}", unique_suffix()));
+    let spawned = state.supervisor.spawn(&new_session, &spec)?;
+
+    {
+        let storage = lock_storage_arc(state)?;
+        // Source lineage: handed over.
+        let mut handed = source.clone();
+        handed.status = SessionStatus::HandedOver;
+        storage.sessions().update(&handed)?;
+        // The continuation session, linked to the same project.
+        storage.sessions().insert(&SessionRecord {
+            id: new_session.clone(),
+            native_id: Some(native_id),
+            profile: profile_b.id,
+            machine: MachineId::new("this-mac"),
+            kind: juggler_core::model::InstanceKind::Terminal,
+            project: source.project,
+            cwd: source.cwd.clone(),
+            status: SessionStatus::Starting,
+            started_at: Timestamp::now(),
+            last_activity: None,
+            usage: juggler_core::model::UsageSnapshot::default(),
+            transcript_ref: Some(juggler_core::model::TranscriptRef {
+                path: dest,
+                native_id: None,
+            }),
+        })?;
+    }
+
+    Ok(LaunchResult {
+        session_id: new_session.to_string(),
+        pid: spawned.pid,
+    })
+}
+
 /// Lists tracked projects with their live instance, account history, and
 /// totals — the juggling view (ADR-0007).
 #[tauri::command]
@@ -991,6 +1230,7 @@ pub fn projects_list_impl(state: &Arc<AppState>) -> AppResult<Vec<ProjectInfo>> 
                 .map(|s| s.label.clone())
                 .filter(|label| !label.is_empty())
                 .collect();
+            accounts_used.extend(project.history.accounts.iter().cloned());
             accounts_used.sort();
             accounts_used.dedup();
             ProjectInfo {
@@ -1001,6 +1241,7 @@ pub fn projects_list_impl(state: &Arc<AppState>) -> AppResult<Vec<ProjectInfo>> 
                 active_instance,
                 accounts_used,
                 instance_count: u64::try_from(owned.len()).unwrap_or_default(),
+                history_sessions: project.history.native_sessions,
             }
         })
         .collect())

@@ -159,6 +159,16 @@ impl HarnessAdapter for FakeHarnessAdapter {
                 args.push(prompt.clone());
                 juggler_adapter::launch::headless_spec(self.bin.clone(), args, env, effective_cwd)
             }
+            LaunchMode::Resume { session_id } => {
+                args.push("--resume".to_string());
+                args.push(session_id.clone());
+                juggler_adapter::launch::interactive_spec(
+                    self.bin.clone(),
+                    args,
+                    env,
+                    effective_cwd,
+                )
+            }
         };
         Ok(spec)
     }

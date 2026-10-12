@@ -75,7 +75,11 @@ CREATE TABLE projects (
 ";
 
 /// Ordered, forward-only migrations; index + 1 is the schema version.
-const MIGRATIONS: &[&str] = &[V1, V2, V3];
+/// Schema version 4: imported-history enrichment on projects (which
+/// accounts worked there before AI Juggler, from imported transcripts).
+const V4: &str = "ALTER TABLE projects ADD COLUMN history_json TEXT NOT NULL DEFAULT '{}';";
+
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4];
 
 /// An opened AI Juggler database with typed repositories.
 #[derive(Debug)]

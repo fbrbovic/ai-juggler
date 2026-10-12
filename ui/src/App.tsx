@@ -9,22 +9,25 @@ import {
 } from "./components/icons";
 import { ProfilesScreen } from "./screens/Profiles";
 import { OnboardingWizard } from "./screens/OnboardingWizard";
-import {
-  NewSessionModal,
-  ProjectPanel,
-  SessionPanel,
-  WorkEmpty,
-} from "./screens/WorkPanels";
+import { NewSessionModal } from "./screens/NewSession";
+import { ReadyHome } from "./screens/ReadyHome";
+import { ProjectPanel, SessionPanel, WorkEmpty } from "./screens/WorkPanels";
 import {
   accountsList,
+  profilesList,
   onSessionsUpdated,
   onTerminalExit,
+  projectsBackfill,
   projectsList,
   sessionsList,
+  sessionHandover,
+  onFolderDropped,
   launchSession,
+  type ProfileInfo,
   dashboardStats,
   fetchAppInfo,
   onAppReady,
+  type AccountInfo,
   type AppInfo,
   type ProjectInfo,
   type SessionInfo,
@@ -69,6 +72,12 @@ export default function App() {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const [accounts, setAccounts] = useState<AccountInfo[]>([]);
+  const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
+  const [readySkipped, setReadySkipped] = useState(
+    () => sessionStorage.getItem("aij.ready.skipped") === "1",
+  );
+  const [newSessionDir, setNewSessionDir] = useState<string | null>(null);
   const [loginTerminals, setLoginTerminals] = useState<
     { id: string; title: string; ended: boolean }[]
   >([]);
@@ -91,12 +100,33 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [projectRows, sessionRows] = await Promise.all([projectsList(), sessionsList()]);
+      const [projectRows, sessionRows, accountRows, profileRows] = await Promise.all([
+        projectsList(),
+        sessionsList(),
+        accountsList(),
+        profilesList(),
+      ]);
       setProjects(projectRows);
       setSessions(sessionRows);
+      setAccounts(accountRows);
+      setProfiles(profileRows);
     } catch {
       // preview mode may lack backend mocks for some calls — keep last data
     }
+  }, []);
+
+  // Golden path day one: surface the user's REAL project history from
+  // imported transcripts (idempotent backend scan).
+  useEffect(() => {
+    void projectsBackfill().then(() => void refresh());
+  }, [refresh]);
+
+  // Drop a folder anywhere → New session pre-filled with it.
+  useEffect(() => {
+    return onFolderDropped((path) => {
+      setNewSessionDir(path);
+      setNewSession(true);
+    });
   }, []);
 
   useEffect(() => {
@@ -160,6 +190,12 @@ export default function App() {
         : null,
     [selection, loginTerminals],
   );
+  const showReadyHome =
+    global === null &&
+    accounts.length > 0 &&
+    accounts.some((a) => a.login_state !== "logged_in") &&
+    !readySkipped;
+
   const sessionProject = useMemo(
     () => projects.find((p) => p.id === selectedSession?.project_id) ?? null,
     [projects, selectedSession],
@@ -320,8 +356,36 @@ export default function App() {
               session={selectedSession}
               project={sessionProject}
               loginTerminal={selectedLogin}
+              profiles={profiles}
+              accounts={accounts}
               onOpenProject={selectProject}
               onStopped={() => void refresh()}
+              onHandover={async (sessionId, targetProfileId) => {
+                try {
+                  const result = await sessionHandover(sessionId, targetProfileId);
+                  await refresh();
+                  selectSession(result.session_id);
+                } catch (cause) {
+                  window.alert(`Hand-over failed: ${String(cause)}`);
+                }
+              }}
+            />
+          ) : showReadyHome ? (
+            <ReadyHome
+              accounts={accounts}
+              onSignIn={async (account) => {
+                try {
+                  const { terminalSpawnLogin } = await import("./lib/bridge");
+                  const terminal = await terminalSpawnLogin(account.id);
+                  openLoginTerminal(terminal.id, `Sign in · ${account.label}`);
+                } catch (cause) {
+                  window.alert(`Could not start sign-in: ${String(cause)}`);
+                }
+              }}
+              onSkip={() => {
+                sessionStorage.setItem("aij.ready.skipped", "1");
+                setReadySkipped(true);
+              }}
             />
           ) : (
             <WorkEmpty onNew={() => setNewSession(true)} />
@@ -342,9 +406,16 @@ export default function App() {
 
       {newSession && (
         <NewSessionModal
-          onClose={() => setNewSession(false)}
+          projects={projects}
+          accounts={accounts}
+          initialDirectory={newSessionDir}
+          onClose={() => {
+            setNewSession(false);
+            setNewSessionDir(null);
+          }}
           onLaunched={(sessionId) => {
             setNewSession(false);
+            setNewSessionDir(null);
             setTab("sessions");
             void refresh();
             selectSession(sessionId);

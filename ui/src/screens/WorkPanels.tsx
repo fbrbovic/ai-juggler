@@ -5,6 +5,7 @@ import { IconJuggler, IconProjects, IconTerminal } from "../components/icons";
 import {
   launchSession,
   profilesList,
+  type AccountInfo,
   type ProfileInfo,
   type ProjectInfo,
   type SessionInfo,
@@ -44,14 +45,20 @@ export function SessionPanel({
   session,
   project,
   loginTerminal,
+  profiles,
+  accounts,
   onOpenProject,
   onStopped,
+  onHandover,
 }: {
   session: SessionInfo | null;
   project: ProjectInfo | null;
   loginTerminal?: { id: string; title: string; ended: boolean } | null;
+  profiles: ProfileInfo[];
+  accounts: AccountInfo[];
   onOpenProject: (id: string) => void;
   onStopped: () => void;
+  onHandover: (sessionId: string, targetProfileId: string) => void;
 }) {
   const isLoginTerminal = Boolean(loginTerminal);
   const title = loginTerminal?.title ?? session?.label ?? "Session";
@@ -118,15 +125,64 @@ export function SessionPanel({
         )}
       </Card>
 
+      {isLoginTerminal && !live && (
+        <Card className="flex items-center gap-3 p-3">
+          <span className="dot-live size-1.5 rounded-full bg-live" />
+          <p className="text-[11px] leading-relaxed text-muted">
+            Complete Anthropic's sign-in above, then check the account again
+            from <span className="text-ink">Accounts</span> — it flips to
+            ready.
+          </p>
+        </Card>
+      )}
+
       {!isLoginTerminal && session && (
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[11px] text-faint">
-          <span>harness: <span className="text-muted">{session.harness}</span></span>
-          <span>profile: <span className="font-mono text-muted">{session.profile_id}</span></span>
-          <span>age: <span className="text-muted">{since(session.started_at_ms)}</span></span>
-          <span className="ml-auto">
-            hand-over to another account lands on this panel with the
-            handover milestone
-          </span>
+        <div className="flex flex-col gap-2">
+          <p className="text-[11px] uppercase tracking-wider text-faint">
+            Continue on another account
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {profiles
+              .filter((profile) => profile.id !== session.profile_id)
+              .slice(0, 6)
+              .map((profile) => {
+                const ready =
+                  accounts.find((a) => a.id === profile.account_id)?.login_state ===
+                  "logged_in";
+                return (
+                  <button
+                    key={profile.id}
+                    type="button"
+                    disabled={!ready}
+                    onClick={() => onHandover(session.id, profile.id)}
+                    title={
+                      ready
+                        ? "Moves this session's context to this account and resumes it"
+                        : "Needs sign-in first (Ready home)"
+                    }
+                    className={
+                      "rounded-lg border px-2.5 py-1.5 text-[11px] transition-colors " +
+                      (ready
+                        ? "border-accent/30 bg-accent-soft text-accent-hi hover:border-accent/50"
+                        : "border-hairline/50 text-faint")
+                    }
+                  >
+                    {profile.account_label}
+                    {!ready && " · sign in first"}
+                  </button>
+                );
+              })}
+            {profiles.filter((p) => p.id !== session.profile_id).length === 0 && (
+              <p className="text-[11px] text-faint">
+                Add another account to juggle between them.
+              </p>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[11px] text-faint">
+            <span>harness: <span className="text-muted">{session.harness}</span></span>
+            <span>age: <span className="text-muted">{since(session.started_at_ms)}</span></span>
+            <span className="ml-auto">context moves with the session — transcript copied, then resumed</span>
+          </div>
         </div>
       )}
     </div>

@@ -312,3 +312,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (two imported t3 accounts in parallel on one project, real claude
   under PTY, streaming + stop + project lineage verified; evidence in
   docs/qa/gate-M1.md).
+
+### Added (the golden path — from the experience review)
+
+- **Single instance**: a second launch focuses the running app (no more
+  ghost windows); startup reconciles stale "running" sessions whose
+  processes died with the last app run (marked stopped — journal
+  adoption keeps true survivors live).
+- **Your real projects, day one**: `projects_backfill` parses every
+  imported transcript (cwd read from transcript content, never guessed
+  from encoded dir names) and surfaces the user's actual project
+  history with per-account attribution — schema v4 (`history_json`).
+  On this machine: 6 real projects (booknyx3/4, jive-code-graph, t3
+  worktrees…) with account history, idempotent, run at startup.
+- **Get-ready home**: any account not signed in makes the app open on a
+  checklist — one click per account opens Claude's own sign-in in an
+  embedded terminal; progress "N of M ready"; skippable.
+- **New session without typing**: recent projects (real history) +
+  native macOS folder picker + drop-a-folder-anywhere; account list
+  shows sign-in state before launch (unusable accounts disabled with
+  the reason, not silent).
+- **The juggle (v0)**: `session_handover` — moves a session's transcript
+  to another account (byte copy, same project subpath) and resumes it
+  there (`claude --resume <id>`), recording lineage (source
+  HandedOver → continuation with native id + transcript ref). "Continue
+  on another account" chips on every session panel.
+- Login-state banner on sign-in terminals; `LaunchMode::Resume` in the
+  adapter contract.
