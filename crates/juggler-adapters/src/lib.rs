@@ -13,6 +13,7 @@
 )]
 
 pub mod claude_code;
+pub mod claude_environment;
 pub mod claude_transcript;
 pub mod fake;
 

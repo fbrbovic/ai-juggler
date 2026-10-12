@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use tauri_plugin_opener::OpenerExt;
 use ts_rs::TS;
 
 use juggler_core::model::{
@@ -142,6 +143,53 @@ pub struct LaunchResult {
     pub pid: u32,
 }
 
+/// An existing harness setup found by the onboarding environment scan
+/// (spec §12). Metadata-only discovery; the wizard shows `notes`
+/// verbatim.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct DiscoveredInfo {
+    /// Harness id.
+    pub harness: String,
+    /// Config dir path.
+    pub path: String,
+    /// `vendor-default` | `env-override` | `home-pattern`.
+    pub origin: String,
+    /// `logged_in` | `logged_out`.
+    pub login: String,
+    /// Approximate bytes on disk (caches excluded).
+    #[ts(type = "number")]
+    pub bytes: u64,
+    /// Most recent activity, unix seconds (when known).
+    #[ts(type = "number")]
+    pub last_used_secs: Option<u64>,
+    /// True when already managed by AI Juggler.
+    pub managed: bool,
+    /// Human-facing hints shown by the wizard.
+    pub notes: Vec<String>,
+}
+
+/// Result of importing a discovered setup as a managed account.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct ImportResult {
+    /// The created account.
+    pub account: AccountInfo,
+    /// Files copied into the managed dir.
+    #[ts(type = "number")]
+    pub files_copied: u64,
+    /// Bytes copied into the managed dir.
+    #[ts(type = "number")]
+    pub bytes_copied: u64,
+    /// Cache/noise entries skipped, human-readable.
+    pub skipped: Vec<String>,
+    /// Login state of the imported account: `logged_in` | `logged_out`.
+    pub login: String,
+    /// When login did not carry over, the plain-language reason and next
+    /// step (e.g. macOS keychain path-locking).
+    pub login_note: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // commands
 
@@ -250,6 +298,137 @@ pub fn account_login_command(
         "CLAUDE_CONFIG_DIR='{}' claude",
         account.state_dir.display()
     ))
+}
+
+/// Scans the machine for existing harness setups the onboarding wizard can
+/// import (metadata-only; ADR-0006). Never fails — an empty list is a
+/// valid "nothing found".
+#[tauri::command]
+#[must_use]
+pub fn environment_scan(state: tauri::State<'_, Arc<AppState>>) -> Vec<DiscoveredInfo> {
+    environment_scan_impl(state.inner())
+}
+
+/// Core implementation shared with integration tests.
+#[must_use]
+pub fn environment_scan_impl(state: &Arc<AppState>) -> Vec<DiscoveredInfo> {
+    let mut out = Vec::new();
+    for harness in state.registry.ids() {
+        let Some(adapter) = state.registry.get(&harness) else {
+            continue;
+        };
+        for found in adapter.scan_environment() {
+            out.push(DiscoveredInfo {
+                harness: found.harness.as_str().to_string(),
+                path: found.path.to_string_lossy().into_owned(),
+                origin: found.origin.as_str().to_string(),
+                login: login_probe_name(found.login),
+                bytes: found.bytes,
+                last_used_secs: found.last_used_secs,
+                managed: found.managed,
+                notes: found.notes,
+            });
+        }
+    }
+    out
+}
+
+/// Imports a discovered setup as a new managed account: byte-copies the
+/// config into an isolated dir (source untouched), creates a default
+/// "Main" profile so the account is immediately launchable.
+#[tauri::command]
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on failure.
+pub fn account_import(
+    state: tauri::State<'_, Arc<AppState>>,
+    harness: String,
+    source_path: String,
+    label: String,
+    plan: Option<String>,
+) -> AppResult<ImportResult> {
+    account_import_impl(state.inner(), &harness, &source_path, &label, plan)
+}
+
+/// Core implementation shared with integration tests.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on failure.
+pub fn account_import_impl(
+    state: &Arc<AppState>,
+    harness: &str,
+    source_path: &str,
+    label: &str,
+    plan: Option<String>,
+) -> AppResult<ImportResult> {
+    let adapter = state
+        .registry
+        .get(&juggler_core::model::HarnessId::new(harness))
+        .ok_or_else(|| AppError::UnknownHarness(harness.to_string()))?;
+    let id = AccountId::new(format!("{harness}-{}", unique_suffix()));
+    let state_dir = state.accounts_dir().join(harness).join(id.as_str());
+    let outcome = adapter.import_account(std::path::Path::new(source_path), &state_dir)?;
+    let account = Account {
+        id,
+        harness: juggler_core::model::HarnessId::new(harness),
+        label: label.to_string(),
+        plan: plan.map(juggler_core::model::PlanTier::new),
+        state_dir,
+    };
+    {
+        let storage = lock_storage_arc(state)?;
+        storage.accounts().insert(&account)?;
+        // A default profile makes the imported account launchable in one
+        // click — the wizard's promise.
+        storage.profiles().insert(&Profile {
+            id: ProfileId::new(format!("prof-{}", unique_suffix())),
+            name: "Main".to_string(),
+            account: account.id.clone(),
+            settings_overlay: SettingsOverlay::default(),
+            default_cwd: None,
+        })?;
+    }
+    Ok(ImportResult {
+        account: account_info_of(&account),
+        files_copied: outcome.files_copied,
+        bytes_copied: outcome.bytes_copied,
+        skipped: outcome.skipped,
+        login: login_probe_name(outcome.login),
+        login_note: outcome.login_note,
+    })
+}
+
+/// Opens the vendor's own web sign-in page in the system browser — the
+/// maximum login aid allowed (ADR-0003): the user completes the vendor's
+/// flow; credentials never touch AI Juggler.
+#[tauri::command]
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on failure.
+pub fn login_open_web(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    harness: String,
+) -> AppResult<()> {
+    let adapter = state
+        .registry
+        .get(&juggler_core::model::HarnessId::new(harness.as_str()))
+        .ok_or_else(|| AppError::UnknownHarness(harness.clone()))?;
+    let Some(url) = adapter.login_url() else {
+        return Err(AppError::Io {
+            context: "open login page",
+            message: format!("{harness} has no web sign-in page"),
+        });
+    };
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| AppError::Io {
+            context: "open login page",
+            message: e.to_string(),
+        })
 }
 
 /// Lists profiles.
@@ -534,6 +713,15 @@ fn account_info_of(account: &Account) -> AccountInfo {
         label: account.label.clone(),
         plan: account.plan.as_ref().map(ToString::to_string),
     }
+}
+
+/// Wire-format name for a scan/import login probe.
+fn login_probe_name(probe: juggler_adapter::LoginProbe) -> String {
+    match probe {
+        juggler_adapter::LoginProbe::LoggedIn => "logged_in",
+        juggler_adapter::LoginProbe::LoggedOut => "logged_out",
+    }
+    .to_string()
 }
 
 /// Wire-format name for a login state.

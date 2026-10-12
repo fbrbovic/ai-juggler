@@ -378,7 +378,32 @@ AI Juggler instances link over the network so one console can see — and manage
 └── cache/                  # parser fixtures cache, rollups
 ```
 
-Nothing is ever written inside `~/.claude`, `~/.codex`, or `~/.zcode` (the user's pre-existing single-account installs remain untouched; an "adopt existing install" flow *reads* them and offers to fork a managed copy).
+Nothing is ever written inside `~/.claude`, `~/.codex`, or `~/.zcode` (the user's pre-existing single-account installs remain untouched; the smart-onboarding import (§12.1, ADR-0006) *reads* them and offers a managed copy).
+
+### 12.1 Onboarding workflow (smart onboarding, ADR-0006)
+
+Onboarding assumes the user knows nothing about harness internals. The app
+does the discovery; the user makes choices in plain language.
+
+1. **Detect** — `environment_scan` runs at wizard start (metadata-only:
+   presence/size/mtime + keychain existence probes, never contents):
+   - the vendor default (`~/.claude`),
+   - `$CLAUDE_CONFIG_DIR` overrides (other manager tools, manual setups),
+   - home-naming-pattern matches `.claude*` (manual or AI-created setups),
+   filtered to dirs that actually look like Claude configs, deduplicated,
+   sorted most-useful-first.
+2. **Choose** — one-tap **Import** (byte copy into a managed dir; source
+   untouched; caches skipped; 2 GiB ceiling) or **Add fresh**.
+3. **Identity** — plain-words naming ("What's this account for?") and plan
+   tier; a default `Main` profile is created so every account is
+   immediately launchable.
+4. **Login** — the vendor's own flow, maximally aided: open the vendor's
+   sign-in page in the browser, run the env-scoped login command in the
+   embedded terminal (M1-4), or copy it out. Credential entry is never
+   automated; keychain-locked logins honestly require one re-login in the
+   isolated copy.
+5. **Summary** — what was created, where it lives, and confirmation that
+   pre-existing setups were not modified.
 
 ## 13. Testing strategy
 

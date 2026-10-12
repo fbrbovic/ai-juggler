@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use crate::capabilities::Capabilities;
 use crate::discovery::DiscoveryReport;
+use crate::environment::{DiscoveredInstall, ImportOutcome, LoginUrl};
 use crate::error::AdapterError;
 use crate::launch::{EnvMap, LaunchMode, LaunchSpec};
 use crate::model::{Account, HarnessId, Profile};
@@ -70,6 +71,39 @@ pub trait HarnessAdapter: Send + Sync {
     ///
     /// Returns [`AdapterError::Watch`] when the root cannot be observed.
     fn watcher(&self, transcript_root: &Path) -> Result<Box<dyn SessionWatcher>, AdapterError>;
+
+    /// Scans the machine for existing installations of this harness
+    /// (smart onboarding, spec §12). Metadata-only: presence, size,
+    /// timestamps — never file contents. Adapters that cannot scan return
+    /// an empty list; scanning never fails.
+    #[must_use]
+    fn scan_environment(&self) -> Vec<DiscoveredInstall> {
+        Vec::new()
+    }
+
+    /// Copy-imports an existing config dir (found via
+    /// [`HarnessAdapter::scan_environment`]) into a fresh managed state
+    /// dir. Read-only toward `source`: a byte copy with rebuildable caches
+    /// skipped; the source is never written to or marked.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError::Unsupported`] when this adapter cannot
+    /// import, [`AdapterError::AccountDir`] for path/size problems and
+    /// copy failures (message carries the plain-language reason).
+    fn import_account(&self, source: &Path, dest: &Path) -> Result<ImportOutcome, AdapterError> {
+        let _ = (source, dest);
+        Err(AdapterError::Unsupported(
+            "this adapter cannot import existing configurations".into(),
+        ))
+    }
+
+    /// The vendor's own web sign-in page, when one exists (the maximum
+    /// login aid: we open the page, the user completes the vendor's flow).
+    #[must_use]
+    fn login_url(&self) -> Option<LoginUrl> {
+        None
+    }
 }
 
 /// Shared adapter handle type used by the registry and supervisor.

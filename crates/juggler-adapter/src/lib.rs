@@ -16,6 +16,7 @@
 pub mod adapter;
 pub mod capabilities;
 pub mod discovery;
+pub mod environment;
 pub mod error;
 pub mod launch;
 pub mod registry;
@@ -28,6 +29,7 @@ pub use juggler_core::model;
 pub use adapter::{HarnessAdapter, SharedAdapter};
 pub use capabilities::Capabilities;
 pub use discovery::{DiscoveryReport, InstallStatus, VerificationStatus};
+pub use environment::{DiscoveredInstall, ImportOutcome, InstallOrigin, LoginProbe, LoginUrl};
 pub use error::AdapterError;
 pub use launch::{EnvMap, LaunchMode, LaunchSpec};
 pub use registry::AdapterRegistry;

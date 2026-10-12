@@ -13,6 +13,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::claude_environment;
+use juggler_adapter::environment::{DiscoveredInstall, ImportOutcome, LoginProbe, LoginUrl};
 use juggler_adapter::{
     AdapterError, Capabilities, DiscoveryReport, EnvMap, HarnessAdapter, InstallStatus, LaunchMode,
     LaunchSpec, SessionEvent, SessionWatcher, VerificationStatus,
@@ -190,25 +192,39 @@ impl HarnessAdapter for ClaudeCodeAdapter {
     }
 
     fn prepare_account(&self, state_dir: &Path) -> Result<EnvMap, AdapterError> {
-        create_private_dir(state_dir).map_err(|error| AdapterError::AccountDir {
-            path: state_dir.to_path_buf(),
-            message: error.to_string(),
-        })?;
-        // Marker identifies the directory as ours — guardrail primitive for
-        // "never touch unmanaged dirs" checks (ADR-0003).
-        let marker = state_dir.join(MANAGED_MARKER);
-        std::fs::write(&marker, "managed-by: ai-juggler\nharness: claude-code\n")
-            .and_then(|()| restrict_to_owner(&marker))
-            .map_err(|error| AdapterError::AccountDir {
-                path: state_dir.to_path_buf(),
-                message: format!("cannot write marker: {error}"),
-            })?;
+        prepare_managed_dir(state_dir)?;
         let mut env = EnvMap::new();
         env.insert(
             ENV_CONFIG_DIR.to_string(),
             state_dir.to_string_lossy().into_owned(),
         );
         Ok(env)
+    }
+
+    fn scan_environment(&self) -> Vec<DiscoveredInstall> {
+        let env_override = std::env::var_os(ENV_CONFIG_DIR).map(PathBuf::from);
+        let adapter = ClaudeCodeAdapter::new();
+        let probe = move |path: &Path| match adapter.login_state(path) {
+            LoginState::LoggedIn => LoginProbe::LoggedIn,
+            LoginState::LoggedOut => LoginProbe::LoggedOut,
+        };
+        let home = home_relative(".")
+            .filter(|p| p.is_dir())
+            .unwrap_or_else(|| PathBuf::from("."));
+        claude_environment::scan_claude_environment(&home, env_override.as_deref(), &probe)
+    }
+
+    fn import_account(&self, source: &Path, dest: &Path) -> Result<ImportOutcome, AdapterError> {
+        let adapter = ClaudeCodeAdapter::new();
+        let probe = move |path: &Path| match adapter.login_state(path) {
+            LoginState::LoggedIn => LoginProbe::LoggedIn,
+            LoginState::LoggedOut => LoginProbe::LoggedOut,
+        };
+        claude_environment::import_claude_config(source, dest, &probe)
+    }
+
+    fn login_url(&self) -> Option<LoginUrl> {
+        Some("https://claude.ai/login")
     }
 
     fn launch_spec(
@@ -326,6 +342,30 @@ impl ClaudeCodeAdapter {
 #[must_use]
 pub fn is_managed_dir(state_dir: &Path) -> bool {
     state_dir.join(MANAGED_MARKER).is_file()
+}
+
+/// Creates the managed account dir (0700) and writes the AI Juggler marker
+/// (0600) — the single directory-initialization path shared by
+/// `prepare_account` and config import.
+///
+/// # Errors
+///
+/// Returns [`AdapterError::AccountDir`] when the dir or marker cannot be
+/// written.
+pub(crate) fn prepare_managed_dir(state_dir: &Path) -> Result<(), AdapterError> {
+    create_private_dir(state_dir).map_err(|error| AdapterError::AccountDir {
+        path: state_dir.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    // Marker identifies the directory as ours — guardrail primitive for
+    // "never touch unmanaged dirs" checks (ADR-0003).
+    let marker = state_dir.join(MANAGED_MARKER);
+    std::fs::write(&marker, "managed-by: ai-juggler\nharness: claude-code\n")
+        .and_then(|()| restrict_to_owner(&marker))
+        .map_err(|error| AdapterError::AccountDir {
+            path: state_dir.to_path_buf(),
+            message: format!("cannot write marker: {error}"),
+        })
 }
 
 /// notify-based watcher over the account's transcript tree
@@ -461,7 +501,7 @@ fn existing(candidates: &[&str]) -> Option<PathBuf> {
     candidates.iter().map(PathBuf::from).find(|p| p.is_file())
 }
 
-fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+pub(crate) fn create_private_dir(dir: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::fs::DirBuilder;
@@ -474,7 +514,7 @@ fn create_private_dir(dir: &Path) -> std::io::Result<()> {
     }
 }
 
-fn restrict_to_owner(path: &Path) -> std::io::Result<()> {
+pub(crate) fn restrict_to_owner(path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
