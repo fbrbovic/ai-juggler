@@ -8,6 +8,7 @@
     clippy::pedantic
 )]
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use juggler_core::model::{
@@ -336,4 +337,73 @@ fn every_status_roundtrips_through_its_stored_name() {
         assert_eq!(SessionStatus::parse(status.as_str()), Some(status));
     }
     assert_eq!(SessionStatus::parse("sentient"), None);
+}
+
+#[test]
+fn account_update_changes_fields() {
+    let storage = Storage::open_in_memory().unwrap();
+    let (mut account, _) = seed_chain(&storage);
+    account.label = "Renamed".into();
+    account.plan = Some(PlanTier::new("max-5x"));
+    account.state_dir = PathBuf::from("/tmp/elsewhere");
+    storage.accounts().update(&account).unwrap();
+    let reloaded = storage.accounts().get(&account.id).unwrap();
+    assert_eq!(reloaded, account);
+    assert_eq!(storage.accounts().list().unwrap().len(), 1);
+}
+
+#[test]
+fn profile_update_and_delete() {
+    let storage = Storage::open_in_memory().unwrap();
+    let (account, _) = seed_chain(&storage);
+    let mut profile = Profile {
+        id: ProfileId::new("p-upd"),
+        account: account.id.clone(),
+        settings_overlay: SettingsOverlay::default(),
+        default_cwd: None,
+    };
+    storage.profiles().insert(&profile).unwrap();
+    profile.settings_overlay = SettingsOverlay {
+        model: Some("m2".into()),
+        env: BTreeMap::from([("A".into(), "B".into())]),
+    };
+    profile.default_cwd = Some(PathBuf::from("/tmp/x"));
+    storage.profiles().update(&profile).unwrap();
+    assert_eq!(storage.profiles().get(&profile.id).unwrap(), profile);
+    assert_eq!(
+        storage
+            .profiles()
+            .list_by_account(&account.id)
+            .unwrap()
+            .len(),
+        2
+    );
+
+    storage.profiles().delete(&profile.id).unwrap();
+    assert!(matches!(
+        storage.profiles().get(&profile.id),
+        Err(CoreError::NotFound { .. })
+    ));
+}
+
+#[test]
+fn session_list_without_filter_returns_all() {
+    let storage = Storage::open_in_memory().unwrap();
+    let (_, profile) = seed_chain(&storage);
+    let session = SessionRecord {
+        id: SessionId::new("s-all"),
+        native_id: None,
+        profile: profile.id,
+        machine: MachineId::new("this-mac"),
+        cwd: PathBuf::from("/tmp"),
+        status: SessionStatus::Running,
+        started_at: Timestamp::from_millis(7),
+        last_activity: Some(Timestamp::from_millis(9)),
+        usage: UsageSnapshot::default(),
+        transcript_ref: None,
+    };
+    storage.sessions().insert(&session).unwrap();
+    let all = storage.sessions().list(None).unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].id, session.id);
 }

@@ -217,3 +217,34 @@ fn registry_round_trips_the_fake_adapter() {
     assert_eq!(reports.len(), 1);
     assert!(reports[0].is_installed());
 }
+
+#[test]
+fn discover_degrades_gracefully_for_missing_binary() {
+    let adapter = FakeHarnessAdapter::new("/nonexistent/fake-harness-binary");
+    let report = adapter.discover();
+    assert_eq!(report.install, InstallStatus::NotFound);
+    assert!(!report.is_installed());
+    assert!(report.binary.is_none());
+}
+
+#[test]
+fn discover_reports_failure_for_non_executable() {
+    let dir = tempfile::tempdir().unwrap();
+    let not_a_bin = dir.path().join("not-a-binary");
+    std::fs::write(&not_a_bin, b"still not a program").unwrap();
+    let adapter = FakeHarnessAdapter::new(&not_a_bin);
+    let report = adapter.discover();
+    assert!(
+        matches!(report.install, InstallStatus::Failed { .. }),
+        "got {report:?}"
+    );
+}
+
+#[test]
+fn watcher_polls_missing_directory_without_crashing() {
+    let mut watcher = adapter()
+        .watcher(std::path::Path::new("/nonexistent/transcripts"))
+        .unwrap();
+    let event = watcher.poll(Duration::from_millis(10)).unwrap();
+    assert!(event.is_none());
+}
