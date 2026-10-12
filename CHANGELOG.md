@@ -46,6 +46,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (1.99.0, MSRV 1.99); cargo-deny policy; `just` task runner
   (`just verify` = the CI gate, locally).
 
+### Added (M0-2)
+
+- CI pipeline: `verify` job (fmt, clippy `-D warnings`, tests, docs with
+  `-D warnings`, cargo-deny, llvm-cov coverage artifact) plus a
+  cross-platform build matrix (macOS arm64 + x86_64 cross-check, Linux,
+  Windows); required status checks enforced on `main`.
+
 ### Changed
 
 - Handover model upgraded from summary packs to tiered session sync:

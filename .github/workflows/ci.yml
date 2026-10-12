@@ -5,30 +5,81 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: short
+
 jobs:
-  repo-checks:
-    name: Repository checks
+  # The full quality gate (docs/plan/QUALITY.md). Mirrors `just verify` plus
+  # cargo-deny and coverage; its name is a required status check on main.
+  verify:
+    name: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Add llvm-tools
+        run: rustup component add llvm-tools-preview
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --workspace
+      - name: Docs
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps
+      - name: Dependency policy (cargo-deny)
+        uses: EmbarkStudios/cargo-deny-action@v2
+      # Coverage baseline artifact. Best-effort until M0-3 lands real tests:
+      # llvm-cov errors with "no coverage data found" on a zero-test workspace.
+      # Flip `continue-on-error` to false when the first test-bearing crate merges.
+      - name: Coverage (baseline artifact)
+        continue-on-error: true
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-lcov
+          path: lcov.info
 
-      # Lightweight gates while the project is in spec phase.
-      # The Rust pipeline (cargo fmt --check, clippy -D warnings, cargo test,
-      # cross-platform build matrix) is added together with the first crates
-      # in milestone M0/M1.
-      - name: Verify documentation files are present and non-empty
-        run: |
-          set -eu
-          fail=0
-          for f in README.md LICENSE CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md CHANGELOG.md; do
-            if [ ! -s "$f" ]; then
-              echo "::error::Missing or empty: $f"
-              fail=1
-            fi
-          done
-          exit $fail
+  # Cross-platform build matrix (spec §1: cross-platform core from day one).
+  build-macos:
+    name: build-macos
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Add x86_64 target
+        run: rustup target add x86_64-apple-darwin
+      - name: Build (native arm64)
+        run: cargo build --workspace
+      - name: Build (x86_64 cross-check)
+        run: cargo build --workspace --target x86_64-apple-darwin
 
-      - name: Check markdown files do not contain trailing merge markers
-        run: |
-          ! grep -rn --include='*.md' -E '^(<<<<<<<|>>>>>>>)( |$)' . \
-            --exclude-dir=.git
+  build-linux:
+    name: build-linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --workspace
+
+  build-windows:
+    name: build-windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --workspace
