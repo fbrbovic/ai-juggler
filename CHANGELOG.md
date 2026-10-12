@@ -79,6 +79,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - End-to-end adapter test: discover → prepare account → launch spec →
   run → watch (discovered/appended/ended) → resume.
 
+### Added (M0-5)
+
+- `juggler-supervisor`: PTY (interactive) and piped (headless) spawning
+  with per-profile env overlays; lifecycle event bus
+  (Started/Exited with signal detail); bounded output ring buffer
+  (512 KiB/session); SIGTERM→SIGKILL stop ladder; process-tree
+  descendant tracking via sysinfo ppid walks; append-only supervision
+  journal with crash re-adoption (`adopt_orphans`, zombies treated as
+  dead); children survive supervisor/app death by design.
+- Integration tests: spawn/capture/stop, external SIGKILL → journaled
+  exit, drop-survival + journal re-adoption, process-tree tracking,
+  PTY output capture, unknown-session errors.
+
 ### Changed
 
 - Handover model upgraded from summary packs to tiered session sync:
