@@ -52,11 +52,13 @@ Goal: a clean, enterprise-grade workspace where everything after it can be built
 
 ## M1 — Claude Code profiles & first UI *(epic)*
 
+> **UI/UX checkpoints (maintainer requirement, review round 4):** M1 runs with explicit design reviews — the design direction (tokens, layout, key screens) is reviewed at M1-1 **before** screens get built out, and each major screen (M1-3 launcher, M1-4 terminal, M1-6 board) is reviewed as it lands. Work pauses at each checkpoint; the bar is a super-modern, highly usable UI that fits the juggling workflow.
+
 Goal: the founding pain point solved — two Claude accounts in parallel, one click, zero interference.
 
 | ID | Task | Deliverables | Acceptance criteria |
 |---|---|---|---|
-| M1-1 | Tauri app shell + UI scaffold | Tauri 2 app (ADR-0001); React 18 + TS + Tailwind + shadcn/ui; typed command/event bridge; locked CSP; design tokens; base components | App launches < 1.5s cold; no remote content loads (CSP test); typed events have generated TS types (single source) |
+| M1-1 | Tauri app shell + UI scaffold | Tauri 2 app (ADR-0001); React 18 + TS + Tailwind + shadcn/ui; typed command/event bridge; locked CSP; design tokens; base components | App launches < 1.5s cold; no remote content loads (CSP test); typed events have generated TS types (single source); **design-direction checkpoint passed — maintainer reviewed tokens + layout + shell screenshots before screen build-out** |
 | M1-2 | Claude adapter: discovery & account prep | Binary discovery + version (`verified_against` check with drift warning); `prepare_account` creates isolated `CLAUDE_CONFIG_DIR` (0700); login handoff (user completes `claude` login in guided terminal); login-state detection | Managed dir created with correct perms; login detected without reading token contents (presence/keychain-namespace only); version drift surfaces a warning banner |
 | M1-3 | Profile manager & parallel launcher | Profile CRUD; settings overlay (model etc. via managed `settings.json`); one-click launch with env injection; per-profile env isolation | Two profiles of the same harness run simultaneously without cross-talk (env + keychain isolation verified); **guardrail test: zero writes to `~/.claude`** |
 | M1-4 | Embedded terminal | xterm.js + PTY streaming via Tauri events; resize; scrollback cap; copy/paste; multi-tab; "open in external terminal" | 60 fps with 20 streaming sessions in UI perf test; resize/echo correctness; terminal survives UI panel close/reopen |

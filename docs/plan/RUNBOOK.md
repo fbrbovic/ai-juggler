@@ -34,6 +34,7 @@ When every `type:task` issue of the current milestone is closed:
 A run stops immediately and reports to the user when:
 
 - a milestone gate is reached (see above);
+- a **UI/UX design checkpoint** is due (from M1): the design direction at M1-1 and each major screen as it lands are presented with screenshots and paused for maintainer review before broad implementation continues — the bar is a super-modern, highly usable UI aligned with the app's workflow;
 - credentials/secrets only the user can provide are needed (e.g., Apple Developer / signing keys / GitHub Environments — M5+);
 - a genuine product decision only the user can make arises (open a `question` issue with options + a recommendation, then stop);
 - CI or repo infrastructure is broken beyond fix-forward in one run;
