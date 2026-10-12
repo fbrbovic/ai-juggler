@@ -21,3 +21,11 @@ test:
 
 doc:
     cargo doc --workspace --no-deps
+
+# Run the desktop app in dev mode (UI hot-reload + Rust rebuild on change).
+dev:
+    cargo tauri dev
+
+# Release-mode app bundle under target/release/bundle/ (unsigned dev build).
+app:
+    cargo tauri build
