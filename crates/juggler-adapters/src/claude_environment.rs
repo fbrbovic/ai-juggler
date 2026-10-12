@@ -41,20 +41,31 @@ pub const MAX_IMPORT_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GiB
 /// Walk ceiling for size estimation (bounds pathological trees).
 const MAX_WALK_ENTRIES: usize = 20_000;
 
-/// Scans for existing Claude Code configurations under `home` (plus the
-/// `$CLAUDE_CONFIG_DIR` override when set). The trait method passes the
-/// real home and the metadata-only login probe; tests pass a sandbox and
-/// a deterministic probe — the parameters exist precisely so behavior is
-/// observable without touching real user state.
+/// Scans for existing Claude Code configurations under `home`, the
+/// `$CLAUDE_CONFIG_DIR` override when set, and any other manager tool's
+/// profile roots (`manager_roots` — e.g. t3.codes' `ClaudeCodeProfiles`).
+/// The trait method passes the real locations and the metadata-only login
+/// probe; tests pass sandboxes and a deterministic probe — the parameters
+/// exist precisely so behavior is observable without touching real state.
 pub fn scan_claude_environment(
     home: &Path,
     env_override: Option<&Path>,
+    manager_roots: &[PathBuf],
     login_probe: &dyn Fn(&Path) -> LoginProbe,
 ) -> Vec<DiscoveredInstall> {
     let mut candidates: Vec<(PathBuf, InstallOrigin)> =
         vec![(home.join(".claude"), InstallOrigin::VendorDefault)];
     if let Some(override_path) = env_override {
         candidates.push((override_path.to_path_buf(), InstallOrigin::EnvOverride));
+    }
+    // Other manager tools keep whole profile roots; each direct child that
+    // looks like a config is one of their profiles.
+    for root in manager_roots {
+        if let Ok(entries) = std::fs::read_dir(root) {
+            for entry in entries.flatten() {
+                candidates.push((entry.path(), InstallOrigin::ManagerTool));
+            }
+        }
     }
     if let Ok(entries) = std::fs::read_dir(home) {
         for entry in entries.flatten() {
@@ -248,6 +259,7 @@ fn origin_rank(origin: InstallOrigin) -> u8 {
         InstallOrigin::VendorDefault => 0,
         InstallOrigin::EnvOverride => 1,
         InstallOrigin::HomePattern => 2,
+        InstallOrigin::ManagerTool => 3,
     }
 }
 
@@ -268,6 +280,9 @@ fn origin_notes(origin: InstallOrigin, login: LoginProbe) -> Vec<String> {
         }
         InstallOrigin::HomePattern => {
             "A separate Claude configuration — created manually, by another tool, or by an AI assistant.".to_string()
+        }
+        InstallOrigin::ManagerTool => {
+            "Managed by another tool (t3.codes) — importing copies it; the tool and its sessions are never touched.".to_string()
         }
     }];
     if matches!(login, LoginProbe::LoggedIn) {

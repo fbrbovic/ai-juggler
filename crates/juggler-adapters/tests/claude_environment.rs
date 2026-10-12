@@ -71,7 +71,7 @@ fn scan_finds_default_env_override_and_manual_patterns() {
     std::fs::create_dir_all(home.join(".other")).unwrap();
 
     let env_override = existing_setup(work.path(), "managed-elsewhere");
-    let found = scan_claude_environment(&home, Some(env_override.as_path()), &logged_in_probe);
+    let found = scan_claude_environment(&home, Some(env_override.as_path()), &[], &logged_in_probe);
 
     let paths: Vec<String> = found
         .iter()
@@ -114,7 +114,7 @@ fn scan_dedupes_when_env_override_points_at_default() {
     existing_setup(&home, ".claude");
 
     let same = home.join(".claude");
-    let found = scan_claude_environment(&home, Some(same.as_path()), &logged_in_probe);
+    let found = scan_claude_environment(&home, Some(same.as_path()), &[], &logged_in_probe);
     assert_eq!(found.len(), 1, "same path via two candidates → one entry");
     assert_eq!(found[0].origin, InstallOrigin::VendorDefault);
 }
@@ -130,7 +130,7 @@ fn scan_marks_juggler_managed_dirs() {
     let adapter = ClaudeCodeAdapter::new();
     adapter.prepare_account(&dir).unwrap();
 
-    let found = scan_claude_environment(&home, None, &logged_out_probe);
+    let found = scan_claude_environment(&home, None, &[], &logged_out_probe);
     assert_eq!(found.len(), 1);
     assert!(found[0].managed);
     assert!(
@@ -285,4 +285,36 @@ fn file_tree(root: &Path) -> Vec<(String, u64)> {
     walk(root, root, &mut out);
     out.sort();
     out
+}
+
+#[test]
+fn scan_finds_other_manager_tools_profile_roots() {
+    let work = tempfile::tempdir().unwrap();
+    let home = work.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    // A manager tool (t3.codes-shaped) profile root with two profiles and
+    // one non-config child that must be filtered.
+    let root = work.path().join("ClaudeCodeProfiles");
+    let profile_a = existing_setup(&root, "bookauth-anela");
+    existing_setup(&root, "personal-max");
+    std::fs::create_dir_all(root.join("not-a-profile")).unwrap();
+
+    let found = scan_claude_environment(&home, None, &[root], &logged_in_probe);
+    let manager: Vec<_> = found
+        .iter()
+        .filter(|f| f.origin == InstallOrigin::ManagerTool)
+        .collect();
+    assert_eq!(manager.len(), 2, "two profiles, noise filtered: {found:?}");
+    assert!(
+        manager
+            .iter()
+            .any(|f| f.path == profile_a.canonicalize().unwrap())
+    );
+    assert!(
+        manager
+            .iter()
+            .all(|f| f.notes.iter().any(|n| n.contains("never touched")))
+    );
+    // Manager-tool entries rank after the vendor default and home patterns.
+    assert_eq!(found.len(), 2, "home has no other setups: {found:?}");
 }
