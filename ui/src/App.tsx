@@ -9,45 +9,58 @@ import {
 import { Rail } from "./components/rail";
 import { TerminalDock, type TerminalTab } from "./components/TerminalDock";
 import {
-  IconDashboard,
   IconFleet,
   IconJuggler,
   IconProfiles,
+  IconProjects,
   IconSessions,
   IconTerminal,
   IconUsage,
 } from "./components/icons";
 import { ProfilesScreen } from "./screens/Profiles";
+import { ProjectsScreen } from "./screens/Projects";
+import { InstancesScreen } from "./screens/Instances";
+import { SessionsScreen } from "./screens/SessionsScreen";
 import {
   dashboardStats,
   fetchAppInfo,
-  hasLiveBackend,
   onAppReady,
   type AppInfo,
   type StatsInfo,
 } from "./lib/bridge";
 
 /**
- * App shell: collapsible/resizable rail, floating-glass status bar over an
- * overlay title bar (native macOS traffic lights), content area.
- * Design-direction scaffold — screens land in M1-3+.
+ * App shell (ADR-0007): two modes.
+ * - Work mode — the left rail: Projects (juggling anchor), Instances,
+ *   Sessions.
+ * - Global mode — top-right menus: Overview, Accounts, Usage, Fleet.
+ * The terminal dock is an execution surface at the bottom, not navigation.
  */
 
-const NAV = [
-  { id: "dashboard", label: "Dashboard", icon: <IconDashboard /> },
+const WORK_NAV = [
+  { id: "projects", label: "Projects", icon: <IconProjects /> },
+  { id: "instances", label: "Instances", icon: <IconTerminal /> },
   { id: "sessions", label: "Sessions", icon: <IconSessions /> },
-  { id: "profiles", label: "Profiles", icon: <IconProfiles /> },
-  { id: "usage", label: "Usage", icon: <IconUsage /> },
-  { id: "fleet", label: "Fleet", icon: <IconFleet /> },
 ] as const;
 
-type NavId = (typeof NAV)[number]["id"];
+const GLOBAL_NAV = [
+  { id: "overview", label: "Overview" },
+  { id: "accounts", label: "Accounts" },
+  { id: "usage", label: "Usage" },
+  { id: "fleet", label: "Fleet" },
+] as const;
+
+type WorkId = (typeof WORK_NAV)[number]["id"];
+type GlobalId = (typeof GLOBAL_NAV)[number]["id"];
+
+type View = { kind: "work"; id: WorkId } | { kind: "global"; id: GlobalId };
 
 export default function App() {
-  const [nav, setNav] = useState<NavId>("dashboard");
+  const [view, setView] = useState<View>({ kind: "work", id: "projects" });
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [tabs, setTabs] = useState<TerminalTab[]>([]);
   const [activeTab, setActiveTab] = useState<string | null>(null);
+  const [selectedInstance, setSelectedInstance] = useState<string | null>(null);
 
   useEffect(() => {
     void fetchAppInfo().then(setInfo);
@@ -55,19 +68,16 @@ export default function App() {
   }, []);
 
   const openTerminal = useCallback((id: string, title: string) => {
-    setTabs((current) => {
-      if (current.some((tab) => tab.id === id)) return current;
-      return [...current, { id, title }];
-    });
+    setTabs((current) =>
+      current.some((tab) => tab.id === id) ? current : [...current, { id, title }],
+    );
     setActiveTab(id);
   }, []);
 
   const closeTerminal = useCallback((id: string) => {
     setTabs((current) => {
       const next = current.filter((tab) => tab.id !== id);
-      setActiveTab((active) =>
-        active === id ? (next.at(-1)?.id ?? null) : active,
-      );
+      setActiveTab((active) => (active === id ? (next.at(-1)?.id ?? null) : active));
       return next;
     });
   }, []);
@@ -78,12 +88,22 @@ export default function App() {
     );
   }, []);
 
+  const workActive = view.kind === "work" ? view.id : null;
+  const globalActive = view.kind === "global" ? view.id : null;
+  const contextTitle =
+    view.kind === "global"
+      ? (GLOBAL_NAV.find((g) => g.id === view.id)?.label ?? "")
+      : (WORK_NAV.find((w) => w.id === view.id)?.label ?? "");
+
   return (
     <div className="flex h-screen w-screen overflow-hidden">
       <Rail
-        items={[...NAV]}
-        active={nav}
-        onSelect={(id) => setNav(id as NavId)}
+        items={[...WORK_NAV]}
+        active={workActive ?? ""}
+        onSelect={(id) => {
+          setSelectedInstance(null);
+          setView({ kind: "work", id: id as WorkId });
+        }}
         header={(collapsed) => (
           <div
             className={`flex h-14 items-center gap-2.5 overflow-hidden ${
@@ -119,45 +139,65 @@ export default function App() {
 
       {/* Main column */}
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Glass status bar over the overlay title bar (traffic lights sit in
-            the left gutter; the empty bar area drags the window). */}
+        {/* Glass status bar: work context left, global mode right */}
         <header
           data-tauri-drag-region
           className="flex h-14 shrink-0 items-center gap-3 border-b border-hairline
-            bg-surface/50 pl-[92px] pr-6 backdrop-blur-xl"
+            bg-surface/50 pl-[92px] pr-5 backdrop-blur-xl"
         >
-          <h1 className="text-sm font-semibold capitalize tracking-wide">
-            {nav}
-          </h1>
-          <span className="text-faint">/</span>
+          <h1 className="text-sm font-semibold capitalize tracking-wide">{contextTitle}</h1>
           <Chip tone="accent">Claude Code · Codex · ZCode</Chip>
-          <div className="ml-auto flex items-center gap-2">
-            <Chip tone="neutral">machine: this-mac</Chip>
+
+          <div className="ml-auto flex items-center gap-1.5" data-tauri-drag-region={false}>
+            {GLOBAL_NAV.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setView({ kind: "global", id: item.id })}
+                className={
+                  "rounded-md px-2.5 py-1.5 text-[11px] font-medium transition-colors " +
+                  (globalActive === item.id
+                    ? "bg-surface text-ink sheen"
+                    : "text-muted hover:bg-surface/60 hover:text-ink")
+                }
+              >
+                {item.label}
+              </button>
+            ))}
             <Button
               size="sm"
               variant="primary"
-              onClick={() => {
-                if (hasLiveBackend()) {
-                  setNav("profiles");
-                } else {
-                  openTerminal("preview-terminal", "Sign in · Work Max");
-                }
-              }}
+              onClick={() => setView({ kind: "global", id: "accounts" })}
             >
-              <IconTerminal width={14} height={14} />
-              New session
+              <IconProfiles width={14} height={14} />
+              Add
             </Button>
           </div>
         </header>
 
         {/* Content */}
         <main className="min-h-0 flex-1 overflow-y-auto p-6">
-          {nav === "dashboard" ? (
-            <Dashboard />
-          ) : nav === "profiles" ? (
+          {view.kind === "work" && view.id === "projects" ? (
+            <ProjectsScreen
+              openTerminal={openTerminal}
+              onOpenInstances={() => setView({ kind: "work", id: "instances" })}
+            />
+          ) : view.kind === "work" && view.id === "instances" ? (
+            <InstancesScreen
+              selectedId={selectedInstance}
+              onSelect={setSelectedInstance}
+              openTerminal={openTerminal}
+            />
+          ) : view.kind === "work" && view.id === "sessions" ? (
+            <SessionsScreen />
+          ) : view.kind === "global" && view.id === "overview" ? (
+            <Overview />
+          ) : view.kind === "global" && view.id === "accounts" ? (
             <ProfilesScreen openTerminal={openTerminal} />
+          ) : view.kind === "global" && view.id === "usage" ? (
+            <ComingSoon screen="Usage" />
           ) : (
-            <ComingSoon screen={nav} />
+            <ComingSoon screen="Fleet" />
           )}
         </main>
 
@@ -173,7 +213,7 @@ export default function App() {
   );
 }
 
-function Dashboard() {
+function Overview() {
   const [stats, setStats] = useState<StatsInfo | null>(null);
   useEffect(() => {
     void dashboardStats().then(setStats);
@@ -184,24 +224,24 @@ function Dashboard() {
       {/* Health strip */}
       <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
         <StatCard
-          label="Profiles"
-          value={String(stats?.profiles ?? 0)}
-          hint={`${stats?.accounts ?? 0} accounts`}
-          icon={<IconProfiles width={15} height={15} />}
-        />
-        <StatCard
-          label="Active sessions"
+          label="Live instances"
           value={String(stats?.active_sessions ?? 0)}
-          hint="live across all harnesses"
+          hint="across all accounts"
           tone="live"
           icon={<IconTerminal width={15} height={15} />}
         />
         <StatCard
+          label="Accounts"
+          value={String(stats?.accounts ?? 0)}
+          hint={`${stats?.profiles ?? 0} profiles`}
+          icon={<IconProfiles width={15} height={15} />}
+        />
+        <StatCard
           label="Machine"
           value="OK"
-          hint="RAM · CPU · disk nominal"
+          hint="RAM · CPU · disk nominal (live gauges: M3)"
           tone="success"
-          icon={<IconDashboard width={15} height={15} />}
+          icon={<IconJuggler width={15} height={15} />}
         />
         <StatCard
           label="Fleet"
@@ -211,18 +251,18 @@ function Dashboard() {
         />
       </div>
 
-      {/* Quota + empty state row */}
+      {/* Quota + getting-started row */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <Card className="p-5 xl:col-span-2">
           <div className="mb-4 flex items-center justify-between">
             <div>
-              <h2 className="text-sm font-semibold">Sessions</h2>
+              <h2 className="text-sm font-semibold">Live instances</h2>
               <p className="text-xs text-muted">
-                Live board across every harness and account
+                Open Instances in the rail for the full board with actions
               </p>
             </div>
             <Chip tone="neutral" dot>
-              waiting for first profile
+              mission control
             </Chip>
           </div>
           <EmptyState />
@@ -247,14 +287,12 @@ function EmptyState() {
   return (
     <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-hairline py-12">
       <span className="flex size-11 items-center justify-center rounded-xl border border-accent/20 bg-accent-soft text-accent-hi">
-        <IconProfiles width={22} height={22} />
+        <IconProjects width={22} height={22} />
       </span>
-      <p className="text-sm text-muted">
-        No profiles yet — connect your first harness account to start juggling.
+      <p className="max-w-sm text-center text-sm text-muted">
+        Launch a profile into any directory — the project, its instance, and
+        the session land in the rail views.
       </p>
-      <Button variant="primary" size="sm">
-        Add account
-      </Button>
     </div>
   );
 }
@@ -262,9 +300,14 @@ function EmptyState() {
 function ComingSoon({ screen }: { screen: string }) {
   return (
     <Card className="flex flex-col items-center justify-center gap-2 py-16">
-      <span className="text-sm font-medium capitalize">{screen}</span>
-      <span className="text-xs text-muted">
-        This screen lands in the M1 build-out — see docs/plan/EPICS.md
+      <span className="text-sm font-medium">{screen}</span>
+      <span className="flex items-center gap-1.5 text-xs text-muted">
+        {screen === "Usage" ? (
+          <IconUsage width={13} height={13} />
+        ) : (
+          <IconFleet width={13} height={13} />
+        )}
+        This screen lands in the M2+ build-out — see docs/plan/EPICS.md
       </span>
     </Card>
   );

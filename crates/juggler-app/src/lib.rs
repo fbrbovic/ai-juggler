@@ -79,6 +79,7 @@ pub fn run() {
             commands::profile_delete,
             commands::launch_session,
             commands::sessions_list,
+            commands::projects_list,
             commands::stop_session,
             commands::dashboard_stats,
             commands::terminal_spawn_login,

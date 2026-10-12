@@ -11,12 +11,15 @@ mod accounts;
 mod profiles;
 mod sessions;
 
+mod projects;
+
 use std::path::Path;
 
 use rusqlite::Connection;
 
 pub use accounts::AccountsRepo;
 pub use profiles::ProfilesRepo;
+pub use projects::ProjectsRepo;
 pub use sessions::SessionsRepo;
 
 use crate::error::CoreError;
@@ -57,8 +60,22 @@ CREATE TABLE sessions (
 /// Schema version 2: profile names.
 const V2: &str = "ALTER TABLE profiles ADD COLUMN name TEXT NOT NULL DEFAULT '';";
 
+/// Schema version 3 (ADR-0007): instance kinds + tracked projects, the
+/// juggling anchor.
+const V3: &str = "
+ALTER TABLE sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'terminal';
+ALTER TABLE sessions ADD COLUMN project TEXT;
+CREATE TABLE projects (
+    id            TEXT PRIMARY KEY,
+    root          TEXT NOT NULL UNIQUE,
+    name          TEXT NOT NULL,
+    created_at    INTEGER NOT NULL,
+    last_activity INTEGER
+);
+";
+
 /// Ordered, forward-only migrations; index + 1 is the schema version.
-const MIGRATIONS: &[&str] = &[V1, V2];
+const MIGRATIONS: &[&str] = &[V1, V2, V3];
 
 /// An opened AI Juggler database with typed repositories.
 #[derive(Debug)]
@@ -149,5 +166,11 @@ impl Storage {
     #[must_use]
     pub fn sessions(&self) -> SessionsRepo<'_> {
         SessionsRepo::new(&self.conn)
+    }
+
+    /// Repository for [`crate::model::ProjectRecord`] rows.
+    #[must_use]
+    pub fn projects(&self) -> ProjectsRepo<'_> {
+        ProjectsRepo::new(&self.conn)
     }
 }

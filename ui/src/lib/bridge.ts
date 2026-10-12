@@ -12,6 +12,7 @@ import type { AccountInfo } from "../types/generated/AccountInfo";
 import type { DiscoveredInfo } from "../types/generated/DiscoveredInfo";
 import type { ImportResult } from "../types/generated/ImportResult";
 import type { LaunchResult } from "../types/generated/LaunchResult";
+import type { ProjectInfo } from "../types/generated/ProjectInfo";
 import type { ProfileInfo } from "../types/generated/ProfileInfo";
 import type { SessionInfo } from "../types/generated/SessionInfo";
 import type { HarnessInfo } from "../types/generated/HarnessInfo";
@@ -25,6 +26,7 @@ export type {
   ImportResult,
   LaunchResult,
   ProfileInfo,
+  ProjectInfo,
   SessionInfo,
   HarnessInfo,
   StatsInfo,
@@ -59,7 +61,59 @@ const MOCK_PROFILES: ProfileInfo[] = [
 
 const MOCK_STATS: StatsInfo = { accounts: 2, profiles: 3, active_sessions: 0 };
 
-const MOCK_SESSIONS: SessionInfo[] = [];
+const MOCK_SESSIONS: SessionInfo[] = [
+  {
+    id: "sess-live-1",
+    profile_id: "p-1",
+    harness: "claude-code",
+    label: "Work Max",
+    status: "running",
+    started_at_ms: Date.now() - 1_200_000,
+    kind: "terminal",
+    project_id: "proj-ai-juggler",
+  },
+  {
+    id: "sess-done-1",
+    profile_id: "p-3",
+    harness: "claude-code",
+    label: "Personal",
+    status: "finished",
+    started_at_ms: Date.now() - 86_400_000,
+    kind: "terminal",
+    project_id: "proj-payments",
+  },
+  {
+    id: "sess-done-2",
+    profile_id: "p-2",
+    harness: "claude-code",
+    label: "Work Max",
+    status: "finished",
+    started_at_ms: Date.now() - 43_200_000,
+    kind: "terminal",
+    project_id: "proj-payments",
+  },
+];
+
+const MOCK_PROJECTS: ProjectInfo[] = [
+  {
+    id: "proj-ai-juggler",
+    root: "/Users/you/Dev/ai-juggler",
+    name: "ai-juggler",
+    last_activity_ms: Date.now() - 60_000,
+    active_instance: MOCK_SESSIONS[0],
+    accounts_used: ["Work Max"],
+    instance_count: 1,
+  },
+  {
+    id: "proj-payments",
+    root: "/Users/you/Dev/payments-api",
+    name: "payments-api",
+    last_activity_ms: Date.now() - 3_600_000,
+    active_instance: null,
+    accounts_used: ["Personal", "Work Max"],
+    instance_count: 2,
+  },
+];
 
 function Some<T>(value: T): T | null {
   return value;
@@ -207,6 +261,14 @@ export async function launchSession(
     profileId,
     cwd,
   });
+}
+
+/** Tracked projects — the juggling anchor (which instance is on each directory). */
+export async function projectsList(): Promise<ProjectInfo[]> {
+  if (!hasBackend) {
+    return MOCK_PROJECTS;
+  }
+  return invoke<ProjectInfo[]>("projects_list");
 }
 
 export async function sessionsList(): Promise<SessionInfo[]> {

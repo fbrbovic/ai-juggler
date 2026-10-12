@@ -7,7 +7,8 @@ use serde::de::Error as _;
 
 use crate::error::CoreError;
 use crate::model::{
-    MachineId, ProfileId, SessionId, SessionRecord, SessionStatus, Timestamp, TranscriptRef,
+    InstanceKind, MachineId, ProfileId, ProjectId, SessionId, SessionRecord, SessionStatus,
+    Timestamp, TranscriptRef,
 };
 
 /// Converts a stored-JSON parse failure into a row-mapping failure.
@@ -37,14 +38,19 @@ impl SessionsRepo<'_> {
     pub fn insert(&self, session: &SessionRecord) -> Result<(), CoreError> {
         self.conn.execute(
             "INSERT INTO sessions
-                 (id, native_id, profile_id, machine, cwd, status,
+                 (id, native_id, profile_id, machine, kind, project, cwd, status,
                   started_at, last_activity, usage_json, transcript_ref_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 session.id.as_str(),
                 session.native_id,
                 session.profile.as_str(),
                 session.machine.as_str(),
+                session.kind.as_str(),
+                session
+                    .project
+                    .as_ref()
+                    .map(crate::model::ProjectId::as_str),
                 session.cwd.to_string_lossy(),
                 session.status.as_str(),
                 session.started_at.millis(),
@@ -71,7 +77,7 @@ impl SessionsRepo<'_> {
         let changed = self.conn.execute(
             "UPDATE sessions SET
                  native_id = ?2, status = ?3, last_activity = ?4,
-                 usage_json = ?5, transcript_ref_json = ?6
+                 usage_json = ?5, transcript_ref_json = ?6, project = ?7
              WHERE id = ?1",
             params![
                 session.id.as_str(),
@@ -84,6 +90,10 @@ impl SessionsRepo<'_> {
                     .as_ref()
                     .map(serde_json::to_string)
                     .transpose()?,
+                session
+                    .project
+                    .as_ref()
+                    .map(crate::model::ProjectId::as_str),
             ],
         )?;
         super::accounts::require_changed(changed, "session", session.id.as_str())
@@ -138,6 +148,7 @@ impl SessionsRepo<'_> {
 /// Maps a row to a [`SessionRecord`].
 fn map_session(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
     let status_raw: String = row.get("status")?;
+    let kind_raw: String = row.get("kind")?;
     let usage_json: String = row.get("usage_json")?;
     let transcript_json: Option<String> = row.get("transcript_ref_json")?;
     Ok(SessionRecord {
@@ -145,6 +156,16 @@ fn map_session(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
         native_id: row.get("native_id")?,
         profile: ProfileId::new(row.get::<_, String>("profile_id")?),
         machine: MachineId::new(row.get::<_, String>("machine")?),
+        kind: InstanceKind::parse(&kind_raw).ok_or_else(|| {
+            rusqlite::Error::FromSqlConversionFailure(
+                0,
+                rusqlite::types::Type::Text,
+                Box::new(serde_json::Error::custom(format!(
+                    "unknown instance kind: {kind_raw}"
+                ))),
+            )
+        })?,
+        project: row.get::<_, Option<String>>("project")?.map(ProjectId::new),
         cwd: PathBuf::from(row.get::<_, String>("cwd")?),
         // Unknown status values (e.g. written by a future build that somehow
         // shares this database) degrade to an error, never a panic.
