@@ -51,6 +51,9 @@ Every developer solves this with a pile of shell scripts, terminal tabs, config-
 
 - [Product proposal](./docs/PROPOSAL.md) — the why: problem, users, landscape, risks, compliance
 - [Technical specification](./docs/SPEC.md) — the how: architecture, adapters, data model, roadmap
+- [Execution plan](./docs/plan/EPICS.md) — epics, tasks, acceptance criteria, validation gates
+- [Quality standards](./docs/plan/QUALITY.md) — engineering standards & the per-task Definition of Done
+- [ADRs](./docs/adr/) — architecture decision records
 - [Research notes](./docs/research/) — deep dives on Claude Code, Codex, ZCode, and the tooling landscape
 
 ## Roadmap

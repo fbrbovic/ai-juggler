@@ -27,6 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Release & platform policy: macOS-first signed + notarized builds
   (Apple Developer via Vuxtra), strict semver with 0.x beta channel,
   stable channel at 1.0.
+- Execution plan (docs/plan/EPICS.md): epics → tasks → acceptance
+  criteria for M0 through 1.0, per-milestone validation gates with
+  committed gate reports and user confirmation.
+- Quality standards (docs/plan/QUALITY.md): engineering standards and
+  the per-task Definition of Done applied to every requirement.
+- Architecture decision records (docs/adr/): Tauri 2, adapter
+  architecture, automation policy, fleet transport, MIT license.
 
 ### Changed
 

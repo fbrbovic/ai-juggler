@@ -29,7 +29,7 @@ The project is in active design. The highest-value contributions right now are:
 
 The codebase (Rust + Tauri) does not exist yet — it arrives with milestone M0/M1. This section will be filled in with build instructions, architecture pointers, and test commands as soon as the scaffold lands.
 
-Planned toolchain: stable Rust, pnpm/Node for the UI, and standard `cargo fmt` / `clippy` / `cargo test` gates in CI.
+Planned toolchain: stable Rust, pnpm/Node for the UI, and standard `cargo fmt` / `clippy` / `cargo test` gates in CI. **Engineering standards and the per-task Definition of Done live in [docs/plan/QUALITY.md](./docs/plan/QUALITY.md) — they apply to every contribution without exception.** The execution plan with per-task acceptance criteria is [docs/plan/EPICS.md](./docs/plan/EPICS.md); non-obvious decisions are recorded as [ADRs](./docs/adr/).
 
 ## Commit & PR conventions
 

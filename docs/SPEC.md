@@ -392,6 +392,8 @@ Nothing is ever written inside `~/.claude`, `~/.codex`, or `~/.zcode` (the user'
 
 ## 14. Milestones
 
+Task-level breakdown, live tracking, and the per-milestone validation-gate process live in [docs/plan/EPICS.md](./plan/EPICS.md); the engineering standards and per-task Definition of Done live in [docs/plan/QUALITY.md](./plan/QUALITY.md). Every milestone closes with a full validation pass, a committed gate report (`docs/qa/gate-MX.md`), and user confirmation before the next one starts.
+
 | M | Scope | Acceptance |
 |---|---|---|
 | **M0** | Workspace scaffold, CI (fmt/clippy/test, 3-OS build), adapter trait + fake harness, domain model + SQLite | Fake session launches, is watched, and shows on a debug board |
