@@ -9,3 +9,12 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+juggler-core = { version = "0.0.1", path = "../juggler-core" }
+serde = { version = "1.0.229", features = ["derive"] }
+tauri = "2.12.3"
+ts-rs = { version = "12.0.1", features = ["serde-json-impl", "no-serde-warnings"] }
+
+[build-dependencies]
+tauri-build = "2.7.2"

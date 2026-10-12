@@ -21,6 +21,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install Tauri system dependencies (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libssl-dev
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@v2
@@ -40,9 +46,8 @@ jobs:
         run: cargo doc --workspace --no-deps
       - name: Dependency policy (cargo-deny)
         uses: EmbarkStudios/cargo-deny-action@v2
-      # Coverage baseline artifact. Best-effort until M0-3 lands real tests:
-      # llvm-cov errors with "no coverage data found" on a zero-test workspace.
-      # Flip `continue-on-error` to false when the first test-bearing crate merges.
+      # Coverage artifact. Best-effort in edge cases (zero-test workspaces);
+      # strictness is enforced at gates via the local llvm-cov numbers.
       - name: Coverage (baseline artifact)
         continue-on-error: true
         run: cargo llvm-cov --workspace --lcov --output-path lcov.info
@@ -51,6 +56,27 @@ jobs:
         with:
           name: coverage-lcov
           path: lcov.info
+
+  # Frontend quality gate: typecheck + production build of the webview UI.
+  ui:
+    name: ui
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - name: Install
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+      - name: Build (typecheck + bundle)
+        working-directory: ui
+        run: pnpm build
 
   # Cross-platform build matrix (spec §1: cross-platform core from day one).
   build-macos:
@@ -71,6 +97,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install Tauri system dependencies (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libssl-dev
       - uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo build --workspace

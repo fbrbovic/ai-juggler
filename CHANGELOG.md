@@ -100,6 +100,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exit, drop-survival + journal re-adoption, process-tree tracking,
   PTY output capture, unknown-session errors.
 
+### Added (M1-1)
+
+- Tauri 2 application shell (`juggler-app`): strict CSP (self only),
+  minimal core capability, generated brand icon placeholder, `app_info`
+  command + `app://ready` event, typed both sides via ts-rs (Rust is
+  the single source for TS types).
+- Webview UI scaffold (`ui/`): React 18 + TypeScript + Vite + Tailwind
+  v4; dark-first design tokens; base primitives (Button/Card/Chip/
+  StatCard/QuotaRing); inline SVG icons; app shell (rail nav, status
+  bar, dashboard placeholder); typed bridge with browser fallback.
+- CI: `ui` job (typecheck + build) as a required check; Tauri Linux
+  system dependencies for cargo jobs.
+
 ### Changed
 
 - Handover model upgraded from summary packs to tiered session sync:
