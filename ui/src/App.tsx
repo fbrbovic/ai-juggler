@@ -8,6 +8,7 @@ import {
   IconUsage,
 } from "./components/icons";
 import { ProfilesScreen } from "./screens/Profiles";
+import { OnboardingWizard } from "./screens/OnboardingWizard";
 import {
   NewSessionModal,
   ProjectPanel,
@@ -15,6 +16,7 @@ import {
   WorkEmpty,
 } from "./screens/WorkPanels";
 import {
+  accountsList,
   onSessionsUpdated,
   onTerminalExit,
   projectsList,
@@ -71,10 +73,20 @@ export default function App() {
     { id: string; title: string; ended: boolean }[]
   >([]);
   const [newSession, setNewSession] = useState(false);
+  const [wizard, setWizard] = useState(false);
 
   useEffect(() => {
     void fetchAppInfo().then(setInfo);
     return onAppReady(setInfo);
+  }, []);
+
+  // First run: zero accounts → the onboarding wizard opens by itself
+  // (spec §12.1), once per dismissal.
+  useEffect(() => {
+    if (localStorage.getItem("aij.onboarding.dismissed") === "1") return;
+    void accountsList().then((accounts) => {
+      if (accounts.length === 0) setWizard(true);
+    });
   }, []);
 
   const refresh = useCallback(async () => {
@@ -316,6 +328,17 @@ export default function App() {
           )}
         </main>
       </div>
+
+      {wizard && (
+        <OnboardingWizard
+          onClose={() => {
+            localStorage.setItem("aij.onboarding.dismissed", "1");
+            setWizard(false);
+          }}
+          onAccountCreated={() => void refresh()}
+          openLoginTerminal={openLoginTerminal}
+        />
+      )}
 
       {newSession && (
         <NewSessionModal

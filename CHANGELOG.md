@@ -263,3 +263,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rings, proper aria tablist semantics, tooltips only when labels are
   hidden.
 - Thin overlay-style scrollbars across rail and panels.
+
+### Added (M1-3b Phase C — onboarding wizard)
+
+- The zero-knowledge add-account flow (ADR-0006, spec §12.1): Detect
+  (auto environment scan, findings in plain language with origin and
+  sign-in state) → Identity (plain-words purpose + plan tier, or
+  one-tap import of a discovered setup) → Login (sign in inside AI
+  Juggler / open claude.ai / copyable command / re-check, with the
+  honest keychain note when import can't carry the login) → Summary
+  (what was created, what was skipped, original untouched).
+- First run with zero accounts opens the wizard automatically (once
+  per explicit dismissal); Accounts → Add account uses the same flow.
+- Replaces the old add-account form modal; fully reviewable in a
+  plain browser via mocks.
