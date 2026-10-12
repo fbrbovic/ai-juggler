@@ -1,6 +1,27 @@
 # Gate V1 — Milestone M1 acceptance (M1-7)
 
-Status: **PREPARED — awaiting dogfood run + user confirmation**
+Status: **MECHANICS VERIFIED (agent dogfood, 2026-10-12) — awaiting user confirmation**
+
+## Agent-run dogfood evidence (mechanics, real claude binary)
+
+- `dogfood_v1` (operational runner, repeated 3×): two imported accounts
+  (bookauth-olivia + personal-max) launched in parallel on
+  `scratch/dogfood/project-x` through the full app stack — real
+  `claude` 2.1.296 under our PTY, real "Welcome to Claude Code" UI
+  streamed into both panels, graceful stop ladder, sessions recorded
+  `stopped`, ONE project tracked with both accounts in history.
+- Auth boundary confirmed honestly: copies are not authenticated
+  (claude 2.1.296 consults only the namespaced per-path keychain entry;
+  the t3 originals' shared legacy entry does not carry). Authenticated
+  working sessions require the user's one-click re-login per account —
+  the single remaining user step.
+- Machine health after all runs: t3 originals manifest-verified (only
+  live-session transcript/backup writes by t3 itself), `~/.claude`
+  untouched, legacy keychain entry present, t3.app running its 3
+  sessions, zero stray AI Juggler processes.
+- Dogfood finding fixed: user-stopped sessions now record `stopped`
+  (not `failed`) — PTY kills surface as plain exit codes, so supervisor
+  stop-intent tracking feeds the status mapping.
 Prepared: 2026-10-12
 
 M1 scope: two (or more) Claude Code accounts running in parallel through

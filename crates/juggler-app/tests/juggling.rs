@@ -72,7 +72,7 @@ fn two_accounts_same_directory_share_one_tracked_project() {
                 exited += 1;
             }
             let storage = state.storage.lock().unwrap();
-            commands::apply_lifecycle_event(&storage, event.clone());
+            commands::apply_lifecycle_event(&storage, event.clone(), false);
         }
     }
     assert_eq!(exited, 2);

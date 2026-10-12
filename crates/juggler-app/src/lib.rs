@@ -54,8 +54,13 @@ pub fn run() {
                 .supervisor
                 .recv_timeout(std::time::Duration::from_millis(500))
             {
+                let stopped_by_user = state.supervisor.was_stopped(event.session());
                 if let Ok(storage) = state.storage.lock() {
-                    drop(commands::apply_lifecycle_event(&storage, event));
+                    drop(commands::apply_lifecycle_event(
+                        &storage,
+                        event,
+                        stopped_by_user,
+                    ));
                 }
             }
         });

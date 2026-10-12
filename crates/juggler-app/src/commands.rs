@@ -773,7 +773,11 @@ pub fn dashboard_stats(state: tauri::State<'_, Arc<AppState>>) -> AppResult<Stat
 
 /// Applies a supervisor lifecycle event to storage (status transitions).
 /// Returns the updated record when one matched.
-pub fn apply_lifecycle_event(storage: &Storage, event: LifecycleEvent) -> Option<SessionRecord> {
+pub fn apply_lifecycle_event(
+    storage: &Storage,
+    event: LifecycleEvent,
+    stopped_by_user: bool,
+) -> Option<SessionRecord> {
     let session_id = match &event {
         LifecycleEvent::Started { session, .. } | LifecycleEvent::Exited { session, .. } => session,
     };
@@ -781,10 +785,16 @@ pub fn apply_lifecycle_event(storage: &Storage, event: LifecycleEvent) -> Option
     match event {
         LifecycleEvent::Started { .. } => record.status = SessionStatus::Running,
         LifecycleEvent::Exited { kind, .. } => {
-            record.status = if kind.is_success() {
-                SessionStatus::Finished
+            record.status = if stopped_by_user {
+                // The stop ladder (PTY exits surface kills as plain
+                // non-zero codes) — user intent, not a failure.
+                SessionStatus::Stopped
             } else {
-                SessionStatus::Failed
+                match kind {
+                    kind if kind.is_success() => SessionStatus::Finished,
+                    juggler_supervisor::ExitKind::Signaled(_) => SessionStatus::Stopped,
+                    juggler_supervisor::ExitKind::Code(_) => SessionStatus::Failed,
+                }
             };
         }
     }
