@@ -16,7 +16,7 @@ mod commands;
 use tauri::Emitter;
 
 /// Name of the event emitted once the backend is ready; the payload is
-/// [`commands::AppInfo`].
+/// the `AppInfo` value.
 pub const EVENT_APP_READY: &str = "app://ready";
 
 /// Builds and runs the desktop application.
