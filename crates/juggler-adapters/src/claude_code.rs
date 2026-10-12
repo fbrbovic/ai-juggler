@@ -14,7 +14,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::claude_environment;
-use juggler_adapter::environment::{DiscoveredInstall, ImportOutcome, LoginProbe, LoginUrl};
+use juggler_adapter::environment::{
+    DiscoveredInstall, ImportOutcome, InstallOrigin, LoginProbe, LoginUrl,
+};
 use juggler_adapter::{
     AdapterError, Capabilities, DiscoveryReport, EnvMap, HarnessAdapter, InstallStatus, LaunchMode,
     LaunchSpec, SessionEvent, SessionWatcher, VerificationStatus,
@@ -204,14 +206,39 @@ impl HarnessAdapter for ClaudeCodeAdapter {
     fn scan_environment(&self) -> Vec<DiscoveredInstall> {
         let env_override = std::env::var_os(ENV_CONFIG_DIR).map(PathBuf::from);
         let adapter = ClaudeCodeAdapter::new();
+        #[cfg(target_os = "macos")]
+        let legacy_shared_keychain = keychain_entry_exists("Claude Code-credentials");
+        #[cfg(not(target_os = "macos"))]
+        let legacy_shared_keychain = false;
         let probe = move |path: &Path| match adapter.login_state(path) {
             LoginState::LoggedIn => LoginProbe::LoggedIn,
+            LoginState::LoggedOut if legacy_shared_keychain => LoginProbe::LoggedIn,
             LoginState::LoggedOut => LoginProbe::LoggedOut,
         };
         let home = home_relative(".")
             .filter(|p| p.is_dir())
             .unwrap_or_else(|| PathBuf::from("."));
-        claude_environment::scan_claude_environment(&home, env_override.as_deref(), &probe)
+        // t3.codes keeps whole Claude profile roots here (ADR-0006
+        // "other manager tools" case, verified on a real machine).
+        let manager_roots = [home.join("Library/Application Support/ClaudeCodeProfiles")];
+        let mut found = claude_environment::scan_claude_environment(
+            &home,
+            env_override.as_deref(),
+            &manager_roots,
+            &probe,
+        );
+        if legacy_shared_keychain {
+            for install in &mut found {
+                if install.login == LoginProbe::LoggedIn
+                    && install.origin == InstallOrigin::ManagerTool
+                {
+                    install.notes.push(
+                        "Signed in via a shared (pre-2.1.56) keychain entry — after importing, plan on one quick re-login inside AI Juggler.".to_string(),
+                    );
+                }
+            }
+        }
+        found
     }
 
     fn import_account(&self, source: &Path, dest: &Path) -> Result<ImportOutcome, AdapterError> {

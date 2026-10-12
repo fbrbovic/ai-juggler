@@ -155,7 +155,13 @@ fn environment_scan_smoke_never_panics_on_a_real_home() {
         assert_eq!(install.harness, CLAUDE_CODE_ID);
         assert!(!install.path.is_empty());
         assert!(
-            ["vendor-default", "env-override", "home-pattern"].contains(&install.origin.as_str())
+            [
+                "vendor-default",
+                "env-override",
+                "home-pattern",
+                "manager-tool"
+            ]
+            .contains(&install.origin.as_str())
         );
         assert!(
             ["logged_in", "logged_out"].contains(&install.login.as_str()),

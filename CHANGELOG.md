@@ -277,3 +277,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per explicit dismissal); Accounts → Add account uses the same flow.
 - Replaces the old add-account form modal; fully reviewable in a
   plain browser via mocks.
+
+### Added (scanner: other manager tools, verified against t3.codes)
+
+- Environment scan now covers **other manager tools' profile roots**
+  (new `manager-tool` origin): t3.codes' `ClaudeCodeProfiles/` verified
+  on a real machine with five live profiles. Manager-tool findings say
+  plainly that the tool and its sessions are never touched.
+- Login honesty for pre-2.1.56 setups: when only the legacy shared
+  keychain entry exists, manager-tool imports note that a one-time
+  re-login inside AI Juggler is likely.
+- Operational runner (ignored test) importing real profiles into the
+  app's data dir; used to import the user's five t3.codes profiles
+  read-only (originals manifest-verified untouched; live session
+  transcripts kept growing in the source, proving t3 undisturbed).

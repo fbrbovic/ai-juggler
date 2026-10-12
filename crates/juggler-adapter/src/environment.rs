@@ -37,17 +37,21 @@ pub enum InstallOrigin {
     /// Matched a config-naming pattern in the user's home — created
     /// manually, by another tool, or by an AI assistant.
     HomePattern,
+    /// Found under another manager tool's profile root (e.g. t3.codes'
+    /// `ClaudeCodeProfiles/`) — managed elsewhere, imported read-only.
+    ManagerTool,
 }
 
 impl InstallOrigin {
     /// Wire name for the UI (`vendor-default` / `env-override` /
-    /// `home-pattern`).
+    /// `home-pattern` / `manager-tool`).
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::VendorDefault => "vendor-default",
             Self::EnvOverride => "env-override",
             Self::HomePattern => "home-pattern",
+            Self::ManagerTool => "manager-tool",
         }
     }
 }
