@@ -35,6 +35,7 @@ Modern AI-assisted development means several subscriptions across several tools.
 - **G5 — Extensible:** adding a new harness is an adapter, not a rewrite. Claude Code, Codex, ZCode first; the adapter API is public.
 - **G6 — Trustworthy:** local-first, credentials never handled or stored by the app, signed self-updates, resilient by construction.
 - **G7 — Machine-aware parallelism:** monitor system and per-session resources, warn *before* overload, recover from crashes, and recommend configurations that actually fit the machine.
+- **G8 — Fleet:** link multiple computers over the network — every session, usage number, and alert from every connected machine in one console; onboarding a new machine is a pairing code.
 
 ### Non-goals (v1)
 
@@ -103,6 +104,15 @@ Parallel harnesses are heavy, and AI Juggler is the one component that can see t
 - **Recover:** harness crashes are detected and classified (OOM vs quota vs plain crash), with one-click recovery — native resume keeps the conversation (transcripts persist), or relaunch/hand-over. An opt-in per-profile auto-restart (off by default) relaunches into the same profile. If AI Juggler itself crashes, supervised sessions survive and are re-adopted on relaunch.
 - **Advise:** recommendations from real data — how many parallel sessions this machine really supports per harness, which profiles are heaviest, which knobs (e.g. concurrency limits) shave peak load.
 
+### 6.6 Fleet: multiple computers, one console
+
+Instances of AI Juggler link over the network so one console shows — and manages — every session on every machine you own:
+
+- **Onboarding a machine is a pairing code**, not a config file: enable Link on the new machine, enter the code (or scan the QR) at your console, done. Machines are discovered automatically on the LAN (mDNS/Bonjour); remote machines join through your own VPN (Tailscale/WireGuard) — AI Juggler operates no cloud relay.
+- **Standard, secure transport:** gRPC over TLS 1.3 with mutual certificate authentication; every instance has its own identity key; unpaired machines cannot connect.
+- **What flows:** telemetry and control only — session status, resource stats, usage, alerts stream continuously; launch/stop/handover commands travel only on your click. Full transcripts move only when you execute a cross-machine handover. Vendor credentials **never** leave their machine.
+- The board, dashboards, and alerts gain a machine dimension: filter by machine, aggregate usage across the fleet, route any machine's alerts to your console.
+
 ## 7. Competitive landscape & differentiation
 
 See [research/landscape-and-stack.md](./research/landscape-and-stack.md) for the full table. Short version:
@@ -124,18 +134,23 @@ See [research/landscape-and-stack.md](./research/landscape-and-stack.md) for the
 | Quota estimation wrong for Codex (no public API) | Medium | Label estimates as estimates (mirroring OpenAI's own language); calibrate from observed limits; show confidence |
 | Updater trust on unsigned OS builds | Medium | Signed Tauri updater feed always; OS signing ($99/yr Apple, ~$120/yr Azure) budgeted for v0.1 |
 | Scope creep into "yet another orchestrator" | High | Non-goals enforced in design reviews; adapter API is the only public extension point for v1 |
+| Fleet expands attack surface | Medium | mTLS-only with per-instance identities, code-based pairing, no anonymous mode, LAN/VPN scope, credentials never over the link; loopback multi-instance tests in CI |
+| Fleet protocol churn across app versions | Medium | Versioned protobuf contracts + breaking-change lint; mixed-version degradation matrix tested |
 
 ## 9. Success metrics (v0.x)
 
 - A new user goes from install → two Claude accounts running in parallel in **under 5 minutes** without reading docs.
+- A second machine joins the fleet in **under 60 seconds** with a pairing code and zero configuration files.
 - Handover round-trip (A → B → back on A) preserves task continuity as judged by the user in ≥ 80% of tries.
 - Zero incidents of the app writing to harness state beyond its own managed profile directories.
 - Stuck-session detection precision/recall ≥ 90% on the fixture corpus.
 
-## 10. Open questions for review
+## 10. Review status & remaining questions
 
-1. **Frontend framework:** React 18 (ecosystem, shadcn/ui, matches cc-switch/opcode) vs Svelte 5 (smaller/faster). Spec assumes React; veto welcome.
-2. **Embedded terminal in v1?** In-app xterm.js terminals (big UX win, more surface) vs "launch in your terminal" for M1 and embed in M2.
-3. **License:** MIT chosen (matches cc-switch); Apache-2.0 also common in Rust — confirm MIT.
-4. **Name/crate naming:** `ai-juggler` repo, binary `ai-juggler`, crates `juggler-*` — confirm branding.
-5. **MVP order:** spec proposes M1 = profiles + parallel launcher (Claude Code first) — confirm this matches your most urgent pain.
+Decisions closed in review (spec §15): React 18 + TypeScript UI · embedded terminal in M1 · MIT license · `ai-juggler`/`juggler-*` naming · Claude Code first · macOS-first with signed+notarized builds (Apple Developer account via Vuxtra) · strict semver with `0.x` betas on a beta channel and the stable channel opening at 1.0 · fleet over gRPC/mTLS with mDNS pairing, no cloud relay.
+
+Remaining, non-blocking:
+
+1. Fleet wire format detail (protobuf-first vs app-server-style JSON-RPC) — decided at the M5 transport spike.
+2. Whether the stable update channel opens earlier than 1.0 — revisit at v0.3.
+3. Cross-machine T2 transplant constraints (same binary version, same checkout path) — validated during M6/M7.

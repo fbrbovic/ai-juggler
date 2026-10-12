@@ -25,4 +25,5 @@ These are binding goals of the architecture (see the [spec](./docs/SPEC.md)):
 - **Credentials live in the OS keychain** (macOS Keychain, Windows Credential Manager, Linux Secret Service) — never in plaintext config files.
 - **Local-first:** transcripts, usage data, and indexes stay on the user's machine. No cloud services. Any telemetry is strictly opt-in and documented.
 - **Signed updates only:** self-updates are verified against a published signature before installation.
+- **Fleet link security:** mutual-TLS only (TLS 1.3) with per-instance identity keys; pairing requires a user-verified code; no anonymous connections; LAN / user-VPN scope with no cloud relay; vendor credentials never travel over the link.
 - **Least privilege:** the app manages only the accounts and paths the user explicitly configures.

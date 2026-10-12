@@ -28,6 +28,7 @@ Every developer solves this with a pile of shell scripts, terminal tabs, config-
 | 📊 **Usage dashboards** | Visual, per-account and per-plan usage and quota tracking, so you always know what you have left before you start a task |
 | 🩺 **Session health** | Live status of every running session, with stuck-session detection and safe lifecycle controls |
 | 🖥️ **Machine health** | RAM/CPU/swap/disk monitoring, overload warnings, launch headroom advice ("can this machine take another session?"), and crash recovery |
+| 🔗 **Fleet link** | Connect multiple computers over your network (pairing code, end-to-end secured) — see and manage every session across all of them from one console |
 | 🧩 **Extensible by design** | A clean adapter architecture — Claude Code, Codex, and ZCode first, new harnesses without changing the core |
 
 ## Guiding principles
@@ -61,7 +62,14 @@ Every developer solves this with a pile of shell scripts, terminal tabs, config-
 | M2 | Multi-harness + session & resource tracking | ⏳ |
 | M3 | Usage dashboards + quota alerts | ⏳ |
 | M4 | Cross-tool session & project handover | ⏳ |
-| M5 | Hardening, self-update, public v0.1 | ⏳ |
+| M5 | Hardening, signed self-update, public v0.1 beta | ⏳ |
+| M6 | Fleet link — one board across machines (v0.2) | ⏳ |
+| M7 | Fleet control + aggregated usage (v0.3) | ⏳ |
+| 1.0 | Stable release from beta feedback | ⏳ |
+
+## Install
+
+Nothing to install yet. The first release will be a **signed and notarized macOS app** (Universal binary, Developer ID via Vuxtra) with built-in auto-updates — drag it to `/Applications` and you're running. Early builds ship as `v0.1.0-beta.*` on the beta channel; watch [releases](https://github.com/fbrbovic/ai-juggler/releases) to catch the first one.
 
 ## Contributing
 

@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Machine health subsystem (spec §5): system + per-session resource
   monitoring, overload alerts, launch admission advisor, crash recovery,
   and optimization recommendations.
+- Fleet / multi-machine architecture (spec §11): mDNS discovery, code
+  pairing, gRPC over mutual TLS, telemetry/control sync with
+  credentials-never-leave-the-machine invariant; fleet milestones M6/M7
+  toward 1.0.
+- Release & platform policy: macOS-first signed + notarized builds
+  (Apple Developer via Vuxtra), strict semver with 0.x beta channel,
+  stable channel at 1.0.
 
 ### Changed
 

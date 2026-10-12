@@ -15,7 +15,7 @@ AI Juggler is a native desktop application that **supervises** AI coding harness
 
 | Requirement | Target |
 |---|---|
-| Platform (v0.1) | macOS 13+ (Apple Silicon & Intel); Windows/Linux by v0.3 |
+| Platform (v0.x) | macOS 13+ (Universal: Apple Silicon + Intel). Windows/Linux post-1.0; the Rust core and adapters are cross-platform from day one (CI builds all three OSes) so ports need no rewrites |
 | Startup | < 1.5s cold start; session board interactive < 500ms after launch |
 | Footprint | < 150 MB RSS typical; UI at 60 fps with 20 live sessions |
 | Reliability | App crash never kills supervised sessions (children survive; state journaled); recovery on relaunch |
@@ -58,6 +58,7 @@ flowchart LR
     USE --> IDX
     HO --> IDX
     CORE --> DB & KEY
+    CORE -.-|gRPC · mTLS · mDNS| PEERS[Peer AI Juggler<br/>instances (fleet)]
 ```
 
 **Layering rules**
@@ -76,6 +77,7 @@ ai-juggler/
 │   ├── juggler-adapters/    # claude-code, codex, zcode implementations
 │   ├── juggler-supervisor/  # PTY/process lifecycle, health, stuck detection, resources
 │   ├── juggler-handover/    # context packs, rules-file sync, takeover flows
+│   ├── juggler-link/        # fleet: mDNS discovery, pairing, gRPC/mTLS sync
 │   └── juggler-app/         # Tauri shell, commands/events, updater wiring
 ├── ui/                      # frontend (React + TypeScript)
 └── docs/
@@ -107,6 +109,7 @@ pub struct SessionRecord {
     pub id: SessionId,                  // juggler's id
     pub native_id: Option<String>,      // claude uuid / codex thread / zcode sess_*
     pub profile: ProfileId,
+    pub machine: MachineId,             // fleet: origin computer (default: this Mac)
     pub cwd: PathBuf,
     pub status: SessionStatus,          // Starting|Running|WaitingUser|Stuck|Finished|Failed|HandedOver
     pub started_at: DateTime<Utc>,
@@ -318,6 +321,7 @@ Generation is template-driven from the Transcript IR (deterministic; an optional
 - **Usage:** per-account timelines (uPlot), windows (5h/weekly/credits), per-session breakdowns, export CSV.
 - **Handover:** staged on the session board — "Hand over…" lists target profiles with the fidelity tier each supports and current quota headroom; one click executes (a preview/edit of exactly what will be carried over is always available first).
 - **Machine advisor:** overload banners and notifications, per-session resource breakdown, launch-headroom verdicts (OK / Tight / No + why), optimization recommendations, and crash-recovery cards (resume / relaunch / hand over) after incidents.
+- **Fleet view:** connected machines (state, resources, permissions) as filters across board/dashboard/usage; "Add a machine" pairing wizard; cross-machine handover in the standard wizard.
 - **Terminals:** embedded xterm.js tabs (one per session) — *open decision #2: v1 or v2.*
 - **Tray:** aggregate quota state, alerts, quick-launch menu. Global hotkey for the board.
 - **Settings:** thresholds (stuck heuristics, alert levels), terminal prefs, update channel (stable/beta), telemetry (off).
@@ -326,30 +330,67 @@ Generation is template-driven from the Transcript IR (deterministic; an optional
 
 - **App:** `tauri-plugin-updater` + GitHub Releases feed (`latest.json` via tauri-action), staged: download → verify signature → apply on quit or relaunch prompt; channel switch in settings; "check for updates" manual trigger; disable-able entirely.
 - **Harness tracking:** adapters' `discover()` records installed versions; a background daily check against vendor release channels (GitHub/npm APIs) surfaces "Claude Code 2.1.301 available (you run 2.1.296)" with the adapter's verified-range status — the app never auto-updates a harness (its updater, your call).
+- **Versioning & channels:** strict semver. Pre-1.0 ships as `0.x.0-beta.N` releases on the **beta** channel (early feedback); the **stable** channel opens with 1.0. Every release is a git tag `vX.Y.Z` with a CHANGELOG entry, updater-signed artifacts, and a notarized macOS build.
+- **macOS signing/notarization:** Apple Developer Program membership (Vuxtra) provides Developer ID Application signing + `notarytool` notarization in CI (secrets via GitHub Environments). Open-source license unaffected — binaries are simply signed by the publishing identity, the standard model for company-published OSS.
 
-## 11. Storage layout
+## 11. Fleet: multi-machine operation
+
+AI Juggler instances link over the network so one console can see — and manage — every harness session on every machine you own. The design goal is **onboarding ease**: connecting a new machine is a pairing code, not a config file.
+
+### 11.1 Topology & roles
+
+- One binary, two roles: every instance is a **node** (serves its local state); any instance can act as a **console** (view/control the fleet). In practice one machine is "your" console; multiple consoles are allowed.
+- **LAN-first, zero config:** discovery via mDNS/Bonjour (`mdns-sd`). Remote machines join through the user's own VPN (Tailscale/WireGuard) — AI Juggler never operates an internet relay or cloud service (privacy posture; also keeps the compliance story purely local).
+
+### 11.2 Transport & security
+
+- **gRPC over TLS 1.3 with mutual certificate auth (tonic + rustls)** — a standard, schema'd (protobuf), streaming-capable transport; protobuf contracts are versioned in-repo and breaking-change-linted in CI. (Codex's own app-server uses the same JSON-RPC-over-stdio pattern — the style is proven in this exact ecosystem.)
+- Each instance generates an Ed25519 identity at first run; its self-signed certificate identifies the node.
+- **Pairing:** the console displays a 6-digit code / QR; completing the exchange on the new node pins both identities. Unpaired connections are dropped — there is no anonymous mode.
+- Commands from a console are authenticated to the node; per-machine permissions (e.g. "view-only") are set at pairing or later.
+- **Link discipline:** the fleet link carries telemetry and control commands only — never model traffic, never vendor credentials, never raw transcripts except an explicit on-demand fetch for a user-executed cross-machine handover.
+
+### 11.3 What syncs
+
+- **Continuous (streamed):** heartbeats, machine resource stats, session-board deltas (status, tokens, quota impact), alerts.
+- **On demand:** usage rollups, footprint stats, handover packs (fetched only when a cross-machine handover is executed).
+- **Never leaves the machine:** vendor credentials (invariant), keychain contents; full transcripts stay local outside explicit handovers.
+
+### 11.4 Fleet UX
+
+- "Add a machine" wizard: enable Link on the node → code/QR → paired; machines appear as filters/columns across the board, dashboard, and usage views.
+- **Cross-machine handover:** same wizard as local; the fidelity tier is computed across machines — T2 requires the same harness binary version and the repo checked out at the same path (sessions store absolute paths — surfaced honestly in the wizard); T3 always available.
+- Fleet alerts route to every console ("mac-mini-2: memory pressure").
+
+### 11.5 Protocol versioning
+
+- Protobuf contracts are versioned; mixed-version fleets supported within a minor window — nodes reject unknown command versions gracefully, and a console degrades to core telemetry when talking to an older node.
+
+## 12. Storage layout
 
 ```
 ~/Library/Application Support/AI Juggler/        (macOS; XDG on Linux, %APPDATA% on Win)
 ├── juggler.sqlite          # accounts, profiles, sessions index, usage events, lineage, footprint stats (WAL)
 ├── accounts/<harness>/<account-id>/   # managed harness state dirs (the isolation roots)
 ├── packs/                  # context packs + lineage metadata
+├── fleet/                  # node identity keypair + paired-peer registry
 ├── logs/                   # rotated app logs (redaction-aware)
 └── cache/                  # parser fixtures cache, rollups
 ```
 
 Nothing is ever written inside `~/.claude`, `~/.codex`, or `~/.zcode` (the user's pre-existing single-account installs remain untouched; an "adopt existing install" flow *reads* them and offers to fork a managed copy).
 
-## 12. Testing strategy
+## 13. Testing strategy
 
 - **Unit:** usage math (esp. ZCode credit formula vs. published examples), window reconstruction, pack rendering.
 - **Fixture corpus:** committed, anonymized transcript samples per harness × version; parsers tested against them; CI job re-verifies against live format dumps monthly (canary).
 - **Fake harness adapter:** a script-driven CLI implementing the adapter contract for e2e supervisor/stuck/handover tests — CI runs the full lifecycle headlessly on all three OSes.
 - **Resource heuristics:** fixture process trees (fake harness spawning memory/CPU-hog children) drive overload alerts, admission-projection accuracy, and OOM-crash classification tests.
+- **Fleet:** loopback multi-instance tests — two live instances in CI pairing over ephemeral ports, telemetry sync, permission enforcement, and a mixed-version downgrade matrix.
 - **Guardrail tests:** static + runtime assertions that no code path writes outside managed dirs, performs network calls outside allowlist, exposes account-switching of live sessions, or executes any account switch / handover / project sync without a user-initiated command.
 - **UI:** Playwright on the webview for board/wizard flows.
 
-## 13. Milestones
+## 14. Milestones
 
 | M | Scope | Acceptance |
 |---|---|---|
@@ -358,13 +399,26 @@ Nothing is ever written inside `~/.claude`, `~/.codex`, or `~/.zcode` (the user'
 | **M2** | Codex + ZCode adapters; adopt-existing flow; stuck detection v1; resource manager v1 (monitoring, overload alerts, admission advisor, crash recovery) | Three harnesses, one board; stuck + overload heuristics pass fixture corpus; crashed session → one-click native resume |
 | **M3** | Usage engine + dashboards + alerts (Claude Measured, ZCode Computed, Codex Estimated); tray | Quota rings within ±5% of vendor-reported for Claude/ZCode |
 | **M4** | Handover: packs, takeover/return wizard, rules-file sync, export/import; lineage | Round-trip A→B→A preserves continuity (dogfood criterion) |
-| **M5** | Hardening, signed self-update + harness update tracking, onboarding polish → **v0.1 public** | Fresh-machine install → 2 parallel accounts < 5 min |
+| **M5** | Hardening, signed + notarized self-update, harness update tracking, onboarding polish; fleet transport spike (tonic/rustls prototype) → **v0.1 public beta** | Fresh-machine install → 2 parallel accounts < 5 min; updater works end-to-end on a signed build |
+| **M6** | Fleet link: pairing wizard, mDNS discovery, telemetry sync, remote board (read-only) → **v0.2** | Second machine joins in < 60 s with a code; one board across two machines |
+| **M7** | Fleet control: launch/stop/handover from a console, aggregated usage, fleet alerts; Windows/Linux bring-up begins → **v0.3** | Full manage workflow across 3 machines; cross-machine handover demo |
+| **1.0** | Stabilization from beta feedback (protocol, adapters, UX) | Stable update channel opens |
 
-## 14. Open decisions (blocking review)
+## 15. Decisions
 
-1. **UI framework:** React 18 + TypeScript + Tailwind + shadcn/ui *(recommended — ecosystem, prior art in cc-switch/opcode)* vs Svelte 5 *(leaner)*.
-2. **Embedded terminal in M1** (recommended yes — it is the daily surface) vs defer to M2.
-3. **License:** MIT *(chosen)* vs Apache-2.0.
-4. **Naming:** binary `ai-juggler`, crates `juggler-*` *(proposed)*.
-5. **MVP order:** Claude Code first in M1 *(recommended — matches founding pain point)*.
-6. **Codex control plane phase:** PTY-first *(recommended for M2)* vs app-server-first.
+**Resolved (review rounds 1–3):**
+
+1. **UI framework: React 18 + TypeScript + Tailwind + shadcn/ui.** ✅
+2. **Embedded terminal ships in M1.** ✅
+3. **License: MIT.** ✅
+4. **Naming: binary `ai-juggler`, crates `juggler-*`.** ✅
+5. **MVP order: Claude Code first (M1); Codex + ZCode in M2.** ✅
+6. **Codex control plane: PTY-first (M2); app-server explored at M4.** ✅
+7. **Platform: macOS-first (Universal, v0.x); Windows/Linux post-1.0; cross-platform core from day one.** ✅
+8. **Fleet: gRPC over mTLS + mDNS pairing; one binary, console/node roles; LAN/user-VPN only — no cloud relay.** ✅ (M5 transport spike de-risks tonic/rustls before M6.)
+9. **Release: strict semver; `0.x.0-beta.N` on the beta channel for feedback; stable channel opens at 1.0; macOS signing/notarization via Vuxtra's Apple Developer account.** ✅
+
+**Open (non-blocking):**
+
+1. Fleet wire format detail: protobuf-first vs JSON-RPC in the app-server style — decided at the M5 spike.
+2. Whether the stable update channel opens earlier than 1.0 — revisit at v0.3 based on beta feedback.
