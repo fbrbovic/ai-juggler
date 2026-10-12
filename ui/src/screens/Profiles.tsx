@@ -1,22 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button, Card, Chip, type ChipTone } from "../components/primitives";
-import { Field, Input, Modal, Select } from "../components/form";
+import { Field, Input, Modal } from "../components/form";
 import { IconProfiles, IconTerminal } from "../components/icons";
+import { OnboardingWizard } from "./OnboardingWizard";
 import {
   accountLoginCommand,
   accountLoginState,
   accountsList,
-  createAccount,
   createProfile,
   deleteProfile,
   hasLiveBackend,
-  harnessesList,
   launchSession,
   loginOpenWeb,
   terminalSpawnLogin,
   profilesList,
   type AccountInfo,
-  type HarnessInfo,
   type ProfileInfo,
 } from "../lib/bridge";
 
@@ -34,7 +32,6 @@ export function ProfilesScreen({
 }) {
   const [accounts, setAccounts] = useState<AccountInfo[] | null>(null);
   const [profiles, setProfiles] = useState<ProfileInfo[] | null>(null);
-  const [harnesses, setHarnesses] = useState<HarnessInfo[]>([]);
   const [addAccount, setAddAccount] = useState(false);
   const [newProfileFor, setNewProfileFor] = useState<AccountInfo | null>(null);
   const [loginFor, setLoginFor] = useState<AccountInfo | null>(null);
@@ -42,14 +39,12 @@ export function ProfilesScreen({
 
   const refresh = useCallback(async () => {
     try {
-      const [accountRows, profileRows, harnessRows] = await Promise.all([
+      const [accountRows, profileRows] = await Promise.all([
         accountsList(),
         profilesList(),
-        harnessesList(),
       ]);
       setAccounts(accountRows);
       setProfiles(profileRows);
-      setHarnesses(harnessRows);
     } catch (cause) {
       setError(String(cause));
     }
@@ -126,13 +121,10 @@ export function ProfilesScreen({
       )}
 
       {addAccount && (
-        <AddAccountModal
-          harnesses={harnesses}
+        <OnboardingWizard
           onClose={() => setAddAccount(false)}
-          onCreated={async (created) => {
-            await refresh();
-            setLoginFor(created);
-          }}
+          onAccountCreated={() => void refresh()}
+          openLoginTerminal={openTerminal}
         />
       )}
 
@@ -280,79 +272,6 @@ function HarnessGlyph({ harness }: { harness: string }) {
         <path d="M12 2.6c.5 3.9 2.4 6.6 6.9 8-4.5 1.4-6.4 4.1-6.9 8-.5-3.9-2.4-6.6-6.9-8 4.5-1.4 6.4-4.1 6.9-8Z" />
       </svg>
     </span>
-  );
-}
-
-function AddAccountModal({
-  harnesses,
-  onClose,
-  onCreated,
-}: {
-  harnesses: HarnessInfo[];
-  onClose: () => void;
-  onCreated: (account: AccountInfo) => Promise<void>;
-}) {
-  const [harness, setHarness] = useState(harnesses[0]?.id ?? "claude-code");
-  const [label, setLabel] = useState("");
-  const [plan, setPlan] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const submit = async () => {
-    if (!label.trim()) {
-      setError("Give the account a name, e.g. “Work Max”.");
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      const created = await createAccount(harness, label.trim(), plan.trim() || null);
-      onClose();
-      await onCreated(created);
-    } catch (cause) {
-      setError(String(cause));
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Modal
-      title="Add account"
-      subtitle="AI Juggler prepares a private, isolated state directory for this login."
-      onClose={onClose}
-    >
-      <div className="flex flex-col gap-4">
-        <Field label="Harness">
-          <Select value={harness} onChange={(event) => setHarness(event.target.value)}>
-            {harnesses.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.name}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Account name">
-          <Input
-            autoFocus
-            value={label}
-            placeholder="Work Max"
-            onChange={(event) => setLabel(event.target.value)}
-          />
-        </Field>
-        <Field label="Plan (optional)" hint="Shown on quota widgets, e.g. max-20x">
-          <Input value={plan} placeholder="max-20x" onChange={(event) => setPlan(event.target.value)} />
-        </Field>
-        {error && <p className="text-xs text-danger">{error}</p>}
-        <div className="ml-auto flex gap-2">
-          <Button variant="ghost" size="sm" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button variant="primary" size="sm" disabled={busy} onClick={() => void submit()}>
-            {busy ? "Preparing…" : "Create account"}
-          </Button>
-        </div>
-      </div>
-    </Modal>
   );
 }
 

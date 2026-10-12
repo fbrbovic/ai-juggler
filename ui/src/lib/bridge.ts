@@ -155,6 +155,15 @@ export async function createAccount(
   label: string,
   plan: string | null,
 ): Promise<AccountInfo> {
+  if (!hasBackend) {
+    return {
+      id: `claude-${label.toLowerCase().replace(/\s+/g, "-")}`,
+      harness,
+      label,
+      plan,
+      login_state: "logged_out",
+    };
+  }
   return invoke<AccountInfo>("account_create", { harness, label, plan });
 }
 
@@ -203,6 +212,23 @@ export async function accountImport(
   label: string,
   plan: string | null,
 ): Promise<ImportResult> {
+  if (!hasBackend) {
+    return {
+      account: {
+        id: `claude-${label.toLowerCase().replace(/\s+/g, "-")}`,
+        harness,
+        label,
+        plan,
+        login_state: "logged_out",
+      },
+      files_copied: 128,
+      bytes_copied: 46_000_000,
+      skipped: ["shell-snapshots/ (rebuildable cache)", "statsig/ (rebuildable cache)"],
+      login: "logged_out",
+      login_note:
+        "Your Claude login lives in the macOS Keychain, locked to the original folder — it can't (and shouldn't) be moved. Sign in once inside the imported account; it takes a few seconds.",
+    };
+  }
   return invoke<ImportResult>("account_import", { harness, sourcePath, label, plan });
 }
 
