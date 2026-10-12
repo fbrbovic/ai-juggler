@@ -130,3 +130,27 @@ body {
   );
   pointer-events: none;
 }
+
+/* Thin, overlay-style scrollbars (Linear/Arc-grade rail + lists) */
+.rail-scroll::-webkit-scrollbar,
+main ::-webkit-scrollbar,
+main::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.rail-scroll::-webkit-scrollbar-thumb,
+main ::-webkit-scrollbar-thumb,
+main::-webkit-scrollbar-thumb {
+  background: color-mix(in oklab, var(--color-muted) 25%, transparent);
+  border-radius: 999px;
+}
+.rail-scroll::-webkit-scrollbar-thumb:hover,
+main ::-webkit-scrollbar-thumb:hover,
+main::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--color-muted) 45%, transparent);
+}
+.rail-scroll::-webkit-scrollbar-track,
+main ::-webkit-scrollbar-track,
+main::-webkit-scrollbar-track {
+  background: transparent;
+}
