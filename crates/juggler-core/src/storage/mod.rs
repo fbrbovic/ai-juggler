@@ -1,0 +1,150 @@
+//! SQLite persistence: open/migrate plus typed repositories.
+//!
+//! Policy (`docs/plan/QUALITY.md` §1, §7):
+//! - WAL journal, `NORMAL` sync, foreign keys on.
+//! - Forward-only migrations: each entry is one schema version; databases
+//!   written by *newer* builds are rejected with
+//!   [`CoreError::SchemaTooNew`] instead of being risked.
+//! - Corrupt or foreign files degrade to [`CoreError::NotADatabase`].
+
+mod accounts;
+mod profiles;
+mod sessions;
+
+use std::path::Path;
+
+use rusqlite::Connection;
+
+pub use accounts::AccountsRepo;
+pub use profiles::ProfilesRepo;
+pub use sessions::SessionsRepo;
+
+use crate::error::CoreError;
+
+/// Schema version 1: accounts, profiles, sessions.
+const V1: &str = "
+CREATE TABLE accounts (
+    id         TEXT PRIMARY KEY,
+    harness    TEXT NOT NULL,
+    label      TEXT NOT NULL,
+    plan       TEXT,
+    state_dir  TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE profiles (
+    id            TEXT PRIMARY KEY,
+    account_id    TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    settings_json TEXT NOT NULL,
+    default_cwd   TEXT,
+    created_at    INTEGER NOT NULL
+);
+
+CREATE TABLE sessions (
+    id                  TEXT PRIMARY KEY,
+    native_id           TEXT,
+    profile_id          TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    machine             TEXT NOT NULL,
+    cwd                 TEXT NOT NULL,
+    status              TEXT NOT NULL,
+    started_at          INTEGER NOT NULL,
+    last_activity       INTEGER,
+    usage_json          TEXT NOT NULL,
+    transcript_ref_json TEXT
+);
+";
+
+/// Ordered, forward-only migrations; index + 1 is the schema version.
+const MIGRATIONS: &[&str] = &[V1];
+
+/// An opened AI Juggler database with typed repositories.
+#[derive(Debug)]
+pub struct Storage {
+    conn: Connection,
+}
+
+impl Storage {
+    /// Opens (creating if needed) and migrates the database at `path`.
+    ///
+    /// # Errors
+    ///
+    /// - [`CoreError::NotADatabase`] if the file exists but is not a valid
+    ///   database.
+    /// - [`CoreError::SchemaTooNew`] if the database needs a newer build.
+    /// - [`CoreError::Storage`] for other SQLite failures.
+    pub fn open(path: &Path) -> Result<Self, CoreError> {
+        let conn = Connection::open(path).map_err(|e| CoreError::NotADatabase {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+        Self::initialize(conn, Some(path.to_path_buf()))
+    }
+
+    /// Opens an in-memory database (tests and ephemeral indexes).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::Storage`] on SQLite failures.
+    pub fn open_in_memory() -> Result<Self, CoreError> {
+        let conn = Connection::open_in_memory()?;
+        Self::initialize(conn, None)
+    }
+
+    /// Applies connection pragmas and runs migrations.
+    fn initialize(conn: Connection, path: Option<std::path::PathBuf>) -> Result<Self, CoreError> {
+        // Everything in this phase touches the file for the first time, so
+        // any failure here means "not a database" for on-disk paths.
+        let current: i64 = conn
+            .pragma_update(None, "journal_mode", "WAL")
+            .and_then(|()| conn.pragma_update(None, "synchronous", "NORMAL"))
+            .and_then(|()| conn.pragma_update(None, "foreign_keys", "ON"))
+            .and_then(|()| conn.query_row("PRAGMA user_version", [], |row| row.get(0)))
+            .map_err(|e| match path {
+                Some(p) => CoreError::NotADatabase { path: p, source: e },
+                None => CoreError::Storage(e),
+            })?;
+        let storage = Self { conn };
+        storage.migrate(current)?;
+        Ok(storage)
+    }
+
+    /// Runs pending forward migrations from the current schema version.
+    fn migrate(&self, current: i64) -> Result<(), CoreError> {
+        let supported = i64::try_from(MIGRATIONS.len()).unwrap_or(i64::MAX);
+        if current > supported {
+            return Err(CoreError::SchemaTooNew {
+                found: current,
+                supported,
+            });
+        }
+        // A negative user_version means a tampered database; treating it as 0
+        // re-runs migrations and fails cleanly on the existing tables.
+        let applied = usize::try_from(current).unwrap_or(0);
+        for (idx, sql) in MIGRATIONS.iter().enumerate().skip(applied) {
+            let version = i64::try_from(idx).unwrap_or(0) + 1;
+            let tx = self.conn.unchecked_transaction()?;
+            tx.execute_batch(sql)?;
+            tx.pragma_update(None, "user_version", version)?;
+            tx.commit()?;
+        }
+        Ok(())
+    }
+
+    /// Repository for [`crate::model::Account`] rows.
+    #[must_use]
+    pub fn accounts(&self) -> AccountsRepo<'_> {
+        AccountsRepo::new(&self.conn)
+    }
+
+    /// Repository for [`crate::model::Profile`] rows.
+    #[must_use]
+    pub fn profiles(&self) -> ProfilesRepo<'_> {
+        ProfilesRepo::new(&self.conn)
+    }
+
+    /// Repository for [`crate::model::SessionRecord`] rows.
+    #[must_use]
+    pub fn sessions(&self) -> SessionsRepo<'_> {
+        SessionsRepo::new(&self.conn)
+    }
+}
