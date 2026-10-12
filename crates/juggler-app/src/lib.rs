@@ -14,6 +14,7 @@
 pub mod commands;
 pub mod error;
 pub mod state;
+pub mod terminal;
 
 use std::sync::Arc;
 
@@ -80,6 +81,12 @@ pub fn run() {
             commands::sessions_list,
             commands::stop_session,
             commands::dashboard_stats,
+            commands::terminal_spawn_login,
+            commands::terminal_attach,
+            commands::terminal_write,
+            commands::terminal_resize,
+            commands::terminal_kill,
+            commands::terminal_snapshot,
         ])
         .setup(|app| {
             let _ = app.emit(EVENT_APP_READY, commands::AppInfo::current());

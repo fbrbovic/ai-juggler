@@ -2114,6 +2114,7 @@ dependencies = [
 name = "juggler-app"
 version = "0.0.1"
 dependencies = [
+ "base64 0.22.1",
  "dirs",
  "juggler-adapter",
  "juggler-adapters",

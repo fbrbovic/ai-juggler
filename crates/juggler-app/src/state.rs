@@ -19,6 +19,9 @@ pub struct AppState {
     pub registry: AdapterRegistry,
     /// Process supervisor owning launched sessions.
     pub supervisor: Supervisor,
+    /// Terminal ids with a live output forwarder (dedup: one forwarder per
+    /// terminal no matter how often the UI re-attaches).
+    pub terminal_taps: Mutex<std::collections::HashSet<String>>,
 }
 
 impl AppState {
@@ -50,6 +53,7 @@ impl AppState {
             supervisor: Supervisor::with_journal(&data_dir.join("supervision"))?,
             registry,
             storage: Mutex::new(storage),
+            terminal_taps: Mutex::new(std::collections::HashSet::new()),
             data_dir,
         })
     }

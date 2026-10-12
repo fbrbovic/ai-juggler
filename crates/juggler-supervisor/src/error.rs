@@ -19,6 +19,12 @@ pub enum SupervisorError {
     /// The session id is not currently supervised.
     #[error("session {0} is not supervised")]
     UnknownSession(SessionId),
+    /// The operation needs a PTY session but this one runs piped.
+    #[error("session {session} has no pty (piped/headless session)")]
+    NotATty {
+        /// The session without a terminal.
+        session: SessionId,
+    },
     /// The supervision journal could not be read or written.
     #[error("journal error at {path}: {message}")]
     Journal {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Button,
   Card,
@@ -7,6 +7,7 @@ import {
   StatCard,
 } from "./components/primitives";
 import { Rail } from "./components/rail";
+import { TerminalDock, type TerminalTab } from "./components/TerminalDock";
 import {
   IconDashboard,
   IconFleet,
@@ -20,6 +21,7 @@ import { ProfilesScreen } from "./screens/Profiles";
 import {
   dashboardStats,
   fetchAppInfo,
+  hasLiveBackend,
   onAppReady,
   type AppInfo,
   type StatsInfo,
@@ -44,10 +46,36 @@ type NavId = (typeof NAV)[number]["id"];
 export default function App() {
   const [nav, setNav] = useState<NavId>("dashboard");
   const [info, setInfo] = useState<AppInfo | null>(null);
+  const [tabs, setTabs] = useState<TerminalTab[]>([]);
+  const [activeTab, setActiveTab] = useState<string | null>(null);
 
   useEffect(() => {
     void fetchAppInfo().then(setInfo);
     return onAppReady(setInfo);
+  }, []);
+
+  const openTerminal = useCallback((id: string, title: string) => {
+    setTabs((current) => {
+      if (current.some((tab) => tab.id === id)) return current;
+      return [...current, { id, title }];
+    });
+    setActiveTab(id);
+  }, []);
+
+  const closeTerminal = useCallback((id: string) => {
+    setTabs((current) => {
+      const next = current.filter((tab) => tab.id !== id);
+      setActiveTab((active) =>
+        active === id ? (next.at(-1)?.id ?? null) : active,
+      );
+      return next;
+    });
+  }, []);
+
+  const markExited = useCallback((id: string) => {
+    setTabs((current) =>
+      current.map((tab) => (tab.id === id ? { ...tab, ended: true } : tab)),
+    );
   }, []);
 
   return (
@@ -105,7 +133,17 @@ export default function App() {
           <Chip tone="accent">Claude Code · Codex · ZCode</Chip>
           <div className="ml-auto flex items-center gap-2">
             <Chip tone="neutral">machine: this-mac</Chip>
-            <Button size="sm" variant="primary">
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => {
+                if (hasLiveBackend()) {
+                  setNav("profiles");
+                } else {
+                  openTerminal("preview-terminal", "Sign in · Work Max");
+                }
+              }}
+            >
               <IconTerminal width={14} height={14} />
               New session
             </Button>
@@ -114,8 +152,22 @@ export default function App() {
 
         {/* Content */}
         <main className="min-h-0 flex-1 overflow-y-auto p-6">
-          {nav === "dashboard" ? <Dashboard /> : nav === "profiles" ? <ProfilesScreen /> : <ComingSoon screen={nav} />}
+          {nav === "dashboard" ? (
+            <Dashboard />
+          ) : nav === "profiles" ? (
+            <ProfilesScreen openTerminal={openTerminal} />
+          ) : (
+            <ComingSoon screen={nav} />
+          )}
         </main>
+
+        <TerminalDock
+          tabs={tabs}
+          activeId={activeTab}
+          onSelect={setActiveTab}
+          onClose={closeTerminal}
+          onExit={markExited}
+        />
       </div>
     </div>
   );

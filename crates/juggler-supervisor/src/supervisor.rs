@@ -33,6 +33,15 @@ struct ChildHandle {
     ring: Arc<Mutex<OutputRing>>,
     finished: Arc<AtomicBool>,
     force_kill: Arc<dyn Fn() + Send + Sync>,
+    /// Live PTY master for interactive sessions: keyboard input and
+    /// resize. `None` for piped (headless) sessions.
+    pty: Option<Arc<Mutex<PtyHandle>>>,
+}
+
+/// The write/resize side of a supervised PTY.
+struct PtyHandle {
+    writer: Box<dyn std::io::Write + Send>,
+    master: Box<dyn portable_pty::MasterPty + Send>,
 }
 
 /// Owns supervised sessions for one AI Juggler process.
@@ -156,7 +165,7 @@ impl Supervisor {
             }
         });
 
-        self.register(session.clone(), pid, ring, finished, force_kill);
+        self.register(session.clone(), pid, ring, finished, force_kill, None);
         Ok(SpawnedProcess {
             session: session.clone(),
             pid,
@@ -209,6 +218,12 @@ impl Supervisor {
             spawn_reader(Some(reader), Arc::clone(&ring));
         }
         drop(pair.slave);
+        let master = pair.master;
+        let writer = master.take_writer().map_err(|e| SupervisorError::Spawn {
+            program: spec.program.clone(),
+            message: format!("cannot take pty writer: {e}"),
+        })?;
+        let pty = Some(Arc::new(Mutex::new(PtyHandle { writer, master })));
 
         let finished = Arc::new(AtomicBool::new(false));
         let force_kill: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
@@ -238,7 +253,7 @@ impl Supervisor {
             }
         });
 
-        self.register(session.clone(), pid, ring, finished, force_kill);
+        self.register(session.clone(), pid, ring, finished, force_kill, pty);
         Ok(SpawnedProcess {
             session: session.clone(),
             pid,
@@ -253,12 +268,14 @@ impl Supervisor {
         ring: Arc<Mutex<OutputRing>>,
         finished: Arc<AtomicBool>,
         force_kill: Arc<dyn Fn() + Send + Sync>,
+        pty: Option<Arc<Mutex<PtyHandle>>>,
     ) {
         let handle = Arc::new(ChildHandle {
             pid,
             ring,
             finished,
             force_kill,
+            pty,
         });
         if let Ok(mut children) = self.children.lock() {
             children.insert(session, handle);
@@ -327,6 +344,101 @@ impl Supervisor {
             .cloned()
             .ok_or_else(|| SupervisorError::UnknownSession(session.clone()))?;
         Ok(descendants_of(handle.pid))
+    }
+
+    /// Feeds keyboard input to a PTY session's process.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SupervisorError::UnknownSession`] when the id is not
+    /// supervised, [`SupervisorError::NotATty`] for piped sessions.
+    pub fn write_input(&self, session: &SessionId, bytes: &[u8]) -> Result<(), SupervisorError> {
+        let handle = self.child(session)?;
+        let pty = handle.pty.as_ref().ok_or(SupervisorError::NotATty {
+            session: session.clone(),
+        })?;
+        let mut pty = pty
+            .lock()
+            .map_err(|_| SupervisorError::UnknownSession(session.clone()))?;
+        pty.writer
+            .write_all(bytes)
+            .and_then(|()| pty.writer.flush())
+            .map_err(SupervisorError::Io)
+    }
+
+    /// Resizes a PTY session (cols/rows in character cells).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SupervisorError::UnknownSession`] when the id is not
+    /// supervised, [`SupervisorError::NotATty`] for piped sessions.
+    pub fn resize_pty(
+        &self,
+        session: &SessionId,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), SupervisorError> {
+        let handle = self.child(session)?;
+        let pty = handle.pty.as_ref().ok_or(SupervisorError::NotATty {
+            session: session.clone(),
+        })?;
+        let pty = pty
+            .lock()
+            .map_err(|_| SupervisorError::UnknownSession(session.clone()))?;
+        pty.master
+            .resize(portable_pty::PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| SupervisorError::Io(std::io::Error::other(e.to_string())))
+    }
+
+    /// Subscribes to this session's live output stream (each chunk as
+    /// written). Snapshot-then-tap is race-free: the ring forwards every
+    /// byte to listeners, so a snapshot followed by a tap yields the
+    /// stream exactly once from the snapshot point onward.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SupervisorError::UnknownSession`] when the id is not
+    /// supervised.
+    pub fn tap(
+        &self,
+        session: &SessionId,
+    ) -> Result<std::sync::mpsc::Receiver<Vec<u8>>, SupervisorError> {
+        let handle = self.child(session)?;
+        let mut ring = handle
+            .ring
+            .lock()
+            .map_err(|_| SupervisorError::UnknownSession(session.clone()))?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        ring.add_listener(tx);
+        Ok(rx)
+    }
+
+    /// True when the session's process has exited.
+    #[must_use]
+    pub fn is_finished(&self, session: &SessionId) -> bool {
+        self.children
+            .lock()
+            .ok()
+            .and_then(|children| {
+                children
+                    .get(session)
+                    .map(|h| h.finished.load(Ordering::Acquire))
+            })
+            .unwrap_or(true)
+    }
+
+    fn child(&self, session: &SessionId) -> Result<Arc<ChildHandle>, SupervisorError> {
+        self.children
+            .lock()
+            .map_err(|_| SupervisorError::UnknownSession(session.clone()))?
+            .get(session)
+            .cloned()
+            .ok_or_else(|| SupervisorError::UnknownSession(session.clone()))
     }
 
     /// Non-blocking event read.

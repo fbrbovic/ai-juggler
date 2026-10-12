@@ -227,6 +227,10 @@ impl HarnessAdapter for ClaudeCodeAdapter {
         Some("https://claude.ai/login")
     }
 
+    fn login_spec(&self, state_dir: &Path) -> Result<LaunchSpec, AdapterError> {
+        ClaudeCodeAdapter::login_spec_inherent(self, state_dir)
+    }
+
     fn launch_spec(
         &self,
         account: &Account,
@@ -317,7 +321,7 @@ impl ClaudeCodeAdapter {
     ///
     /// Returns [`AdapterError::InvalidLaunch`] when no claude binary is
     /// resolvable.
-    pub fn login_spec(&self, state_dir: &Path) -> Result<LaunchSpec, AdapterError> {
+    pub fn login_spec_inherent(&self, state_dir: &Path) -> Result<LaunchSpec, AdapterError> {
         let Some(bin) = self.resolve_bin() else {
             return Err(AdapterError::InvalidLaunch(
                 "claude binary not found; run discovery for details".into(),
