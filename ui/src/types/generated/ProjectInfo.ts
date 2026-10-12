@@ -26,10 +26,15 @@ last_activity_ms: number,
  */
 active_instance: SessionInfo | null, 
 /**
- * Account labels that have ever run in this project.
+ * Account labels that have ever run in this project (AI Juggler runs
+ * plus imported pre-existing history).
  */
 accounts_used: Array<string>, 
 /**
- * Total instances ever run in this project.
+ * Total instances run through AI Juggler in this project.
  */
-instance_count: number, };
+instance_count: number, 
+/**
+ * Sessions discovered in imported transcripts (pre-AI-Juggler work).
+ */
+history_sessions: number, };

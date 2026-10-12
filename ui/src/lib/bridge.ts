@@ -6,6 +6,7 @@
  * design-preview mock data so screens can be reviewed without a backend.
  */
 import { invoke } from "@tauri-apps/api/core";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import type { AppInfo } from "../types/generated/AppInfo";
 import type { AccountInfo } from "../types/generated/AccountInfo";
@@ -103,6 +104,7 @@ const MOCK_PROJECTS: ProjectInfo[] = [
     active_instance: MOCK_SESSIONS[0],
     accounts_used: ["Work Max"],
     instance_count: 1,
+    history_sessions: 0,
   },
   {
     id: "proj-payments",
@@ -112,6 +114,7 @@ const MOCK_PROJECTS: ProjectInfo[] = [
     active_instance: null,
     accounts_used: ["Personal", "Work Max"],
     instance_count: 2,
+    history_sessions: 14,
   },
 ];
 
@@ -438,6 +441,53 @@ function listenScoped<T>(
       unlisten = stop;
     }
   });
+  return () => {
+    disposed = true;
+    unlisten?.();
+  };
+}
+
+
+// ---- golden path: backfill, handover, directory picking -------------------
+
+/** Backfills the projects rail from imported transcript history (idempotent). */
+export async function projectsBackfill(): Promise<number> {
+  if (!hasBackend) return 0;
+  return invoke<number>("projects_backfill");
+}
+
+/** The juggle: move a session's context to another account and resume it. */
+export async function sessionHandover(
+  sessionId: string,
+  targetProfileId: string,
+): Promise<LaunchResult> {
+  return invoke<LaunchResult>("session_handover", { sessionId, targetProfileId });
+}
+
+/** Native macOS folder picker; null when cancelled. */
+export async function pickDirectory(): Promise<string | null> {
+  if (!hasBackend) return null;
+  const selection = await openDialog({ directory: true, multiple: false });
+  return typeof selection === "string" ? selection : null;
+}
+
+/** Folders dragged onto the window (Tauri drag-drop events). */
+export function onFolderDropped(handler: (path: string) => void): () => void {
+  if (!hasBackend) return () => {};
+  let disposed = false;
+  let unlisten: (() => void) | null = null;
+  import("@tauri-apps/api/webview")
+    .then(({ getCurrentWebview }) =>
+      getCurrentWebview().onDragDropEvent((event) => {
+        if (event.payload.type === "drop") {
+          for (const path of event.payload.paths) handler(path);
+        }
+      }),
+    )
+    .then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    });
   return () => {
     disposed = true;
     unlisten?.();

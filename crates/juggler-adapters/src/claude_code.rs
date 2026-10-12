@@ -291,6 +291,9 @@ impl HarnessAdapter for ClaudeCodeAdapter {
                 ],
                 false,
             ),
+            LaunchMode::Resume { session_id } => {
+                (vec!["--resume".into(), session_id.clone()], true)
+            }
         };
         Ok(LaunchSpec {
             program: bin,

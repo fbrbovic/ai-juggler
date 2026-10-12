@@ -10,7 +10,7 @@ use std::path::Path;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::error::CoreError;
-use crate::model::{ProjectId, ProjectRecord, Timestamp};
+use crate::model::{ProjectHistory, ProjectId, ProjectRecord, Timestamp};
 
 /// Typed read/write access to the `projects` table.
 #[derive(Debug)]
@@ -56,6 +56,7 @@ impl ProjectsRepo<'_> {
                 name,
                 created_at: now,
                 last_activity: Some(now),
+                history: ProjectHistory::default(),
             };
             self.conn.execute(
                 "INSERT INTO projects (id, root, name, created_at, last_activity)
@@ -107,6 +108,24 @@ impl ProjectsRepo<'_> {
             .ok_or_else(|| super::accounts::not_found("project", id.as_str()))
     }
 
+    /// Merges imported-history enrichment into the project row
+    /// (backfill writes it once; AI-Juggler runs never touch it).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::Storage`] on SQLite failures or
+    /// [`CoreError::Serialization`] for corrupt history JSON.
+    pub fn merge_history(&self, id: &ProjectId, history: &ProjectHistory) -> Result<(), CoreError> {
+        let changed = self.conn.execute(
+            "UPDATE projects SET history_json = ?2 WHERE id = ?1",
+            params![id.as_str(), serde_json::to_string(history)?],
+        )?;
+        if changed == 0 {
+            return Err(super::accounts::not_found("project", id.as_str()));
+        }
+        Ok(())
+    }
+
     /// Lists projects, most recently active first.
     ///
     /// # Errors
@@ -139,10 +158,16 @@ fn map_project(row: &Row<'_>) -> rusqlite::Result<ProjectRecord> {
         last_activity: row
             .get::<_, Option<i64>>("last_activity")?
             .map(Timestamp::from_millis),
+        history: serde_json::from_str(&row.get::<_, String>("history_json")?).unwrap_or_default(),
     })
 }
 
-/// Time-based id suffix (launch-session style, unique enough per machine).
+/// Time-based id suffix with a same-millisecond disambiguator (backfill
+/// can create many projects in one millisecond).
 fn suffix(now: Timestamp) -> u128 {
-    u128::from(now.millis().max(0).cast_unsigned()) % 1_000_000_000_000
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let seq = u128::from(COUNTER.fetch_add(1, Ordering::Relaxed));
+    let millis = u128::from(now.millis().max(0).cast_unsigned()) % 1_000_000_000_000;
+    millis * 1_000 + (seq % 1_000)
 }

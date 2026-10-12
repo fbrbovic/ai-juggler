@@ -67,7 +67,18 @@ pub fn run() {
     }
 
     tauri::Builder::default()
+        // Registered first: a second launch defers to the running app
+        // (focus its window) instead of stacking ghost instances.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            use tauri::Manager;
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
@@ -85,6 +96,8 @@ pub fn run() {
             commands::launch_session,
             commands::sessions_list,
             commands::projects_list,
+            commands::projects_backfill,
+            commands::session_handover,
             commands::stop_session,
             commands::dashboard_stats,
             commands::terminal_spawn_login,

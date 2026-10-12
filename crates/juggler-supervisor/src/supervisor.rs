@@ -427,6 +427,16 @@ impl Supervisor {
         Ok(rx)
     }
 
+    /// Sessions from previous app runs whose processes are still alive
+    /// (journal adoption; spec §5.3 crash re-adoption).
+    pub fn alive_adopted_sessions(&self) -> Vec<SessionId> {
+        self.journal
+            .as_ref()
+            .and_then(|journal| journal.adopt_orphans().ok())
+            .map(|adopted| adopted.into_iter().map(|process| process.session).collect())
+            .unwrap_or_default()
+    }
+
     /// True when the session was stopped through [`Supervisor::stop`]
     /// (user intent — not a crash), regardless of how the exit surfaces.
     #[must_use]

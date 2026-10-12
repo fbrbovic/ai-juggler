@@ -354,6 +354,16 @@ impl InstanceKind {
     }
 }
 
+/// Imported history enrichment for a project (parsed from transcripts that
+/// predate AI Juggler — e.g. t3.codes profiles).
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct ProjectHistory {
+    /// Account labels seen working in this project before AI Juggler.
+    pub accounts: Vec<String>,
+    /// Native sessions discovered in imported transcripts.
+    pub native_sessions: u64,
+}
+
 /// A tracked local project — the juggling anchor (ADR-0007): the
 /// directory instances work in, keyed by canonical root so account
 /// switches and handovers have a stable pivot.
@@ -369,6 +379,8 @@ pub struct ProjectRecord {
     pub created_at: Timestamp,
     /// Last time an instance ran in this project.
     pub last_activity: Option<Timestamp>,
+    /// Pre-AI-Juggler history parsed from imported transcripts (v4).
+    pub history: ProjectHistory,
 }
 
 /// A supervised session (instance record) as tracked by AI Juggler

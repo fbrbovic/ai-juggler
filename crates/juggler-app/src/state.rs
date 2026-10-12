@@ -49,8 +49,29 @@ impl AppState {
         std::fs::create_dir_all(&data_dir)
             .map_err(|error| crate::error::AppError::io("create app data dir", &error))?;
         let storage = Storage::open(&data_dir.join("juggler.sqlite"))?;
+        let supervisor = Supervisor::with_journal(&data_dir.join("supervision"))?;
+        // Crash/restart reconciliation: sessions recorded running whose
+        // processes did not survive the restart are marked stopped —
+        // never a permanently fake "live" dot (survivors stay running).
+        let adopted = supervisor.alive_adopted_sessions();
+        {
+            let records = storage.sessions().list(None).unwrap_or_default();
+            for record in records {
+                if matches!(
+                    record.status,
+                    juggler_core::model::SessionStatus::Starting
+                        | juggler_core::model::SessionStatus::Running
+                ) && !adopted.contains(&record.id)
+                {
+                    let mut reconciled = record;
+                    reconciled.status = juggler_core::model::SessionStatus::Stopped;
+                    reconciled.last_activity = Some(juggler_core::model::Timestamp::now());
+                    let _ = storage.sessions().update(&reconciled);
+                }
+            }
+        }
         Ok(Self {
-            supervisor: Supervisor::with_journal(&data_dir.join("supervision"))?,
+            supervisor,
             registry,
             storage: Mutex::new(storage),
             terminal_taps: Mutex::new(std::collections::HashSet::new()),

@@ -18,6 +18,12 @@ pub enum LaunchMode {
         /// The prompt handed to the harness.
         prompt: String,
     },
+    /// Resume a specific native session by id (the juggling handover's
+    /// target: same cwd, session transplanted from another account).
+    Resume {
+        /// The harness's own session id (transcript file stem).
+        session_id: String,
+    },
 }
 
 /// Everything needed to spawn one harness session. Produced by adapters;
