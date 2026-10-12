@@ -3,6 +3,9 @@ import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from "react";
 /**
  * Base UI primitives, shadcn-style: hand-vendored, token-driven, no
  * runtime dependencies. Screen-level components compose from these.
+ *
+ * Iteration 2: layered depth (sheen edge, card shadow), primary buttons
+ * carry a quiet accent glow, live elements breathe.
  */
 
 type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
@@ -10,11 +13,14 @@ type ButtonSize = "sm" | "md";
 
 const buttonVariants: Record<ButtonVariant, string> = {
   primary:
-    "bg-accent text-white hover:bg-accent-hi active:translate-y-px shadow-[0_1px_0_rgba(255,255,255,0.15)_inset]",
+    "bg-gradient-to-b from-accent-hi to-accent text-white hover:brightness-110 \
+     active:translate-y-px shadow-glow-accent border border-accent-hi/40",
   secondary:
-    "bg-surface-2 text-ink border border-hairline hover:bg-surface-3 active:translate-y-px",
+    "bg-surface-2 text-ink border border-hairline hover:bg-surface-3 \
+     hover:border-muted/30 active:translate-y-px",
   ghost: "text-muted hover:text-ink hover:bg-surface-2",
-  danger: "bg-danger/15 text-danger border border-danger/30 hover:bg-danger/25",
+  danger:
+    "bg-danger/15 text-danger border border-danger/30 hover:bg-danger/25",
 };
 
 const buttonSizes: Record<ButtonSize, string> = {
@@ -33,9 +39,9 @@ export function Button({
 }) {
   return (
     <button
-      className={`inline-flex items-center justify-center font-medium transition-colors
-        disabled:opacity-40 disabled:pointer-events-none cursor-default select-none
-        ${buttonVariants[variant]} ${buttonSizes[size]} ${className}`}
+      className={`inline-flex items-center justify-center font-medium
+        transition-all duration-150 disabled:opacity-40 disabled:pointer-events-none
+        cursor-default select-none ${buttonVariants[variant]} ${buttonSizes[size]} ${className}`}
       {...props}
     />
   );
@@ -48,8 +54,9 @@ export function Card({
 }: HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={`rounded-card border border-hairline bg-surface
-        shadow-[0_1px_2px_rgba(0,0,0,0.35)] ${className}`}
+      className={`sheen rounded-card border border-hairline bg-surface
+        shadow-card transition-all duration-150
+        hover:border-muted/25 ${className}`}
       {...props}
     >
       {children}
@@ -57,7 +64,13 @@ export function Card({
   );
 }
 
-export type ChipTone = "neutral" | "success" | "warning" | "danger" | "live" | "accent";
+export type ChipTone =
+  | "neutral"
+  | "success"
+  | "warning"
+  | "danger"
+  | "live"
+  | "accent";
 
 const chipTones: Record<ChipTone, string> = {
   neutral: "bg-surface-2 text-muted border-hairline",
@@ -71,10 +84,12 @@ const chipTones: Record<ChipTone, string> = {
 export function Chip({
   tone = "neutral",
   dot = false,
+  breathing = false,
   children,
 }: {
   tone?: ChipTone;
   dot?: boolean;
+  breathing?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -82,7 +97,16 @@ export function Chip({
       className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5
         text-[11px] font-medium tracking-wide ${chipTones[tone]}`}
     >
-      {dot && <span className="size-1.5 rounded-full bg-current" />}
+      {dot && (
+        <span
+          className={`size-1.5 rounded-full bg-current ${breathing ? "dot-live" : ""}`}
+          style={
+            breathing
+              ? ({ "--pulse-color": "currentColor" } as React.CSSProperties)
+              : undefined
+          }
+        />
+      )}
       {children}
     </span>
   );
@@ -93,26 +117,43 @@ export function StatCard({
   value,
   hint,
   tone = "neutral",
+  icon,
 }: {
   label: string;
   value: string;
   hint?: string;
   tone?: ChipTone;
+  icon?: ReactNode;
 }) {
-  const valueTone =
+  const valueClass =
     tone === "live"
       ? "text-live"
       : tone === "success"
         ? "text-success"
         : tone === "warning"
           ? "text-warning"
-          : "text-ink";
+          : "numeral";
+  const iconTone =
+    tone === "live"
+      ? "text-live bg-live-soft border-live/20"
+      : tone === "success"
+        ? "text-success bg-success-soft border-success/20"
+        : "text-accent-hi bg-accent-soft border-accent/20";
   return (
-    <Card className="p-4 flex flex-col gap-1">
-      <span className="text-[11px] uppercase tracking-widest text-faint">
-        {label}
-      </span>
-      <span className={`text-2xl font-semibold tabular-nums ${valueTone}`}>
+    <Card className="group p-4 flex flex-col gap-2 hover:-translate-y-0.5">
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] uppercase tracking-[0.14em] text-faint">
+          {label}
+        </span>
+        {icon && (
+          <span
+            className={`flex size-7 items-center justify-center rounded-lg border ${iconTone}`}
+          >
+            {icon}
+          </span>
+        )}
+      </div>
+      <span className={`text-[26px] leading-8 font-semibold tabular-nums ${valueClass}`}>
         {value}
       </span>
       {hint && <span className="text-xs text-muted">{hint}</span>}
@@ -135,31 +176,42 @@ export function QuotaRing({
   const radius = (size - stroke) / 2;
   const circumference = 2 * Math.PI * radius;
   const color =
-    clamped >= 90 ? "var(--color-danger)" : clamped >= 70 ? "var(--color-warning)" : "var(--color-accent)";
+    clamped >= 90
+      ? "var(--color-danger)"
+      : clamped >= 70
+        ? "var(--color-warning)"
+        : "var(--color-accent)";
   return (
-    <div className="flex flex-col items-center gap-1">
-      <svg width={size} height={size} className="-rotate-90">
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          stroke="var(--color-hairline)"
-          strokeWidth={stroke}
-        />
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          stroke={color}
-          strokeWidth={stroke}
-          strokeLinecap="round"
-          strokeDasharray={circumference}
-          strokeDashoffset={circumference * (1 - clamped / 100)}
-          style={{ transition: "stroke-dashoffset 300ms ease" }}
-        />
-      </svg>
+    <div className="flex flex-col items-center gap-1.5">
+      <div
+        className="rounded-full"
+        style={{ boxShadow: `0 0 20px -8px ${clamped > 0 ? color : "transparent"}` }}
+      >
+        <svg width={size} height={size} className="-rotate-90">
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill="none"
+            stroke="var(--color-hairline)"
+            strokeWidth={stroke}
+          />
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill="none"
+            stroke={color}
+            strokeWidth={stroke}
+            strokeLinecap="round"
+            strokeDasharray={circumference}
+            strokeDashoffset={circumference * (1 - clamped / 100)}
+            style={{
+              transition: "stroke-dashoffset 300ms var(--ease-out-soft)",
+            }}
+          />
+        </svg>
+      </div>
       {label && <span className="text-[11px] text-muted">{label}</span>}
     </div>
   );
