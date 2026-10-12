@@ -113,6 +113,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI: `ui` job (typecheck + build) as a required check; Tauri Linux
   system dependencies for cargo jobs.
 
+### Added (M1-2)
+
+- Claude Code adapter: PATH + installer-default + override binary
+  discovery with `--version` verification against pinned releases
+  (drift warns, never fails); isolated `CLAUDE_CONFIG_DIR` account
+  preparation (0700 dirs, 0600 managed-marker, idempotent); metadata-only
+  login detection (credentials-file presence + macOS namespaced keychain
+  probe — never reads token contents); guided vendor-login launch spec;
+  interactive/headless launch specs with settings-overlay env merging.
+
 ### Changed
 
 - Handover model upgraded from summary packs to tiered session sync:

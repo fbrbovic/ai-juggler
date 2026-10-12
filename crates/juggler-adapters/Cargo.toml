@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 juggler-adapter = { version = "0.0.1", path = "../juggler-adapter" }
 juggler-core = { version = "0.0.1", path = "../juggler-core" }
+sha2 = "0.11.0"
 
 [dev-dependencies]
 tempfile = "3.27.0"

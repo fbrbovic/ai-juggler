@@ -12,6 +12,8 @@
     allow(clippy::pedantic, clippy::unwrap_used, clippy::expect_used)
 )]
 
+pub mod claude_code;
 pub mod fake;
 
+pub use claude_code::{CLAUDE_CODE_ID, ClaudeCodeAdapter, LoginState};
 pub use fake::{FAKE_HARNESS_ID, FakeHarnessAdapter};
