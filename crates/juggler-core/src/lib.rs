@@ -11,3 +11,10 @@
     test,
     allow(clippy::pedantic, clippy::unwrap_used, clippy::expect_used)
 )]
+
+/// Temporary CI enforcement probe: intentionally trips `unused_variables` so
+/// the `verify` job must fail. Removed immediately after verification.
+pub fn ci_enforcement_probe() -> u8 {
+    let unused_variable = 1_u8;
+    0
+}
