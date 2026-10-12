@@ -79,6 +79,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - End-to-end adapter test: discover → prepare account → launch spec →
   run → watch (discovered/appended/ended) → resume.
 
+### Added (Gate V0)
+
+- Gate V0 validation report (docs/qa/gate-M0.md): CI matrix, coverage
+  baseline meeting QUALITY.md targets, functional acceptance evidence,
+  quality audit with fixes applied in-PR, and carried-forward items.
+- Coverage-closing tests: repository update/delete paths, launch-spec
+  constructors, registry trait-object usage, adapter degrade paths.
+
 ### Added (M0-5)
 
 - `juggler-supervisor`: PTY (interactive) and piped (headless) spawning

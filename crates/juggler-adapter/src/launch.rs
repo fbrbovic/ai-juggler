@@ -64,3 +64,33 @@ pub fn interactive_spec(
         needs_pty: true,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{EnvMap, headless_spec, interactive_spec};
+    use std::path::PathBuf;
+
+    #[test]
+    fn constructors_set_pty_flag_and_carry_fields() {
+        let env = EnvMap::from([("K".to_string(), "V".to_string())]);
+        let spec = headless_spec(
+            PathBuf::from("/bin/true"),
+            vec!["a".into()],
+            env.clone(),
+            PathBuf::from("/tmp"),
+        );
+        assert!(!spec.needs_pty);
+        assert_eq!(spec.program, PathBuf::from("/bin/true"));
+        assert_eq!(spec.args, vec!["a".to_string()]);
+        assert_eq!(spec.env, env);
+        assert_eq!(spec.cwd, PathBuf::from("/tmp"));
+
+        let spec = interactive_spec(
+            PathBuf::from("/bin/true"),
+            Vec::new(),
+            EnvMap::new(),
+            PathBuf::from("/tmp"),
+        );
+        assert!(spec.needs_pty);
+    }
+}

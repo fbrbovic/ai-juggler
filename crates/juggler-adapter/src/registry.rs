@@ -126,5 +126,38 @@ mod tests {
         registry.register(Arc::new(StubAdapter { id: stub.clone() }));
         assert_eq!(registry.ids().len(), 1);
         assert_eq!(registry.discover_all().len(), 1);
+
+        // Unknown ids resolve to None.
+        let ghost = HarnessId::new("ghost");
+        assert!(registry.get(&ghost).is_none());
+        assert!(!registry.ids().contains(&ghost));
+
+        // The trait object is fully usable through the registry.
+        let adapter = registry.get(&stub).unwrap();
+        let state = std::env::temp_dir().join("juggler-registry-stub");
+        assert!(adapter.prepare_account(&state).is_ok());
+        let account = juggler_core::model::Account {
+            id: juggler_core::model::AccountId::new("a"),
+            harness: stub.clone(),
+            label: "Stub".into(),
+            plan: None,
+            state_dir: state.clone(),
+        };
+        let profile = juggler_core::model::Profile {
+            id: juggler_core::model::ProfileId::new("p"),
+            account: account.id.clone(),
+            settings_overlay: juggler_core::model::SettingsOverlay::default(),
+            default_cwd: None,
+        };
+        let spec = adapter.launch_spec(
+            &account,
+            &profile,
+            Path::new("/tmp"),
+            &LaunchMode::Headless {
+                prompt: "hi".into(),
+            },
+        );
+        assert!(spec.is_ok());
+        assert!(adapter.watcher(&state).is_err()); // stub has none, by design
     }
 }
