@@ -31,11 +31,12 @@ impl ProfilesRepo<'_> {
     /// (unknown account, duplicate id).
     pub fn insert(&self, profile: &Profile) -> Result<(), CoreError> {
         self.conn.execute(
-            "INSERT INTO profiles (id, account_id, settings_json, default_cwd, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO profiles (id, account_id, name, settings_json, default_cwd, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 profile.id.as_str(),
                 profile.account.as_str(),
+                profile.name,
                 serde_json::to_string(&profile.settings_overlay)?,
                 cwd_column(profile.default_cwd.as_deref()),
                 crate::model::Timestamp::now().millis(),
@@ -52,11 +53,12 @@ impl ProfilesRepo<'_> {
     /// [`CoreError::Storage`] on SQLite failures.
     pub fn update(&self, profile: &Profile) -> Result<(), CoreError> {
         let changed = self.conn.execute(
-            "UPDATE profiles SET account_id = ?2, settings_json = ?3, default_cwd = ?4
+            "UPDATE profiles SET account_id = ?2, name = ?3, settings_json = ?4, default_cwd = ?5
              WHERE id = ?1",
             params![
                 profile.id.as_str(),
                 profile.account.as_str(),
+                profile.name,
                 serde_json::to_string(&profile.settings_overlay)?,
                 cwd_column(profile.default_cwd.as_deref()),
             ],
@@ -119,6 +121,7 @@ fn map_profile(row: &Row<'_>) -> rusqlite::Result<Profile> {
     let settings_json: String = row.get("settings_json")?;
     Ok(Profile {
         id: ProfileId::new(row.get::<_, String>("id")?),
+        name: row.get("name")?,
         account: AccountId::new(row.get::<_, String>("account_id")?),
         settings_overlay: serde_json::from_str(&settings_json).map_err(json_err)?,
         default_cwd: row

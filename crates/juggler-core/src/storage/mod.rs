@@ -54,8 +54,11 @@ CREATE TABLE sessions (
 );
 ";
 
+/// Schema version 2: profile names.
+const V2: &str = "ALTER TABLE profiles ADD COLUMN name TEXT NOT NULL DEFAULT '';";
+
 /// Ordered, forward-only migrations; index + 1 is the schema version.
-const MIGRATIONS: &[&str] = &[V1];
+const MIGRATIONS: &[&str] = &[V1, V2];
 
 /// An opened AI Juggler database with typed repositories.
 #[derive(Debug)]

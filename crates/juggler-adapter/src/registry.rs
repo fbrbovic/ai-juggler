@@ -145,6 +145,7 @@ mod tests {
         };
         let profile = juggler_core::model::Profile {
             id: juggler_core::model::ProfileId::new("p"),
+            name: "stub profile".into(),
             account: account.id.clone(),
             settings_overlay: juggler_core::model::SettingsOverlay::default(),
             default_cwd: None,

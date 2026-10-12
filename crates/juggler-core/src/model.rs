@@ -168,6 +168,8 @@ pub struct SettingsOverlay {
 pub struct Profile {
     /// Stable identifier.
     pub id: ProfileId,
+    /// Human name for the profile (e.g. `Opus pairing`).
+    pub name: String,
     /// The account this profile launches under.
     pub account: AccountId,
     /// Settings layered over the account defaults.
