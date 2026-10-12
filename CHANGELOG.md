@@ -291,3 +291,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   app's data dir; used to import the user's five t3.codes profiles
   read-only (originals manifest-verified untouched; live session
   transcripts kept growing in the source, proving t3 undisturbed).
+
+### Added (Gate V1 prep)
+
+- `docs/qa/gate-M1.md`: dogfood environment prepared with the five
+  imported t3.codes accounts, per-account re-login expectations (shared
+  legacy keychain), acceptance checklist, and manifest re-verification
+  step.
+- UI honesty pass: the header chip names only Claude Code (Codex/ZCode
+  ship with their adapters); quota rings say usage tracking lands in M2.

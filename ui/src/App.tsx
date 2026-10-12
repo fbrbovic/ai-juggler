@@ -263,7 +263,7 @@ export default function App() {
           className="flex h-14 shrink-0 items-center gap-3 border-b border-hairline bg-surface/50 px-5 backdrop-blur-xl"
         >
           <h1 className="text-sm font-semibold capitalize tracking-wide">{contextTitle}</h1>
-          <Chip tone="accent">Claude Code · Codex · ZCode</Chip>
+          <Chip tone="accent">Claude Code</Chip>
 
           <div className="ml-auto flex items-center gap-1.5" data-tauri-drag-region={false}>
             {GLOBAL_NAV.map((item) => (
@@ -441,7 +441,7 @@ function Overview({
             <QuotaRing percent={0} label="week" />
           </div>
           <p className="text-center text-[11px] text-faint">
-            Rings fill per account once profiles exist
+            Per-account usage tracking lands in M2 — rings stay honest until then
           </p>
         </Card>
       </div>
