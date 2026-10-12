@@ -67,6 +67,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Property-based round-trip tests (proptest) for every entity plus
   migration, corruption, cascade, and atomic-write edge cases.
 
+### Added (M0-4)
+
+- `juggler-adapter`: the `HarnessAdapter` contract — capability flags,
+  discovery reports with `verified_against` version pinning, launch
+  specs (interactive/headless, account-aware), the read-only
+  `SessionWatcher` event interface, and an id-keyed adapter registry.
+- `juggler-adapters`: the scriptable `fake-harness` binary (JSONL
+  transcripts, turns/stall/burn/exit fixtures, resume) and the
+  `FakeHarnessAdapter` reference implementation with a polling watcher.
+- End-to-end adapter test: discover → prepare account → launch spec →
+  run → watch (discovered/appended/ended) → resume.
+
 ### Changed
 
 - Handover model upgraded from summary packs to tiered session sync:

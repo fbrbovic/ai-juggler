@@ -237,10 +237,20 @@ dependencies = [
 [[package]]
 name = "juggler-adapter"
 version = "0.0.1"
+dependencies = [
+ "bitflags",
+ "juggler-core",
+ "thiserror",
+]
 
 [[package]]
 name = "juggler-adapters"
 version = "0.0.1"
+dependencies = [
+ "juggler-adapter",
+ "juggler-core",
+ "tempfile",
+]
 
 [[package]]
 name = "juggler-app"

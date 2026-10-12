@@ -11,3 +11,7 @@
     test,
     allow(clippy::pedantic, clippy::unwrap_used, clippy::expect_used)
 )]
+
+pub mod fake;
+
+pub use fake::{FAKE_HARNESS_ID, FakeHarnessAdapter};
