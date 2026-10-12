@@ -20,6 +20,8 @@ function statusTone(status: string): { tone: ChipTone; label: string } {
       return { tone: "accent", label: "starting" };
     case "finished":
       return { tone: "success", label: "finished" };
+    case "stopped":
+      return { tone: "neutral", label: "stopped" };
     case "failed":
       return { tone: "danger", label: "failed" };
     default:

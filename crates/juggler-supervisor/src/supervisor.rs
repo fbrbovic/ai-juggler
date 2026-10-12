@@ -52,6 +52,10 @@ struct PtyHandle {
 pub struct Supervisor {
     journal: Option<Journal>,
     children: Mutex<HashMap<SessionId, Arc<ChildHandle>>>,
+    /// Sessions stopped via [`Supervisor::stop`] — PTY children surface
+    /// user kills as plain non-zero exit codes, so the stop intent is the
+    /// only reliable "not a failure" signal.
+    user_stopped: Mutex<Vec<SessionId>>,
     events_tx: std::sync::mpsc::Sender<LifecycleEvent>,
     events_rx: Mutex<std::sync::mpsc::Receiver<LifecycleEvent>>,
 }
@@ -62,6 +66,7 @@ impl Default for Supervisor {
         Self {
             journal: None,
             children: Mutex::new(HashMap::new()),
+            user_stopped: Mutex::new(Vec::new()),
             events_tx,
             events_rx: Mutex::new(events_rx),
         }
@@ -297,6 +302,10 @@ impl Supervisor {
             .cloned()
             .ok_or_else(|| SupervisorError::UnknownSession(session.clone()))?;
 
+        if let Ok(mut stopped) = self.user_stopped.lock() {
+            stopped.retain(|id| id != session);
+            stopped.push(session.clone());
+        }
         send_terminate(handle.pid);
         let deadline = Instant::now() + grace;
         while Instant::now() < deadline && !handle.finished.load(Ordering::Acquire) {
@@ -416,6 +425,15 @@ impl Supervisor {
         let (tx, rx) = std::sync::mpsc::channel();
         ring.add_listener(tx);
         Ok(rx)
+    }
+
+    /// True when the session was stopped through [`Supervisor::stop`]
+    /// (user intent — not a crash), regardless of how the exit surfaces.
+    #[must_use]
+    pub fn was_stopped(&self, session: &SessionId) -> bool {
+        self.user_stopped
+            .lock()
+            .is_ok_and(|stopped| stopped.iter().any(|id| id == session))
     }
 
     /// True when the session's process has exited.

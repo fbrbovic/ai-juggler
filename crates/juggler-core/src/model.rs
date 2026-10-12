@@ -198,6 +198,8 @@ pub enum SessionStatus {
     QuotaBlocked,
     /// Completed normally.
     Finished,
+    /// Stopped by the user (our stop ladder) — not a failure.
+    Stopped,
     /// Exited abnormally.
     Failed,
     /// Work continued elsewhere via handover; resumable.
@@ -207,7 +209,7 @@ pub enum SessionStatus {
 impl SessionStatus {
     /// All variants in canonical order.
     #[must_use]
-    pub const fn all() -> [SessionStatus; 8] {
+    pub const fn all() -> [SessionStatus; 9] {
         [
             SessionStatus::Starting,
             SessionStatus::Running,
@@ -215,6 +217,7 @@ impl SessionStatus {
             SessionStatus::Stuck,
             SessionStatus::QuotaBlocked,
             SessionStatus::Finished,
+            SessionStatus::Stopped,
             SessionStatus::Failed,
             SessionStatus::HandedOver,
         ]
@@ -230,6 +233,7 @@ impl SessionStatus {
             SessionStatus::Stuck => "stuck",
             SessionStatus::QuotaBlocked => "quota_blocked",
             SessionStatus::Finished => "finished",
+            SessionStatus::Stopped => "stopped",
             SessionStatus::Failed => "failed",
             SessionStatus::HandedOver => "handed_over",
         }
@@ -246,6 +250,7 @@ impl SessionStatus {
             "stuck" => Some(SessionStatus::Stuck),
             "quota_blocked" => Some(SessionStatus::QuotaBlocked),
             "finished" => Some(SessionStatus::Finished),
+            "stopped" => Some(SessionStatus::Stopped),
             "failed" => Some(SessionStatus::Failed),
             "handed_over" => Some(SessionStatus::HandedOver),
             _ => None,

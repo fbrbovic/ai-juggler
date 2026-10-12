@@ -300,3 +300,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   step.
 - UI honesty pass: the header chip names only Claude Code (Codex/ZCode
   ship with their adapters); quota rings say usage tracking lands in M2.
+
+### Fixed (Gate V1 dogfood findings)
+
+- User-stopped sessions now record `stopped`, not `failed`: portable-pty
+  surfaces our stop-ladder kills as plain non-zero exit codes, so the
+  supervisor tracks stop intent (`was_stopped`) and the lifecycle
+  forwarder maps it to the new `SessionStatus::Stopped` (schema-neutral
+  wire value `stopped`; UI chip included).
+- `dogfood_v1` operational runner: the agent-run mechanics dogfood
+  (two imported t3 accounts in parallel on one project, real claude
+  under PTY, streaming + stop + project lineage verified; evidence in
+  docs/qa/gate-M1.md).
