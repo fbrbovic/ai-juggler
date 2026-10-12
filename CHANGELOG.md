@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`docs/SPEC.md`) — published for review.
 - CONTRIBUTING guidance: only final artifacts belong in the repo (no
   conversation logs or exploration transcripts).
+- Machine health subsystem (spec §5): system + per-session resource
+  monitoring, overload alerts, launch admission advisor, crash recovery,
+  and optimization recommendations.
 
 ### Changed
 

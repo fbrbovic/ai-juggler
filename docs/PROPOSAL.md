@@ -34,6 +34,7 @@ Modern AI-assisted development means several subscriptions across several tools.
 - **G4 — See everything:** a live session board — what's running, what's idle, what's stuck, what died.
 - **G5 — Extensible:** adding a new harness is an adapter, not a rewrite. Claude Code, Codex, ZCode first; the adapter API is public.
 - **G6 — Trustworthy:** local-first, credentials never handled or stored by the app, signed self-updates, resilient by construction.
+- **G7 — Machine-aware parallelism:** monitor system and per-session resources, warn *before* overload, recover from crashes, and recommend configurations that actually fit the machine.
 
 ### Non-goals (v1)
 
@@ -42,6 +43,7 @@ Modern AI-assisted development means several subscriptions across several tools.
 - ❌ Autonomous agent orchestration (no auto-choosing which account "deserves" a task, no background account rotation).
 - ❌ Team/organization features (sharing profiles or pools between people is out of scope by design).
 - ❌ A new chat UI for any harness — the harnesses own their UX; AI Juggler supervises.
+- ❌ Touching anything the app doesn't supervise: no killing other applications, no OS/system tuning — alerts, advice, and one-click actions on its own sessions only.
 
 ## 4. Who it's for
 
@@ -91,6 +93,15 @@ The goal is **actual session continuity — sessions and chats moved with their 
 - **Packs** remain as the export format and as the editable preview of exactly what any handover will carry over.
 
 Every handover is prepared and staged automatically but executed only on a user click; the only autonomous behaviors in the entire app are passive ones — notifications, alerts, and suggestions.
+
+### 6.5 Machine health & crash recovery
+
+Parallel harnesses are heavy, and AI Juggler is the one component that can see them all — plus the machine underneath:
+
+- **Monitor:** system RAM/swap/CPU/disk/battery plus every supervised process tree (each CLI *and* all its children), with per-profile historical footprints learned over time.
+- **Warn before it hurts:** a launch advisor answers "can this machine take another session?" *before* you start it — OK / Tight / No, with reasons and what would make it safe. Runtime alerts cover memory pressure, swap thrashing, sustained CPU/thermal load, runaway processes, and filling disks.
+- **Recover:** harness crashes are detected and classified (OOM vs quota vs plain crash), with one-click recovery — native resume keeps the conversation (transcripts persist), or relaunch/hand-over. An opt-in per-profile auto-restart (off by default) relaunches into the same profile. If AI Juggler itself crashes, supervised sessions survive and are re-adopted on relaunch.
+- **Advise:** recommendations from real data — how many parallel sessions this machine really supports per harness, which profiles are heaviest, which knobs (e.g. concurrency limits) shave peak load.
 
 ## 7. Competitive landscape & differentiation
 

@@ -21,8 +21,9 @@ AI Juggler is a native desktop application that **supervises** AI coding harness
 | Reliability | App crash never kills supervised sessions (children survive; state journaled); recovery on relaunch |
 | Resilience | All writes atomic (temp+rename); SQLite in WAL mode; harness-format parse failures degrade, never crash |
 | Privacy | No network calls except: update feed check, and user-initiated actions in managed harnesses. Telemetry opt-in only |
+| Resource monitoring | < 1% CPU overhead; launch-advisor projections within ±20% of observed session peaks after calibration |
 
-**Automation policy (product invariant).** The app *prepares*; the user *executes*. Automated behavior is strictly passive — monitoring, indexing, usage accounting, notifications, alerts, suggestions, and staging of actions. Every state-changing action (switching an account for new work, transplanting a session, priming a target, syncing project context) is bound to an explicit user click; there is no code path that performs one without it (asserted in `tests/guardrails.rs`).
+**Automation policy (product invariant).** The app *prepares*; the user *executes*. Automated behavior is strictly passive — monitoring, indexing, usage accounting, notifications, alerts, suggestions, and staging of actions. Every state-changing action (switching an account for new work, transplanting a session, priming a target, syncing project context) is bound to an explicit user click; there is no code path that performs one without it (asserted in `tests/guardrails.rs`). One deliberate, narrowly-scoped exception: an opt-in, per-profile *auto-restart on crash* (off by default) that relaunches a crashed process into the **same** profile — it never changes accounts, conversation content, or anything else user-authored.
 
 ## 2. System architecture
 
@@ -36,6 +37,7 @@ flowchart LR
         API[command/event API]
         REG[Adapter registry]
         SUP[Process supervisor<br/>portable-pty]
+        RM[Resource manager<br/>sysinfo · footprints]
         IDX[(Session indexer<br/>notify + parsers)]
         USE[Usage engine]
         HO[Handover engine]
@@ -50,6 +52,7 @@ flowchart LR
     FE <--> API
     TERM <--> SUP
     API --> REG --> SUP
+    SUP <--> RM
     SUP -->|spawn| CC & CX & ZC
     IDX -->|watch & parse| CC & CX & ZC
     USE --> IDX
@@ -71,7 +74,7 @@ ai-juggler/
 │   ├── juggler-core/        # domain types, events, storage (SQLite), usage math
 │   ├── juggler-adapter/     # HarnessAdapter trait, capabilities, IR schemas
 │   ├── juggler-adapters/    # claude-code, codex, zcode implementations
-│   ├── juggler-supervisor/  # PTY/process lifecycle, health, stuck detection
+│   ├── juggler-supervisor/  # PTY/process lifecycle, health, stuck detection, resources
 │   ├── juggler-handover/    # context packs, rules-file sync, takeover flows
 │   └── juggler-app/         # Tauri shell, commands/events, updater wiring
 ├── ui/                      # frontend (React + TypeScript)
@@ -205,7 +208,9 @@ pub trait HarnessAdapter: Send + Sync {
 - **Resume:** `--resume <sess_id>` / `-c`.
 - **Constraints honored:** no reverse-engineered endpoints, no patched binaries — documented/observable surfaces only (research A3/B7).
 
-## 5. Process supervisor
+## 5. Process supervisor & resource manager
+
+### 5.1 Supervision
 
 - One tokio task per session. Spawn via `portable-pty` (real TTY) with per-profile env; optional direct child (no PTY) for headless runs.
 - Output fan-out: (1) UI terminal buffer (xterm.js via Tauri events, back-pressured ring buffer), (2) heuristic engine, (3) adapter stream parser (stream-json / exec --json) for structured events.
@@ -215,6 +220,33 @@ pub trait HarnessAdapter: Send + Sync {
   - exited non-zero with rate-limit signature → *QuotaBlocked* (distinct status; triggers the handover *suggestion*, never an action),
   - zombie/orphan detection on app restart (children survive app death by design; supervisor re-adopts by PID + log correlation).
 - Lifecycle: start, stop (SIGTERM→SIGKILL ladder), attach/detach, and *pause* only where the harness supports it (none do today — pause is emulated at the task level via handover, never by SIGSTOP, which could corrupt in-flight writes).
+
+### 5.2 Resource manager
+
+Parallel harnesses are heavy (an Electron-based ZCode plus a Node CLI plus VS Code add up fast), and AI Juggler is the one component that can see them all — and the machine underneath.
+
+**Monitored signals** (sysinfo, staggered refresh: ~2 s for supervised process trees, ~15 s for system aggregates, respecting `refresh_specifics` / `MINIMUM_CPU_UPDATE_INTERVAL`):
+
+- **System:** available RAM, swap usage *and* swap-in/out rate (thrash detection), CPU load and per-core saturation, free disk on the volumes holding session data (ZCode logs measured ~4 MB/day in research), battery state (optional), thermal pressure (macOS `pmset -g therm`; informational).
+- **Per session:** the full process tree (CLI + children: subagents, node/electron helpers, git/ripgrep spawned by harnesses) — RSS, CPU%, cumulative CPU time — attributed to the session even as children come and go (ppid-map tracking).
+- **Historical footprints:** peak RSS/CPU percentiles per (harness, model, repo size bucket) learned from past runs and stored in SQLite (`footprint_stats`) — this is what makes the advisor below smarter over time instead of guessing.
+
+**Admission advisor (pre-launch) — "can this machine take another session?":** projected headroom = available RAM − safety margin − Σ historical peak footprints of running sessions − the candidate's own footprint percentile. Verdicts: **OK** / **Tight** (warn, and show what would make it safe — e.g. "stopping session X (2.9 GB peak) makes this comfortable") / **No** (explain, suggest alternatives: fewer sessions, a lighter profile, or handover instead of a new session). Launching anyway is always allowed — the advisor informs, it never blocks.
+
+**Overload alerts** (passive, per the automation policy; each carries one-click suggestions that execute only on click):
+
+- available RAM below threshold, or sustained swap thrashing → "memory pressure — sessions may stall or be killed by the OS"
+- CPU sustained ≥ N% for M minutes, or thermal pressure (macOS) → performance-degradation warning
+- session process-tree RSS anomaly (sudden ≥ 3× growth — runaway context/tool loop)
+- disk below threshold on a transcript/session volume
+
+**Recommendation engine** (dashboard "Machine advisor" panel, derived from footprints + alert history): e.g. "your Claude sessions peak at 3.1 GB each — 3 in parallel plus Docker Desktop exceeds 16 GB; 2 + handover fits", "limiting Codex `max_concurrent_threads_per_session` in profile X to 2 cut its peak CPU by 40% last week", "ZCode's desktop app holds ~1.2 GB idle; CLI-only profiles halve background weight" (knobs are surfaced per profile, never enforced).
+
+### 5.3 Crash recovery
+
+- **Harness process crashes:** the supervisor records exit status/signal and classifies the cause where possible — OOM/system-kill heuristics (SIGKILL + measured memory pressure at exit time; Linux OOM-killer is the common case), quota-exit signatures (adapter), or plain crash. Recovery is offered on click: **native resume** (transcripts persist, so the common case loses nothing), relaunch with the same profile+cwd, or hand over. The opt-in per-profile *auto-restart on crash* (§1 automation policy) relaunches into the same profile with native resume.
+- **AI Juggler crash:** supervised children survive by design; on relaunch the supervisor re-adopts process trees (PID + log correlation), rebuilds the board from the session index, and reports what happened while it was down.
+- **System sleep/reboot:** sessions that died while the machine was down are surfaced on wake/boot with the same recovery options; on battery below a user threshold, the app suggests (never executes) pausing its own sessions.
 
 ## 6. Usage engine
 
@@ -280,11 +312,12 @@ Generation is template-driven from the Transcript IR (deterministic; an optional
 
 ## 9. App & UX (v0.1 scope)
 
-- **Dashboard:** health strip (accounts × quota rings with reset countdowns), active sessions count, alerts.
+- **Dashboard:** health strip (accounts × quota rings with reset countdowns, plus machine gauges: CPU / RAM / swap / disk), active sessions count, alerts.
 - **Profiles:** cards per account (harness icon, plan tier, quota ring, last used); "New profile" wizard (detect harness → name account → open vendor login in guided terminal → verify → done).
-- **Session board:** table/grid of live sessions (status chip, harness, profile, cwd, age, tokens, quota impact); row actions: Attach, Open in terminal, Stop, **Hand over…** (wizard).
+- **Session board:** table/grid of live sessions (status chip, harness, profile, cwd, age, tokens, quota impact, RAM/CPU); row actions: Attach, Open in terminal, Stop, **Hand over…** (wizard).
 - **Usage:** per-account timelines (uPlot), windows (5h/weekly/credits), per-session breakdowns, export CSV.
 - **Handover:** staged on the session board — "Hand over…" lists target profiles with the fidelity tier each supports and current quota headroom; one click executes (a preview/edit of exactly what will be carried over is always available first).
+- **Machine advisor:** overload banners and notifications, per-session resource breakdown, launch-headroom verdicts (OK / Tight / No + why), optimization recommendations, and crash-recovery cards (resume / relaunch / hand over) after incidents.
 - **Terminals:** embedded xterm.js tabs (one per session) — *open decision #2: v1 or v2.*
 - **Tray:** aggregate quota state, alerts, quick-launch menu. Global hotkey for the board.
 - **Settings:** thresholds (stuck heuristics, alert levels), terminal prefs, update channel (stable/beta), telemetry (off).
@@ -298,7 +331,7 @@ Generation is template-driven from the Transcript IR (deterministic; an optional
 
 ```
 ~/Library/Application Support/AI Juggler/        (macOS; XDG on Linux, %APPDATA% on Win)
-├── juggler.sqlite          # accounts, profiles, sessions index, usage events, lineage (WAL)
+├── juggler.sqlite          # accounts, profiles, sessions index, usage events, lineage, footprint stats (WAL)
 ├── accounts/<harness>/<account-id>/   # managed harness state dirs (the isolation roots)
 ├── packs/                  # context packs + lineage metadata
 ├── logs/                   # rotated app logs (redaction-aware)
@@ -312,6 +345,7 @@ Nothing is ever written inside `~/.claude`, `~/.codex`, or `~/.zcode` (the user'
 - **Unit:** usage math (esp. ZCode credit formula vs. published examples), window reconstruction, pack rendering.
 - **Fixture corpus:** committed, anonymized transcript samples per harness × version; parsers tested against them; CI job re-verifies against live format dumps monthly (canary).
 - **Fake harness adapter:** a script-driven CLI implementing the adapter contract for e2e supervisor/stuck/handover tests — CI runs the full lifecycle headlessly on all three OSes.
+- **Resource heuristics:** fixture process trees (fake harness spawning memory/CPU-hog children) drive overload alerts, admission-projection accuracy, and OOM-crash classification tests.
 - **Guardrail tests:** static + runtime assertions that no code path writes outside managed dirs, performs network calls outside allowlist, exposes account-switching of live sessions, or executes any account switch / handover / project sync without a user-initiated command.
 - **UI:** Playwright on the webview for board/wizard flows.
 
@@ -321,7 +355,7 @@ Nothing is ever written inside `~/.claude`, `~/.codex`, or `~/.zcode` (the user'
 |---|---|---|
 | **M0** | Workspace scaffold, CI (fmt/clippy/test, 3-OS build), adapter trait + fake harness, domain model + SQLite | Fake session launches, is watched, and shows on a debug board |
 | **M1** | Claude Code adapter: account wizard (login hand-off), isolated profiles, parallel launch, session board, embedded terminal *(pending decision #2)* | Two Claude accounts in parallel; zero writes to `~/.claude` |
-| **M2** | Codex + ZCode adapters; adopt-existing flow; stuck detection v1 | Three harnesses, one board; stuck heuristics pass fixture corpus |
+| **M2** | Codex + ZCode adapters; adopt-existing flow; stuck detection v1; resource manager v1 (monitoring, overload alerts, admission advisor, crash recovery) | Three harnesses, one board; stuck + overload heuristics pass fixture corpus; crashed session → one-click native resume |
 | **M3** | Usage engine + dashboards + alerts (Claude Measured, ZCode Computed, Codex Estimated); tray | Quota rings within ±5% of vendor-reported for Claude/ZCode |
 | **M4** | Handover: packs, takeover/return wizard, rules-file sync, export/import; lineage | Round-trip A→B→A preserves continuity (dogfood criterion) |
 | **M5** | Hardening, signed self-update + harness update tracking, onboarding polish → **v0.1 public** | Fresh-machine install → 2 parallel accounts < 5 min |

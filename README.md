@@ -27,6 +27,7 @@ Every developer solves this with a pile of shell scripts, terminal tabs, config-
 | 🔀 **Handover & portability** | Import, sync, and export projects and chat sessions between tools; let a fresh account or different harness take over mid-task, and hand control back when a quota window resets |
 | 📊 **Usage dashboards** | Visual, per-account and per-plan usage and quota tracking, so you always know what you have left before you start a task |
 | 🩺 **Session health** | Live status of every running session, with stuck-session detection and safe lifecycle controls |
+| 🖥️ **Machine health** | RAM/CPU/swap/disk monitoring, overload warnings, launch headroom advice ("can this machine take another session?"), and crash recovery |
 | 🧩 **Extensible by design** | A clean adapter architecture — Claude Code, Codex, and ZCode first, new harnesses without changing the core |
 
 ## Guiding principles
@@ -57,7 +58,7 @@ Every developer solves this with a pile of shell scripts, terminal tabs, config-
 | --- | --- | --- |
 | M0 | Repo bootstrap, spec review | 🔄 In progress |
 | M1 | Profile manager + parallel launcher (single tool) | ⏳ |
-| M2 | Multi-harness + session tracking | ⏳ |
+| M2 | Multi-harness + session & resource tracking | ⏳ |
 | M3 | Usage dashboards + quota alerts | ⏳ |
 | M4 | Cross-tool session & project handover | ⏳ |
 | M5 | Hardening, self-update, public v0.1 | ⏳ |
