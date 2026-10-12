@@ -13,7 +13,11 @@
 )]
 
 pub mod claude_code;
+pub mod claude_transcript;
 pub mod fake;
 
 pub use claude_code::{CLAUDE_CODE_ID, ClaudeCodeAdapter, LoginState};
+pub use claude_transcript::{
+    MessageRole, ParsedMessage, ParsedTranscript, dedupe_messages, parse_transcript,
+};
 pub use fake::{FAKE_HARNESS_ID, FakeHarnessAdapter};

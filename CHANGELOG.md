@@ -131,3 +131,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Explicit automation policy in spec and proposal: monitoring, alerts,
   suggestions, and staging are automated; every state-changing action is
   executed by an explicit user click.
+
+### Added (M1-5)
+
+- Claude Code transcript parser: version-tolerant JSONL extraction
+  (uuid/parentUuid/sessionId, roles, text content, token usage) with
+  per-kind counters, malformed-line skip-and-count (never panics), and
+  resume dedupe by message uuid (first occurrence wins).
+- Committed anonymized fixture corpus: basic conversation with
+  tool_use/tool_result, subagent sidechains, resumed-session duplicates,
+  and malformed damage cases.
+- notify-based transcript watcher: fs events wake the watcher; a bounded
+  recursive walk is the self-healing diff source (lost/coalesced fs
+  events recover on the next poll); emits Discovered/MessageAppended.
+- Fuzz scaffold (`fuzz/`): `transcript_parse` target exercising parser +
+  dedupe on arbitrary bytes (cargo-fuzz, nightly; outside the workspace).

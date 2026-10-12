@@ -255,10 +255,8 @@ impl HarnessAdapter for ClaudeCodeAdapter {
     }
 
     fn watcher(&self, transcript_root: &Path) -> Result<Box<dyn SessionWatcher>, AdapterError> {
-        Ok(Box::new(ClaudeTranscriptWatcher {
-            root: transcript_root.to_path_buf(),
-            seen: BTreeMap::new(),
-        }))
+        ClaudeTranscriptWatcher::new(transcript_root)
+            .map(|watcher| Box::new(watcher) as Box<dyn SessionWatcher>)
     }
 }
 
@@ -330,44 +328,114 @@ pub fn is_managed_dir(state_dir: &Path) -> bool {
     state_dir.join(MANAGED_MARKER).is_file()
 }
 
-/// Minimal polling watcher over `<config>/projects/**/*.jsonl` (the
-/// M1-5 notify-based watcher supersedes it; kept for the contract).
+/// notify-based watcher over the account's transcript tree
+/// (`<config>/projects/…`). Filesystem events trigger a line-count diff per
+/// `.jsonl` file; new files emit [`SessionEvent::Discovered`], growth emits
+/// [`SessionEvent::MessageAppended`]. Content is never parsed here — the
+/// transcript parser runs downstream on demand (spec §4.1).
 struct ClaudeTranscriptWatcher {
     root: PathBuf,
+    _watcher: notify::RecommendedWatcher,
+    events: std::sync::mpsc::Receiver<notify::Result<notify::Event>>,
     seen: BTreeMap<PathBuf, usize>,
+    pending: std::collections::VecDeque<SessionEvent>,
+}
+
+impl ClaudeTranscriptWatcher {
+    fn new(root: &Path) -> Result<Self, AdapterError> {
+        use notify::Watcher;
+        let (tx, events) = std::sync::mpsc::channel();
+        let mut watcher = notify::recommended_watcher(tx)
+            .map_err(|error| AdapterError::Watch(format!("cannot create fs watcher: {error}")))?;
+        watcher
+            .watch(root, notify::RecursiveMode::Recursive)
+            .map_err(|error| {
+                AdapterError::Watch(format!("cannot watch {}: {error}", root.display()))
+            })?;
+        Ok(Self {
+            root: root.to_path_buf(),
+            _watcher: watcher,
+            events,
+            seen: BTreeMap::new(),
+            pending: std::collections::VecDeque::new(),
+        })
+    }
+
+    /// Waits up to `timeout` for a filesystem event (returning early when
+    /// one arrives), then rescans. The scan is unconditional: fs backends
+    /// can drop or delay events (sleep/wake, coalescing), so the bounded
+    /// walk is the self-healing source of truth and notify is the wake-up
+    /// signal (spec §5: watching degrades gracefully).
+    fn wait_and_rescan(&mut self, timeout: std::time::Duration) {
+        if !timeout.is_zero() {
+            let _ = self.events.recv_timeout(timeout);
+            // Coalesce bursts before scanning once.
+            while self.events.try_recv().is_ok() {}
+        }
+        self.scan();
+    }
+
+    /// Walks the watched tree and queues Discovered/MessageAppended diffs.
+    fn scan(&mut self) {
+        let mut files = Vec::new();
+        collect_jsonl(&self.root, &mut files, 0);
+        files.sort();
+        for path in files {
+            let lines = std::fs::read(&path).map_or(0, |bytes| count_lines(&bytes));
+            let known = self.seen.entry(path.clone()).or_insert(0);
+            if *known == 0 && lines > 0 {
+                self.pending.push_back(SessionEvent::Discovered {
+                    native_id: file_stem(&path),
+                    transcript_path: path.clone(),
+                });
+            } else if lines > *known {
+                self.pending.push_back(SessionEvent::MessageAppended {
+                    native_id: file_stem(&path),
+                    transcript_path: path.clone(),
+                });
+            }
+            *known = lines;
+        }
+    }
 }
 
 impl SessionWatcher for ClaudeTranscriptWatcher {
-    fn poll(
-        &mut self,
-        _timeout: std::time::Duration,
-    ) -> Result<Option<SessionEvent>, AdapterError> {
-        let Ok(entries) = std::fs::read_dir(&self.root) else {
-            return Ok(None);
-        };
-        for entry in entries.filter_map(Result::ok) {
-            let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "jsonl") {
-                let lines = std::fs::read(&path).map_or(0, |bytes| {
-                    bytes.split(|b| *b == b'\n').count().saturating_sub(1)
-                });
-                let known = self.seen.entry(path.clone()).or_insert(0);
-                if *known == 0 && lines > 0 {
-                    let native_id = path
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    *known = lines;
-                    return Ok(Some(SessionEvent::Discovered {
-                        native_id,
-                        transcript_path: path,
-                    }));
-                }
-                *known = lines;
-            }
+    fn poll(&mut self, timeout: std::time::Duration) -> Result<Option<SessionEvent>, AdapterError> {
+        if self.pending.is_empty() {
+            self.wait_and_rescan(timeout);
         }
-        Ok(None)
+        Ok(self.pending.pop_front())
     }
+}
+
+/// Bounded recursive collection of `.jsonl` files (depth cap guards against
+/// pathological symlink loops).
+fn collect_jsonl(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
+    const MAX_DEPTH: usize = 8;
+    if depth > MAX_DEPTH {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_jsonl(&path, out, depth + 1);
+        } else if path.extension().is_some_and(|ext| ext == "jsonl") {
+            out.push(path);
+        }
+    }
+}
+
+fn count_lines(bytes: &[u8]) -> usize {
+    bytes.split(|b| *b == b'\n').count().saturating_sub(1)
+}
+
+fn file_stem(path: &Path) -> String {
+    path.file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 // ---- helpers -------------------------------------------------------------
