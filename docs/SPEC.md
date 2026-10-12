@@ -315,15 +315,41 @@ Generation is template-driven from the Transcript IR (deterministic; an optional
 
 ## 9. App & UX (v0.1 scope)
 
-- **Dashboard:** health strip (accounts × quota rings with reset countdowns, plus machine gauges: CPU / RAM / swap / disk), active sessions count, alerts.
-- **Profiles:** cards per account (harness icon, plan tier, quota ring, last used); "New profile" wizard (detect harness → name account → open vendor login in guided terminal → verify → done).
-- **Session board:** table/grid of live sessions (status chip, harness, profile, cwd, age, tokens, quota impact, RAM/CPU); row actions: Attach, Open in terminal, Stop, **Hand over…** (wizard).
-- **Usage:** per-account timelines (uPlot), windows (5h/weekly/credits), per-session breakdowns, export CSV.
-- **Handover:** staged on the session board — "Hand over…" lists target profiles with the fidelity tier each supports and current quota headroom; one click executes (a preview/edit of exactly what will be carried over is always available first).
-- **Machine advisor:** overload banners and notifications, per-session resource breakdown, launch-headroom verdicts (OK / Tight / No + why), optimization recommendations, and crash-recovery cards (resume / relaunch / hand over) after incidents.
-- **Fleet view:** connected machines (state, resources, permissions) as filters across board/dashboard/usage; "Add a machine" pairing wizard; cross-machine handover in the standard wizard.
-- **Terminals:** embedded xterm.js tabs (one per session) — *open decision #2: v1 or v2.*
-- **Tray:** aggregate quota state, alerts, quick-launch menu. Global hotkey for the board.
+### 9.1 Information architecture — two modes, instance-centric (ADR-0007)
+
+AI Juggler manages **instances** of AI coding tools — a CLI running in an
+isolated terminal *or* a desktop harness window — not just terminal
+sessions. The UI is built around the user's two modes:
+
+- **Work mode (left rail — the daily surface):**
+  - **Projects** — the juggling anchor. Every local directory AI Juggler
+    has run an instance in: which instance is currently managing it
+    (and with which account), account history, session timeline, and the
+    switch actions — **launch-with-profile** (start another account on
+    this project) and, when handover lands, **hand over** (move the live
+    session to another account).
+  - **Instances** — every running/tracked instance across all accounts and
+    harnesses (kind badge: Terminal / Desktop). Clicking one opens its
+    **instance panel**: status hero, account + profile, project, age,
+    resources, transcript/token stats, and actions (open its terminal /
+    focus its window, stop, relaunch; hand-over when it lands).
+  - **Sessions** — the work conversations living inside instances
+    (resumable, handover-able); the continuity view.
+- **Global/setup mode (top-right global menus):** Overview (all-up
+  dashboard), Accounts & Profiles (add/configure — onboarding wizard),
+  Usage, Fleet. These are oversight and configuration, not the daily
+  workflow, so they live in the header, not the rail.
+
+### 9.2 Screens (v0.1)
+
+- **Overview (global):** health strip (accounts × quota rings with reset countdowns, plus machine gauges: CPU / RAM / swap / disk), live instance count, alerts.
+- **Accounts & Profiles (global):** cards per account (harness icon, plan tier, quota ring, last used); add-account wizard (scan environment → import/guided add → name & plan → login → done).
+- **Instance panel (work):** status, harness, account/profile, kind (Terminal/Desktop), age, tokens, RAM/CPU; actions: Attach, Open in terminal / Focus window, Stop, **Hand over…** (wizard, when it lands); crash-recovery cards after incidents.
+- **Sessions (work):** table/grid of sessions (status chip, harness, instance, cwd, age, tokens, quota impact); row actions: open owning instance, resume.
+- **Usage (global):** per-account timelines (uPlot), windows (5h/weekly/credits), per-session breakdowns, export CSV.
+- **Fleet (global):** connected machines (state, resources, permissions) as filters across board/overview/usage; "Add a machine" pairing wizard; cross-machine handover in the standard wizard.
+- **Terminals:** embedded xterm.js dock (one tab per terminal-kind instance; desktop-kind instances have no terminal — their panel is the surface).
+- **Tray:** aggregate quota state, alerts, quick-launch menu. Global hotkey for the instances list.
 - **Settings:** thresholds (stuck heuristics, alert levels), terminal prefs, update channel (stable/beta), telemetry (off).
 
 ## 10. Self-update & harness updates

@@ -65,6 +65,11 @@ id_newtype! {
     /// machine uses a stable default id.
     MachineId
 }
+id_newtype! {
+    /// Identifies a tracked local project (directory) — the juggling
+    /// anchor (ADR-0007).
+    ProjectId
+}
 
 /// Unix epoch milliseconds — the crate's canonical timestamp representation.
 #[derive(
@@ -310,7 +315,59 @@ pub struct TranscriptRef {
     pub native_id: Option<String>,
 }
 
-/// A supervised session as tracked by AI Juggler (`docs/SPEC.md` §3).
+/// What kind of harness occurrence an instance is (ADR-0007).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InstanceKind {
+    /// A CLI harness running in an embedded terminal under an isolated
+    /// environment.
+    #[default]
+    Terminal,
+    /// A desktop-class harness running as a windowed application
+    /// (supervised process, no terminal surface).
+    Desktop,
+}
+
+impl InstanceKind {
+    /// Wire name (`terminal` / `desktop`).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Terminal => "terminal",
+            Self::Desktop => "desktop",
+        }
+    }
+
+    /// Parses a stored wire name; unknown values yield `None` (degrade,
+    /// never panic).
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "terminal" => Some(Self::Terminal),
+            "desktop" => Some(Self::Desktop),
+            _ => None,
+        }
+    }
+}
+
+/// A tracked local project — the juggling anchor (ADR-0007): the
+/// directory instances work in, keyed by canonical root so account
+/// switches and handovers have a stable pivot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRecord {
+    /// Stable identifier assigned by AI Juggler.
+    pub id: ProjectId,
+    /// Canonical absolute root directory.
+    pub root: PathBuf,
+    /// Display name (directory name unless the user renames).
+    pub name: String,
+    /// When the project was first seen.
+    pub created_at: Timestamp,
+    /// Last time an instance ran in this project.
+    pub last_activity: Option<Timestamp>,
+}
+
+/// A supervised session (instance record) as tracked by AI Juggler
+/// (`docs/SPEC.md` §3, ADR-0007).
 #[derive(Clone, PartialEq, Debug)]
 pub struct SessionRecord {
     /// Stable identifier assigned by AI Juggler.
@@ -322,6 +379,11 @@ pub struct SessionRecord {
     /// Machine the session runs on (fleet dimension; local default
     /// otherwise).
     pub machine: MachineId,
+    /// The kind of harness occurrence (terminal CLI vs desktop window).
+    pub kind: InstanceKind,
+    /// The tracked project this session's cwd belongs to (juggling
+    /// anchor, ADR-0007).
+    pub project: Option<ProjectId>,
     /// Working directory of the session.
     pub cwd: PathBuf,
     /// Current lifecycle status.

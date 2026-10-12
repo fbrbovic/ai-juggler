@@ -124,6 +124,8 @@ fn arb_session(profile: ProfileId) -> impl Strategy<Value = SessionRecord> {
                 native_id: native,
                 profile: profile.clone(),
                 machine: MachineId::new(machine),
+                kind: juggler_core::model::InstanceKind::Terminal,
+                project: None,
                 cwd: PathBuf::from(cwd),
                 status: SessionStatus::all()[status],
                 started_at: Timestamp::from_millis(started),
@@ -258,6 +260,8 @@ fn deleting_account_cascades() {
         native_id: None,
         profile: profile.id,
         machine: MachineId::new("this-mac"),
+        kind: juggler_core::model::InstanceKind::Terminal,
+        project: None,
         cwd: PathBuf::from("/tmp"),
         status: SessionStatus::Running,
         started_at: Timestamp::from_millis(1),
@@ -397,6 +401,8 @@ fn session_list_without_filter_returns_all() {
         native_id: None,
         profile: profile.id,
         machine: MachineId::new("this-mac"),
+        kind: juggler_core::model::InstanceKind::Terminal,
+        project: None,
         cwd: PathBuf::from("/tmp"),
         status: SessionStatus::Running,
         started_at: Timestamp::from_millis(7),
@@ -408,4 +414,69 @@ fn session_list_without_filter_returns_all() {
     let all = storage.sessions().list(None).unwrap();
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].id, session.id);
+}
+
+#[test]
+fn projects_touch_creates_then_refreshes_activity() {
+    let storage = Storage::open_in_memory().unwrap();
+    let root = std::path::Path::new("/Users/dev/myapp");
+
+    let first = storage.projects().touch(root, None).unwrap();
+    assert_eq!(first.name, "myapp", "name defaults to the directory name");
+    assert_eq!(first.root, root);
+    assert!(first.last_activity.is_some());
+
+    // Second touch refreshes activity, keeps identity and name.
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let second = storage.projects().touch(root, Some("Custom name")).unwrap();
+    assert_eq!(second.id, first.id, "same project — keyed by root");
+    assert_eq!(second.name, "myapp", "touch never renames");
+    assert!(second.last_activity.unwrap() >= first.last_activity.unwrap());
+
+    // Listing returns most-recently-active first.
+    let other = storage
+        .projects()
+        .touch(std::path::Path::new("/Users/dev/other"), None)
+        .unwrap();
+    let listed = storage.projects().list().unwrap();
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0].id, other.id, "most recent activity first");
+
+    assert!(storage.projects().get(&first.id).is_ok());
+}
+
+#[test]
+fn sessions_carry_instance_kind_and_project_link() {
+    let storage = Storage::open_in_memory().unwrap();
+    let (_account, profile) = seed_chain(&storage);
+
+    let project = storage
+        .projects()
+        .touch(std::path::Path::new("/Users/dev/myapp"), None)
+        .unwrap();
+    let mut session = SessionRecord {
+        id: SessionId::new("sess-kind"),
+        native_id: None,
+        profile: profile.id,
+        machine: MachineId::new("this-mac"),
+        kind: juggler_core::model::InstanceKind::Desktop,
+        project: Some(project.id.clone()),
+        cwd: PathBuf::from("/Users/dev/myapp"),
+        status: SessionStatus::Running,
+        started_at: Timestamp::from_millis(1),
+        last_activity: None,
+        usage: UsageSnapshot::default(),
+        transcript_ref: None,
+    };
+    storage.sessions().insert(&session).unwrap();
+    session.project = Some(project.id.clone());
+    let loaded = storage.sessions().get(&session.id).unwrap();
+    assert_eq!(loaded.kind, juggler_core::model::InstanceKind::Desktop);
+    assert_eq!(loaded.project.as_ref(), Some(&project.id));
+
+    // Update can re-point the project link (backfill path), not the kind.
+    let mut updated = loaded.clone();
+    updated.project = None;
+    storage.sessions().update(&updated).unwrap();
+    assert_eq!(storage.sessions().get(&session.id).unwrap().project, None);
 }

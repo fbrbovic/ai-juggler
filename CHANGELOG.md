@@ -210,3 +210,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sessions fan-out without deadlock (M1-4 perf floor); app-level
   terminal cores (echo → snapshot replay → stop ladder); login spec
   env-scoping proof.
+
+### Changed (design iteration 4 — instance-centric IA, ADR-0007)
+
+- Reframed the product around what it manages — **instances of AI coding
+  tools (CLI today, desktop next) working on tracked projects** — instead
+  of a CLI-session board.
+- Domain (schema v3): `sessions.kind` (`terminal` | `desktop`) and a
+  first-class `projects` table keyed by canonical root; launches touch
+  their project and link the session to it — the lineage that powers
+  switch/hand-over.
+- UI rebuilt to two modes: left rail = **Projects / Instances / Sessions**
+  (project panel: who's on it now, account history, launch-with-another-
+  account; instance panel: status, kind badge, open-terminal/stop);
+  global menus top-right (Overview, Accounts, Usage, Fleet) with a
+  primary Add action.
+- `projects_list` command with active-instance and account-history
+  rollup; ts-rs `ProjectInfo`.
+- Tests: projects repo roundtrip, session kind/project-link persistence,
+  and the juggling integration proof — two accounts, one shared
+  directory, one tracked project with both accounts in its history and
+  the live instance surfaced.

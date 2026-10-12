@@ -100,7 +100,7 @@ pub struct ProfileInfo {
     pub default_cwd: Option<String>,
 }
 
-/// A session row for the UI (board feed).
+/// An instance/session row for the UI (instance + session feeds).
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "../../../ui/src/types/generated/")]
 pub struct SessionInfo {
@@ -115,7 +115,34 @@ pub struct SessionInfo {
     /// Lifecycle status string (storage vocabulary).
     pub status: String,
     /// Start time, epoch milliseconds.
+    #[ts(type = "number")]
     pub started_at_ms: i64,
+    /// Instance kind: `terminal` | `desktop`.
+    pub kind: String,
+    /// Owning project id, when the cwd resolved to a tracked project.
+    pub project_id: Option<String>,
+}
+
+/// A tracked project for the UI — the juggling anchor (ADR-0007).
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct ProjectInfo {
+    /// Project id.
+    pub id: String,
+    /// Canonical root directory.
+    pub root: String,
+    /// Display name.
+    pub name: String,
+    /// Last activity, epoch milliseconds (when known).
+    #[ts(type = "number")]
+    pub last_activity_ms: Option<i64>,
+    /// The instance currently managing this project, when live.
+    pub active_instance: Option<SessionInfo>,
+    /// Account labels that have ever run in this project.
+    pub accounts_used: Vec<String>,
+    /// Total instances ever run in this project.
+    #[ts(type = "number")]
+    pub instance_count: u64,
 }
 
 /// Dashboard counts.
@@ -653,19 +680,27 @@ pub fn launch_profile(
     let spec = adapter.launch_spec(&account, &profile, &effective_cwd, &LaunchMode::Interactive)?;
     let session_id = SessionId::new(format!("sess-{}", unique_suffix()));
     let spawned = state.supervisor.spawn(&session_id, &spec)?;
-    let record = SessionRecord {
-        id: session_id.clone(),
-        native_id: None,
-        profile: profile.id,
-        machine: MachineId::new("this-mac"),
-        cwd: spec.cwd.clone(),
-        status: SessionStatus::Starting,
-        started_at: Timestamp::now(),
-        last_activity: None,
-        usage: juggler_core::model::UsageSnapshot::default(),
-        transcript_ref: None,
+    // The juggling anchor: this launch's cwd becomes (or refreshes) the
+    // tracked project, and the session is linked to it (ADR-0007).
+    let canonical_cwd = spec.cwd.canonicalize().unwrap_or_else(|_| spec.cwd.clone());
+    {
+        let storage = lock_storage_arc(state)?;
+        let project = storage.projects().touch(&canonical_cwd, None)?;
+        storage.sessions().insert(&SessionRecord {
+            id: session_id.clone(),
+            native_id: None,
+            profile: profile.id,
+            machine: MachineId::new("this-mac"),
+            kind: juggler_core::model::InstanceKind::Terminal,
+            project: Some(project.id.clone()),
+            cwd: spec.cwd.clone(),
+            status: SessionStatus::Starting,
+            started_at: Timestamp::now(),
+            last_activity: None,
+            usage: juggler_core::model::UsageSnapshot::default(),
+            transcript_ref: None,
+        })?;
     };
-    lock_storage_arc(state)?.sessions().insert(&record)?;
     Ok(LaunchResult {
         session_id: session_id.to_string(),
         pid: spawned.pid,
@@ -899,6 +934,63 @@ fn session_infos(storage: &Storage) -> AppResult<Vec<SessionInfo>> {
                 harness,
                 status: record.status.as_str().to_string(),
                 started_at_ms: record.started_at.millis(),
+                kind: record.kind.as_str().to_string(),
+                project_id: record
+                    .project
+                    .as_ref()
+                    .map(std::string::ToString::to_string),
+            }
+        })
+        .collect())
+}
+
+/// Lists tracked projects with their live instance, account history, and
+/// totals — the juggling view (ADR-0007).
+#[tauri::command]
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on failure.
+pub fn projects_list(state: tauri::State<'_, Arc<AppState>>) -> AppResult<Vec<ProjectInfo>> {
+    projects_list_impl(state.inner())
+}
+
+/// Core implementation shared with integration tests.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on failure.
+pub fn projects_list_impl(state: &Arc<AppState>) -> AppResult<Vec<ProjectInfo>> {
+    let storage = lock_storage_arc(state)?;
+    let sessions = session_infos(&storage)?;
+    // Statuses that mean "occupying the project right now".
+    let live = |status: &str| matches!(status, "starting" | "running");
+    Ok(storage
+        .projects()
+        .list()?
+        .into_iter()
+        .map(|project| {
+            let id = project.id.to_string();
+            let owned: Vec<&SessionInfo> = sessions
+                .iter()
+                .filter(|s| s.project_id.as_deref() == Some(id.as_str()))
+                .collect();
+            let active_instance = owned.iter().find(|s| live(&s.status)).map(|s| (*s).clone());
+            let mut accounts_used: Vec<String> = owned
+                .iter()
+                .map(|s| s.label.clone())
+                .filter(|label| !label.is_empty())
+                .collect();
+            accounts_used.sort();
+            accounts_used.dedup();
+            ProjectInfo {
+                id,
+                root: project.root.to_string_lossy().into_owned(),
+                name: project.name,
+                last_activity_ms: project.last_activity.map(juggler_core::Timestamp::millis),
+                active_instance,
+                accounts_used,
+                instance_count: u64::try_from(owned.len()).unwrap_or_default(),
             }
         })
         .collect())
