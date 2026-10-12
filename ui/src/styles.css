@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+/*
+ * AI Juggler design tokens — dark-first developer aesthetic.
+ * Single source of truth for color/shape/typography; components consume
+ * semantic names only (bg-canvas, text-muted, border-hairline, ...).
+ */
+@theme {
+  /* Surfaces: deep space neutrals, layered elevation */
+  --color-canvas: #0a0d13;
+  --color-surface: #10141c;
+  --color-surface-2: #161b26;
+  --color-surface-3: #1d2331;
+  --color-hairline: #232a38;
+
+  /* Text */
+  --color-ink: #e8ecf3;
+  --color-muted: #8b95a7;
+  --color-faint: #5b6474;
+
+  /* Identity: electric violet primary, cyan for live data */
+  --color-accent: #7c7cf4;
+  --color-accent-hi: #9d9dfb;
+  --color-accent-soft: #7c7cf41f;
+  --color-live: #22d3ee;
+  --color-live-soft: #22d3ee1f;
+
+  /* Semantics */
+  --color-success: #34d399;
+  --color-success-soft: #34d3991a;
+  --color-warning: #fbbf24;
+  --color-warning-soft: #fbbf241a;
+  --color-danger: #f87171;
+  --color-danger-soft: #f871711a;
+
+  /* Type: native stack, mono for identifiers */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI",
+    Roboto, sans-serif;
+  --font-mono:
+    ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo, monospace;
+
+  /* Shape */
+  --radius-card: 0.875rem;
+}
+
+/* Native window chrome feel: no text selection on chrome elements. */
+body {
+  @apply bg-canvas text-ink font-sans antialiased;
+  overscroll-behavior: none;
+}
+
+::selection {
+  background: var(--color-accent-soft);
+}
+
+/* Focus ring: consistent, keyboard-first */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* Scrollbars: quiet, overlay-style where supported */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-hairline) transparent;
+}
