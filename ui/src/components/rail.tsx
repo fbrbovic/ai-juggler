@@ -33,8 +33,12 @@ export function Rail({
   items: RailItem[];
   active: string;
   onSelect: (id: string) => void;
-  footer?: ReactNode;
-  header?: ReactNode;
+  /** Render-prop so the footer can adapt to the collapsed state (status
+   * text hidden, live dot centered). */
+  footer?: (collapsed: boolean) => ReactNode;
+  /** Render-prop so the header can adapt to the collapsed state (e.g.
+   * brand text hidden, logo centered). */
+  header?: (collapsed: boolean) => ReactNode;
 }) {
   const [width, setWidth] = useState(() => {
     const stored = Number(localStorage.getItem(STORE_WIDTH));
@@ -91,7 +95,7 @@ export function Rail({
       className="relative flex shrink-0 flex-col border-r border-hairline bg-surface/70 backdrop-blur-xl transition-[width] duration-200"
       style={{ width: effectiveWidth }}
     >
-      {header}
+      {header?.(collapsed)}
 
       <button
         onClick={() => setCollapsed((value) => !value)}
@@ -146,10 +150,8 @@ export function Rail({
       </div>
 
       {footer && (
-        <div
-          className={`mt-auto p-4 text-[11px] text-faint ${collapsed ? "px-2 text-center" : ""}`}
-        >
-          {footer}
+        <div className={`mt-auto p-4 text-[11px] text-faint ${collapsed ? "px-2" : ""}`}>
+          {footer(collapsed)}
         </div>
       )}
 
