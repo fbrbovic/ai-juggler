@@ -29,6 +29,9 @@ pub enum AdapterError {
     /// Launch specification could not be built for the given profile/mode.
     #[error("invalid launch request: {0}")]
     InvalidLaunch(String),
+    /// The adapter does not implement this operation.
+    #[error("unsupported by this adapter: {0}")]
+    Unsupported(String),
     /// An I/O failure.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),

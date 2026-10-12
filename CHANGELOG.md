@@ -168,3 +168,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full app stack with complete config-dir isolation and per-account
   settings overlays; write containment verified across the sandbox
   (zero writes outside the app data dir).
+
+### Added (M1-3b)
+
+- Smart onboarding foundation (ADR-0006, spec §12.1): adapter-level
+  `scan_environment` finds existing setups — the vendor default
+  (`~/.claude`), `$CLAUDE_CONFIG_DIR` overrides (other manager tools),
+  and `.claude*` home-pattern dirs (manual or AI-created) — with
+  metadata-only login probes, dedup, and most-useful-first ordering.
+- Config import: `import_account` byte-copies a discovered setup into a
+  fresh managed dir (0700 + marker), skipping rebuildable caches, with a
+  2 GiB fail-fast ceiling and a read-only guarantee toward the source
+  (tree-snapshot tested). Keychain-locked logins honestly report the
+  one-time re-login path; file-based logins carry over.
+- Login aids capped at "we open things": per-adapter `login_url`, opened
+  in the system browser via tauri-plugin-opener.
+- App commands `environment_scan`, `account_import` (creates a default
+  `Main` profile so imports are immediately launchable), and
+  `login_open_web`; typed bridge entries with browser-preview mocks.
+- Integration tests: scan classification/dedup/sorting, import
+  correctness + source immutability + ceiling, and the command-level
+  onboarding path (import → launch → session recorded).

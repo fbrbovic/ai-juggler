@@ -61,6 +61,7 @@ pub fn run() {
     }
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
@@ -69,6 +70,9 @@ pub fn run() {
             commands::account_create,
             commands::account_login_state,
             commands::account_login_command,
+            commands::environment_scan,
+            commands::account_import,
+            commands::login_open_web,
             commands::profiles_list,
             commands::profile_create,
             commands::profile_delete,

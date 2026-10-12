@@ -9,12 +9,25 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { AppInfo } from "../types/generated/AppInfo";
 import type { AccountInfo } from "../types/generated/AccountInfo";
+import type { DiscoveredInfo } from "../types/generated/DiscoveredInfo";
+import type { ImportResult } from "../types/generated/ImportResult";
+import type { LaunchResult } from "../types/generated/LaunchResult";
 import type { ProfileInfo } from "../types/generated/ProfileInfo";
 import type { SessionInfo } from "../types/generated/SessionInfo";
 import type { HarnessInfo } from "../types/generated/HarnessInfo";
 import type { StatsInfo } from "../types/generated/StatsInfo";
 
-export type { AppInfo, AccountInfo, ProfileInfo, SessionInfo, HarnessInfo, StatsInfo };
+export type {
+  AppInfo,
+  AccountInfo,
+  DiscoveredInfo,
+  ImportResult,
+  LaunchResult,
+  ProfileInfo,
+  SessionInfo,
+  HarnessInfo,
+  StatsInfo,
+};
 
 /** Event names mirrored from juggler_app constants (single source: Rust). */
 export const EVENTS = {
@@ -87,6 +100,59 @@ export async function createAccount(
   plan: string | null,
 ): Promise<AccountInfo> {
   return invoke<AccountInfo>("account_create", { harness, label, plan });
+}
+
+/**
+ * Scans the machine for existing harness setups the onboarding wizard can
+ * import (metadata-only). Mock: a plausible "found your default install"
+ * result so the wizard is reviewable in a plain browser.
+ */
+export async function environmentScan(): Promise<DiscoveredInfo[]> {
+  if (!hasBackend) {
+    return [
+      {
+        harness: "claude-code",
+        path: "/Users/you/.claude",
+        origin: "vendor-default",
+        login: "logged_in",
+        bytes: 48_000_000,
+        last_used_secs: Math.floor(Date.now() / 1000) - 86_400,
+        managed: false,
+        notes: [
+          "Claude Code's standard location — what a plain `claude` command uses.",
+          "Signed in — importing keeps your settings and session history.",
+        ],
+      },
+      {
+        harness: "claude-code",
+        path: "/Users/you/.claude-side",
+        origin: "home-pattern",
+        login: "logged_out",
+        bytes: 1_200_000,
+        last_used_secs: Math.floor(Date.now() / 1000) - 2_592_000,
+        managed: false,
+        notes: [
+          "A separate Claude configuration — created manually, by another tool, or by an AI assistant.",
+        ],
+      },
+    ];
+  }
+  return invoke<DiscoveredInfo[]>("environment_scan");
+}
+
+/** Imports a discovered setup as a managed account (byte copy; source untouched). */
+export async function accountImport(
+  harness: string,
+  sourcePath: string,
+  label: string,
+  plan: string | null,
+): Promise<ImportResult> {
+  return invoke<ImportResult>("account_import", { harness, sourcePath, label, plan });
+}
+
+/** Opens the vendor's own web sign-in page in the system browser. */
+export async function loginOpenWeb(harness: string): Promise<void> {
+  return invoke<void>("login_open_web", { harness });
 }
 
 export async function accountLoginCommand(accountId: string): Promise<string> {
