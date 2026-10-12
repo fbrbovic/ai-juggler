@@ -1,0 +1,11 @@
+[package]
+name = "juggler-adapters"
+description = "Concrete harness adapters: Claude Code, Codex, ZCode, and the fake harness used in tests."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
