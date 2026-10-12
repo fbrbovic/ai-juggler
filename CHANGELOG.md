@@ -53,6 +53,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cross-platform build matrix (macOS arm64 + x86_64 cross-check, Linux,
   Windows); required status checks enforced on `main`.
 
+### Added (M0-3)
+
+- Domain model in `juggler-core`: typed identifiers, `Account`, `Profile`,
+  `SessionRecord`, session statuses (incl. `QuotaBlocked`), usage snapshots
+  with confidence levels, quota windows, transcript refs; typed
+  `CoreError`.
+- SQLite storage: WAL + foreign keys, forward-only versioned migrations
+  (newer-schema databases rejected, corrupt files degrade to
+  `NotADatabase`), repositories for accounts/profiles/sessions with
+  cascade deletes.
+- Crash-safe `atomic_write` helper.
+- Property-based round-trip tests (proptest) for every entity plus
+  migration, corruption, cascade, and atomic-write edge cases.
+
 ### Changed
 
 - Handover model upgraded from summary packs to tiered session sync:
