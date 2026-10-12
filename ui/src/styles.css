@@ -4,10 +4,15 @@
  * AI Juggler design tokens — dark-first developer aesthetic.
  * Single source of truth for color/shape/typography; components consume
  * semantic names only (bg-canvas, text-muted, border-hairline, ...).
+ *
+ * Iteration 2 (design review): depth (ambient gradients, glass, layered
+ * shadows), motion (consistent 150ms micro-transitions, live pulse), and
+ * glow accents — same palette, more polish.
  */
 @theme {
   /* Surfaces: deep space neutrals, layered elevation */
   --color-canvas: #0a0d13;
+  --color-canvas-hi: #0d1119;
   --color-surface: #10141c;
   --color-surface-2: #161b26;
   --color-surface-3: #1d2331;
@@ -42,12 +47,25 @@
 
   /* Shape */
   --radius-card: 0.875rem;
+
+  /* Motion */
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* Depth */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -16px rgba(0, 0, 0, 0.5);
+  --shadow-glow-accent: 0 0 24px -6px #7c7cf459;
+  --shadow-glow-live: 0 0 24px -6px #22d3ee59;
 }
 
-/* Native window chrome feel: no text selection on chrome elements. */
+/* Ambient canvas: layered wash instead of flat black. */
 body {
   @apply bg-canvas text-ink font-sans antialiased;
   overscroll-behavior: none;
+  background-image:
+    radial-gradient(1100px 700px at 12% -12%, #7c7cf40d, transparent 60%),
+    radial-gradient(900px 600px at 95% 8%, #22d3ee08, transparent 55%),
+    linear-gradient(180deg, var(--color-canvas-hi), var(--color-canvas) 40%);
+  background-attachment: fixed;
 }
 
 ::selection {
@@ -64,4 +82,51 @@ body {
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--color-hairline) transparent;
+}
+
+/* ---- Motion utilities (iteration 2) ---- */
+
+/* Live status pulse: breathing dot for running things. */
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 var(--pulse-color, #22d3ee66);
+  }
+  50% {
+    opacity: 0.75;
+    box-shadow: 0 0 0 4px transparent;
+  }
+}
+
+.dot-live {
+  animation: breathe 2.4s var(--ease-out-soft) infinite;
+}
+
+/* Numerals with a quiet violet→ink gradient: modern without noise. */
+.numeral {
+  background: linear-gradient(160deg, #ffffff 20%, #9d9dfb 120%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Card sheen: 1px top light edge — the "material" read. */
+.sheen {
+  position: relative;
+}
+.sheen::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.07) 20%,
+    rgba(255, 255, 255, 0.07) 80%,
+    transparent
+  );
+  pointer-events: none;
 }

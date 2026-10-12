@@ -6,6 +6,7 @@ import {
   QuotaRing,
   StatCard,
 } from "./components/primitives";
+import { Rail } from "./components/rail";
 import {
   IconDashboard,
   IconFleet,
@@ -18,16 +19,17 @@ import {
 import { fetchAppInfo, onAppReady, type AppInfo } from "./lib/bridge";
 
 /**
- * App shell: left rail navigation, top status bar, content area.
- * This is the M1-1 design-direction scaffold — screens land in M1-3+.
+ * App shell: collapsible/resizable rail, floating-glass status bar over an
+ * overlay title bar (native macOS traffic lights), content area.
+ * Design-direction scaffold — screens land in M1-3+.
  */
 
 const NAV = [
-  { id: "dashboard", label: "Dashboard", icon: IconDashboard },
-  { id: "sessions", label: "Sessions", icon: IconSessions },
-  { id: "profiles", label: "Profiles", icon: IconProfiles },
-  { id: "usage", label: "Usage", icon: IconUsage },
-  { id: "fleet", label: "Fleet", icon: IconFleet },
+  { id: "dashboard", label: "Dashboard", icon: <IconDashboard /> },
+  { id: "sessions", label: "Sessions", icon: <IconSessions /> },
+  { id: "profiles", label: "Profiles", icon: <IconProfiles /> },
+  { id: "usage", label: "Usage", icon: <IconUsage /> },
+  { id: "fleet", label: "Fleet", icon: <IconFleet /> },
 ] as const;
 
 type NavId = (typeof NAV)[number]["id"];
@@ -42,47 +44,41 @@ export default function App() {
   }, []);
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-canvas">
-      {/* Left rail */}
-      <nav className="flex w-[232px] shrink-0 flex-col border-r border-hairline bg-surface">
-        <div className="flex h-14 items-center gap-2.5 px-5">
-          <span className="text-accent">
-            <IconJuggler width={22} height={22} />
-          </span>
-          <span className="text-[15px] font-semibold tracking-tight">
-            AI Juggler
-          </span>
-        </div>
-        <div className="flex flex-col gap-0.5 px-3 pt-2">
-          {NAV.map((item) => (
-            <button
-              key={item.id}
-              onClick={() => setNav(item.id)}
-              className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm
-                transition-colors cursor-default ${
-                  nav === item.id
-                    ? "bg-accent-soft text-ink"
-                    : "text-muted hover:bg-surface-2 hover:text-ink"
-                }`}
-            >
-              <item.icon />
-              {item.label}
-            </button>
-          ))}
-        </div>
-        <div className="mt-auto flex flex-col gap-2 p-4 text-[11px] text-faint">
-          <div className="flex items-center gap-2">
-            <span className="size-1.5 rounded-full bg-success" />
-            this-mac · healthy
+    <div className="flex h-screen w-screen overflow-hidden">
+      <Rail
+        items={[...NAV]}
+        active={nav}
+        onSelect={(id) => setNav(id as NavId)}
+        header={
+          <div className="flex h-14 items-center gap-2.5 overflow-hidden px-4">
+            <span className="shrink-0 text-accent drop-shadow-[0_0_10px_#7c7cf466]">
+              <IconJuggler width={22} height={22} />
+            </span>
+            <span className="whitespace-nowrap text-[15px] font-semibold tracking-tight">
+              AI Juggler
+            </span>
           </div>
-          <div className="font-mono">v{info?.version ?? "0.0.0"}</div>
-        </div>
-      </nav>
+        }
+        footer={
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+              <span className="dot-live size-1.5 shrink-0 rounded-full bg-success" />
+              <span className="truncate">this-mac · healthy</span>
+            </div>
+            <div className="truncate font-mono">v{info?.version ?? "0.0.0"}</div>
+          </div>
+        }
+      />
 
       {/* Main column */}
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Top bar */}
-        <header className="flex h-14 shrink-0 items-center gap-3 border-b border-hairline bg-surface/60 px-6 backdrop-blur">
+        {/* Glass status bar over the overlay title bar (traffic lights sit in
+            the left gutter; the empty bar area drags the window). */}
+        <header
+          data-tauri-drag-region
+          className="flex h-14 shrink-0 items-center gap-3 border-b border-hairline
+            bg-surface/50 pl-[92px] pr-6 backdrop-blur-xl"
+        >
           <h1 className="text-sm font-semibold capitalize tracking-wide">
             {nav}
           </h1>
@@ -111,15 +107,32 @@ function Dashboard() {
     <div className="flex flex-col gap-6">
       {/* Health strip */}
       <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-        <StatCard label="Profiles" value="0" hint="no accounts yet" />
-        <StatCard label="Active sessions" value="0" hint="nothing running" />
+        <StatCard
+          label="Profiles"
+          value="0"
+          hint="no accounts yet"
+          icon={<IconProfiles width={15} height={15} />}
+        />
+        <StatCard
+          label="Active sessions"
+          value="0"
+          hint="nothing running"
+          tone="live"
+          icon={<IconTerminal width={15} height={15} />}
+        />
         <StatCard
           label="Machine"
           value="OK"
           hint="RAM · CPU · disk nominal"
           tone="success"
+          icon={<IconDashboard width={15} height={15} />}
         />
-        <StatCard label="Fleet" value="1" hint="this-mac only" />
+        <StatCard
+          label="Fleet"
+          value="1"
+          hint="this-mac only"
+          icon={<IconFleet width={15} height={15} />}
+        />
       </div>
 
       {/* Quota + empty state row */}
@@ -157,8 +170,8 @@ function Dashboard() {
 function EmptyState() {
   return (
     <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-hairline py-12">
-      <span className="text-faint">
-        <IconProfiles width={28} height={28} />
+      <span className="flex size-11 items-center justify-center rounded-xl border border-accent/20 bg-accent-soft text-accent-hi">
+        <IconProfiles width={22} height={22} />
       </span>
       <p className="text-sm text-muted">
         No profiles yet — connect your first harness account to start juggling.
