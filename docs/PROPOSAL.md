@@ -57,7 +57,7 @@ AI Juggler's differentiator includes being **the most conservative tool in this 
 - None of the three vendors prohibits a person from holding multiple paid accounts they own. All three prohibit **sharing accounts**, **reselling/proxying access**, and **circumventing per-account limits or protective measures**.
 - Therefore the app follows seven hard guardrails:
   1. **User-owned accounts only.** No pooling, brokering, or sharing between people.
-  2. **No autonomous quota-driven rotation.** The app may *surface* "account A is exhausted" and a user may *choose* to start their next session on account B — but the app never auto-rotates accounts in response to limits. Per-account limits are always respected; selection is user-initiated and identity-scoped (work/personal/project).
+  2. **No autonomous quota-driven rotation.** The app may *surface* "account A is exhausted" and a user may *choose* to start their next session on account B — but the app never auto-rotates accounts in response to limits. Per-account limits are always respected; selection is user-initiated and identity-scoped (work/personal/project). Preparation and staging can be automated; execution is always a user click.
   3. **No login automation.** Vendors' own `login` flows are triggered and nothing more.
   4. **No traffic interception.** Usage is computed from local session files (the ccusage pattern); the app never proxies or MITMs vendor traffic.
   5. **Spawn real, unmodified CLIs** with per-profile environment isolation. No client misrepresentation.
@@ -69,7 +69,7 @@ AI Juggler's differentiator includes being **the most conservative tool in this 
 
 ### 6.1 Profiles & parallelism
 
-A **profile** = harness + account + settings overlay (model, permissions, MCP servers, env). The app materializes each profile as an isolated harness state directory (`CLAUDE_CONFIG_DIR` for Claude Code, `CODEX_HOME` for Codex, per-account `HOME` for ZCode — the mechanisms research verified as working today) and launches the real CLI into it. Parallel profiles of the same tool no longer fight over one `~/.claude`/`~/.codex`/`~/.zcode`.
+A **profile** = harness + account + settings overlay (model, permissions, MCP servers, env). The app materializes each profile as an isolated harness state directory (`CLAUDE_CONFIG_DIR` for Claude Code, `CODEX_HOME` for Codex, per-account `HOME` for ZCode — the mechanisms research verified as working today) and launches the real CLI into it. Parallel profiles of the same tool no longer fight over one `~/.claude`/`~/.codex`/`~/.zcode`. Switching which account the *next* session uses is one click; running sessions are never switched underneath you.
 
 ### 6.2 The session board
 
@@ -79,12 +79,18 @@ Every running session across all harnesses in one live view: status (running / w
 
 Per-account and cross-account views: current 5-hour window and weekly/credit pools (Claude Pro/Max rate-limit feed from statusline JSON; Codex estimated from rollout token records; ZCode computed exactly from its local `model_usage` table and the published credit formula), burn-down trends (uPlot), reset timers, and alerts at configurable thresholds — including *before* starting a long task: "this session will likely exhaust account A's window; account B has 80% headroom."
 
-### 6.4 Handover
+### 6.4 Handover & session sync
 
-- **Same-tool resume:** native `--resume`/`resume`/`--resume` (Claude/Codex/ZCode) — zero loss.
-- **Cross-account / cross-tool takeover:** the app freezes session A, builds a **context pack** (structured markdown: task, decisions, open TODOs, diff summary, environment, distilled transcript — the summarize→pack pattern the research found is the industry norm, since no harness supports raw state transfer), launches session B primed with the pack, and tracks the relationship.
-- **Return:** when A's window resets, resume A with a delta pack of what B did ("while you were away") — still user-initiated.
-- **Project sync:** rules-file conversion and sync (AGENTS.md ↔ CLAUDE.md ↔ GEMINI.md / `.zcode/AGENTS.md`) and exportable session archives.
+The goal is **actual session continuity — sessions and chats moved with their context — not just a generated hand-off prompt**:
+
+- **Same tool, same account:** native resume — lossless.
+- **Same tool, different account:** **session transplant** — the session's native artifacts are copied into the target account's state and resumed natively there; the conversation continues exactly where it left off, with history and in-session todos intact. (Claude and Codex support this today via transcript-path/session-id resume; both accounts share the same installed binary, so compatibility is guaranteed.)
+- **Different tool:** **transcript replay** — the complete conversation is reconstructed and injected as the new session's opening context, so the target model re-reads the real chat, not a summary. (Vendor precedent: Codex itself ships a Claude-chat importer.)
+- **Return:** when the source account's quota window resets, one click resumes the original session primed with a delta of what happened meanwhile ("while you were away").
+- **Project sync:** rules files (AGENTS.md ↔ CLAUDE.md ↔ `.zcode/AGENTS.md`), harness memory files, and todo lists aligned across the profiles working a repo — diff-previewed, at a click.
+- **Packs** remain as the export format and as the editable preview of exactly what any handover will carry over.
+
+Every handover is prepared and staged automatically but executed only on a user click; the only autonomous behaviors in the entire app are passive ones — notifications, alerts, and suggestions.
 
 ## 7. Competitive landscape & differentiation
 

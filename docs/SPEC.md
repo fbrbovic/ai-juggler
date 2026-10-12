@@ -1,6 +1,6 @@
 # AI Juggler — Technical Specification
 
-**Status:** draft v0.1 for review · **Date:** 2026-10-12
+**Status:** draft v0.2 for review (revised after first review round) · **Date:** 2026-10-12
 Companion: [proposal](./PROPOSAL.md) · Evidence: [research notes](./research/)
 
 This document specifies the architecture and product behavior of AI Juggler v0.x. Everything here is grounded in the verified findings in `docs/research/`; where a mechanism is version-fragile, the research note is cited.
@@ -21,6 +21,8 @@ AI Juggler is a native desktop application that **supervises** AI coding harness
 | Reliability | App crash never kills supervised sessions (children survive; state journaled); recovery on relaunch |
 | Resilience | All writes atomic (temp+rename); SQLite in WAL mode; harness-format parse failures degrade, never crash |
 | Privacy | No network calls except: update feed check, and user-initiated actions in managed harnesses. Telemetry opt-in only |
+
+**Automation policy (product invariant).** The app *prepares*; the user *executes*. Automated behavior is strictly passive — monitoring, indexing, usage accounting, notifications, alerts, suggestions, and staging of actions. Every state-changing action (switching an account for new work, transplanting a session, priming a target, syncing project context) is bound to an explicit user click; there is no code path that performs one without it (asserted in `tests/guardrails.rs`).
 
 ## 2. System architecture
 
@@ -221,30 +223,52 @@ pub trait HarnessAdapter: Send + Sync {
 - Storage: append-only `usage_events` table; rollups materialized nightly and on demand.
 - Honesty rule: every number in the UI carries its confidence (Measured/Computed/Estimated) — no synthesized precision.
 
-## 7. Handover engine
+## 7. Handover & session-sync engine
 
-**Context pack** (versioned markdown + JSON sidecar, storable in-repo under `.juggler/` or exported standalone):
+**Automation policy (product invariant).** The engine *prepares*; the user *executes*. Automated behavior is strictly passive — watching, indexing, accounting, alerting, suggesting, and staging. Every state-changing action (switching an account for new work, transplanting a session, priming a target, syncing project context) is bound to an explicit user click, and there is no code path that performs one without it (asserted in `tests/guardrails.rs`).
+
+The goal is **actual session continuity — sessions and chats moved with their context — not a generated hand-off prompt**. What is achievable depends on what the target harness can natively consume, so the engine always selects the highest tier available and reports which tier it used:
+
+### 7.1 Fidelity tiers
+
+| Tier | Situation | Mechanism | Fidelity |
+|---|---|---|---|
+| **T1 — Native resume** | Same harness, same account | Adapter-native resume (`claude --resume`, `codex exec resume`, `zcode --resume`) | Lossless: the harness's own session state continues |
+| **T2 — Session transplant** | Same harness, different account | Copy the native session artifacts into the target account's managed state dir, then native-resume there (adapter capability `TRANSPLANT`) | Lossless conversation: the target account's harness resumes the identical session, history, and in-session todos |
+| **T3 — Transcript replay** | Different harness | Reconstruct the *complete* conversation from the Transcript IR (every user/assistant turn; tool outcomes distilled) and inject it as the target session's opening context via the adapter's priming mechanism | Content-complete: the target model re-reads the real conversation as text and rebuilds its working context from it |
+| **T4 — Context pack** | Export/portability fallback; works for any target, including harnesses without adapters | The versioned pack format (§7.3) | Summary-level; user-editable before use |
+
+Honest boundary: no harness exposes model-internal state (KV caches), so nothing can copy that — for anyone, in any tool. T1/T2 are effectively indistinguishable from having started on the target account; T3 preserves the full conversation content, with the target reconstructing its working context from it. A vendor precedent for cross-harness import already exists: Codex ships `/import` of Claude Code/Cursor chats (2026-08-11 changelog) — AI Juggler's version is vendor-neutral and user-triggered.
+
+**T2 mechanics per harness** (adapter capability, fixture-tested):
+
+- **Claude Code:** copy the session `.jsonl` into the target account's `projects/<mangled-cwd>/`; resume by transcript path (supported per CLI reference). Re-transplant ID collisions are resolved by forking (`--fork-session` semantics or a mechanical `sessionId` rewrite).
+- **Codex:** copy the `rollout-*.jsonl` into the target `CODEX_HOME` sessions tree; `codex exec resume <session_id>` picks it up. Both accounts share the same installed binary, so format compatibility is guaranteed.
+- **ZCode:** sessions live in SQLite; transplant means cloning session rows into the target account's DB — schema-coupled and under investigation. Until verified, ZCode targets use T3, and ZCode sources feed T1–T3 targets natively.
+
+### 7.2 Flows (all execute on click)
+
+1. **Switch profile (one click):** choose which account a *new* session runs under — staged instantly from the profile registry. Running sessions are never switched underneath the user.
+2. **Takeover (two clicks):** "Hand over…" on a session → targets listed with the fidelity tier each supports and current quota headroom → click executes: freeze source, transplant or replay, launch target primed, record lineage. The source session always remains resumable (T2 copies; it never moves or destroys).
+3. **Return (one click, suggested):** when a source account's window resets (the app alerts), "Resume lineage" resumes the original session natively, primed with a delta of what the takeover session did ("while you were away").
+4. **Project context sync (one click, diff-previewed):** align project-level context across profiles working the same repo — rules files (AGENTS.md ↔ CLAUDE.md ↔ `.zcode/AGENTS.md`; AGENTS.md is the emerging standard and Claude Code reads it natively since v2.1.277), harness memory files, todo lists, and uncommitted work. Master copy chosen by the user; every change is shown as a diff before it is applied.
+5. **Export/import:** any session exports to a T4 pack file; importing a pack creates a primed session in any managed harness.
+
+### 7.3 Context pack format (T4 + staging/preview artifact)
+
+For exports, and as the always-available preview of exactly what a T2/T3 handover will carry over:
 
 ```
 pack/
 ├── PACK.md          # task, constraints, decisions, open TODOs, next steps
-├── conversation.md  # distilled transcript (rolling summary + last N turns verbatim)
-├── state.json       # machine-readable: repo, branch, uncommitted diff summary,
-│                    # env, harness, session ids, pack lineage (A→B→A chains)
+├── conversation.md  # the conversation as carried over
+│                    # (T3: full replay text; T4: distilled summary + last N turns)
+├── state.json       # machine-readable: repo, branch, diff summary, env,
+│                    # harness, session ids, pack lineage (A→B→A chains)
 └── diffs/           # key patches if not committed
 ```
 
-Generation: template-driven from the Transcript IR (deterministic distillation; an LLM-assisted "smart distill" is an optional later feature, explicitly not required for v1). `PACK.md` is written to be pasted into *any* harness — even one without an adapter.
-
-**Flows**
-
-1. **Resume** (same harness, same account): adapter-native resume; pack not needed.
-2. **Takeover** (different account/tool): user picks target profile from the handover wizard → source session ends gracefully → pack generated → target launched with pack primed → lineage recorded; source stays resumable.
-3. **Return:** wizard offers "resume lineage" → original session resumed natively with a delta pack of the takeover branch.
-4. **Project sync:** rules-file sync AGENTS.md ↔ CLAUDE.md ↔ `.zcode/AGENTS.md` (research: AGENTS.md is the emerging standard; Claude reads it natively v2.1.277+; ZCode/Codex natively). Sync is explicit, diff-previewed, one-directional master copy chosen by user.
-5. **Export/import:** pack export to file; import converts any pack into a new session primer. (Codex itself ships a Claude-importer — validation of the pattern; ours is vendor-neutral.)
-
-All flows are user-initiated; the engine only *suggests* (e.g., "quota wall in ~10 min; profiles B/C have headroom — prepare handover?").
+Generation is template-driven from the Transcript IR (deterministic; an optional LLM-assisted "smart distill" is a post-v1 feature). `PACK.md` is written to be usable by *any* harness, even one without an adapter.
 
 ## 8. Security & privacy
 
@@ -260,7 +284,7 @@ All flows are user-initiated; the engine only *suggests* (e.g., "quota wall in ~
 - **Profiles:** cards per account (harness icon, plan tier, quota ring, last used); "New profile" wizard (detect harness → name account → open vendor login in guided terminal → verify → done).
 - **Session board:** table/grid of live sessions (status chip, harness, profile, cwd, age, tokens, quota impact); row actions: Attach, Open in terminal, Stop, **Hand over…** (wizard).
 - **Usage:** per-account timelines (uPlot), windows (5h/weekly/credits), per-session breakdowns, export CSV.
-- **Handover wizard:** 3 steps (source freeze → pack preview/edit → target choice + prime).
+- **Handover:** staged on the session board — "Hand over…" lists target profiles with the fidelity tier each supports and current quota headroom; one click executes (a preview/edit of exactly what will be carried over is always available first).
 - **Terminals:** embedded xterm.js tabs (one per session) — *open decision #2: v1 or v2.*
 - **Tray:** aggregate quota state, alerts, quick-launch menu. Global hotkey for the board.
 - **Settings:** thresholds (stuck heuristics, alert levels), terminal prefs, update channel (stable/beta), telemetry (off).
@@ -288,7 +312,7 @@ Nothing is ever written inside `~/.claude`, `~/.codex`, or `~/.zcode` (the user'
 - **Unit:** usage math (esp. ZCode credit formula vs. published examples), window reconstruction, pack rendering.
 - **Fixture corpus:** committed, anonymized transcript samples per harness × version; parsers tested against them; CI job re-verifies against live format dumps monthly (canary).
 - **Fake harness adapter:** a script-driven CLI implementing the adapter contract for e2e supervisor/stuck/handover tests — CI runs the full lifecycle headlessly on all three OSes.
-- **Guardrail tests:** static + runtime assertions that no code path writes outside managed dirs, performs network calls outside allowlist, or exposes account-switching of live sessions.
+- **Guardrail tests:** static + runtime assertions that no code path writes outside managed dirs, performs network calls outside allowlist, exposes account-switching of live sessions, or executes any account switch / handover / project sync without a user-initiated command.
 - **UI:** Playwright on the webview for board/wizard flows.
 
 ## 13. Milestones

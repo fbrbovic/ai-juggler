@@ -2,6 +2,14 @@
 
 Thanks for your interest in making AI Juggler better! 🤹
 
+## What belongs in this repository
+
+Commit **final artifacts** — code, tests, and docs that state the project's current position. Exploration is welcome, but it happens in branches, PR reviews, and Discussions, and lands as clean results rather than process:
+
+- No conversation logs, chat transcripts, or AI-assistant session dumps in commits, issues, or PRs.
+- If several candidate designs were explored, the merged doc presents the chosen design plus a brief "alternatives considered" note — not the full debate.
+- Work-in-progress belongs on a branch; `main` should always build and read as intentional.
+
 ## Current phase: spec & design
 
 The project is in active design. The highest-value contributions right now are:

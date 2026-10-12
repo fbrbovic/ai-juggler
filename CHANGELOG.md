@@ -15,3 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   landscape (`docs/research/`).
 - Product proposal (`docs/PROPOSAL.md`) and technical specification
   (`docs/SPEC.md`) — published for review.
+- CONTRIBUTING guidance: only final artifacts belong in the repo (no
+  conversation logs or exploration transcripts).
+
+### Changed
+
+- Handover model upgraded from summary packs to tiered session sync:
+  native resume (T1), cross-account session transplant (T2), cross-harness
+  transcript replay (T3); context packs remain as preview/export format (T4).
+- Explicit automation policy in spec and proposal: monitoring, alerts,
+  suggestions, and staging are automated; every state-changing action is
+  executed by an explicit user click.
