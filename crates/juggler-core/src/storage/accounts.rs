@@ -26,7 +26,7 @@ impl AccountsRepo<'_> {
     /// (e.g. a duplicate id).
     pub fn insert(&self, account: &Account) -> Result<(), CoreError> {
         self.conn.execute(
-            "INSERT INTO accounts (id, harness, label, plan, state_dir, created_at)
+            "INSERT INTO accounts (id, provider_id, label, plan, state_dir, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 account.id.as_str(),
@@ -48,7 +48,7 @@ impl AccountsRepo<'_> {
     /// [`CoreError::Storage`] on SQLite failures.
     pub fn update(&self, account: &Account) -> Result<(), CoreError> {
         let changed = self.conn.execute(
-            "UPDATE accounts SET harness = ?2, label = ?3, plan = ?4, state_dir = ?5
+            "UPDATE accounts SET provider_id = ?2, label = ?3, plan = ?4, state_dir = ?5
              WHERE id = ?1",
             params![
                 account.id.as_str(),
@@ -134,7 +134,7 @@ pub(super) fn require_changed(
 fn map_account(row: &Row<'_>) -> rusqlite::Result<Account> {
     Ok(Account {
         id: AccountId::new(row.get::<_, String>("id")?),
-        harness: HarnessId::new(row.get::<_, String>("harness")?),
+        harness: HarnessId::new(row.get::<_, String>("provider_id")?),
         label: row.get("label")?,
         plan: row.get::<_, Option<String>>("plan")?.map(PlanTier::new),
         state_dir: row.get::<_, String>("state_dir")?.into(),

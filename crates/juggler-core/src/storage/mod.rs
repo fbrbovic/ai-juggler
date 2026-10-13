@@ -79,7 +79,18 @@ CREATE TABLE projects (
 /// accounts worked there before AI Juggler, from imported transcripts).
 const V4: &str = "ALTER TABLE projects ADD COLUMN history_json TEXT NOT NULL DEFAULT '{}';";
 
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4];
+/// Schema version 5 (ADR-0008 renames; AJ-E106): pure `ALTER … RENAME`
+/// — identities change, values do not. Forward-only; a v5 DB opened by a
+/// v4 build fails with `SchemaTooNew` (never silent corruption).
+const V5: &str = "
+ALTER TABLE accounts RENAME COLUMN harness TO provider_id;
+ALTER TABLE sessions RENAME TO instances;
+ALTER TABLE instances RENAME COLUMN native_id TO conversation_id;
+ALTER TABLE instances RENAME COLUMN profile_id TO launch_recipe_id;
+ALTER TABLE profiles RENAME TO launch_recipes;
+";
+
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5];
 
 /// An opened AI Juggler database with typed repositories.
 #[derive(Debug)]
@@ -183,5 +194,12 @@ impl Storage {
     #[must_use]
     pub fn raw_conn(&self) -> &Connection {
         &self.conn
+    }
+
+    /// The full forward-only migration list (diagnostics + upgrade
+    /// tests build earlier schema states from it).
+    #[must_use]
+    pub fn migrations() -> &'static [&'static str] {
+        MIGRATIONS
     }
 }

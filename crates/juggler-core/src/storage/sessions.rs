@@ -37,8 +37,8 @@ impl SessionsRepo<'_> {
     /// (unknown profile, duplicate id).
     pub fn insert(&self, session: &InstanceRecord) -> Result<(), CoreError> {
         self.conn.execute(
-            "INSERT INTO sessions
-                 (id, native_id, profile_id, machine, kind, project, cwd, status,
+            "INSERT INTO instances
+                 (id, conversation_id, launch_recipe_id, machine, kind, project, cwd, status,
                   started_at, last_activity, usage_json, transcript_ref_json)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
@@ -75,8 +75,8 @@ impl SessionsRepo<'_> {
     /// [`CoreError::Serialization`] for values that cannot be stored.
     pub fn update(&self, session: &InstanceRecord) -> Result<(), CoreError> {
         let changed = self.conn.execute(
-            "UPDATE sessions SET
-                 native_id = ?2, status = ?3, last_activity = ?4,
+            "UPDATE instances SET
+                 conversation_id = ?2, status = ?3, last_activity = ?4,
                  usage_json = ?5, transcript_ref_json = ?6, project = ?7
              WHERE id = ?1",
             params![
@@ -109,7 +109,7 @@ impl SessionsRepo<'_> {
     pub fn get(&self, id: &SessionId) -> Result<InstanceRecord, CoreError> {
         self.conn
             .query_row(
-                "SELECT * FROM sessions WHERE id = ?1",
+                "SELECT * FROM instances WHERE id = ?1",
                 params![id.as_str()],
                 map_session,
             )
@@ -126,7 +126,7 @@ impl SessionsRepo<'_> {
         let mut out = Vec::new();
         if let Some(profile) = profile {
             let mut stmt = self.conn.prepare(
-                "SELECT * FROM sessions WHERE profile_id = ?1 ORDER BY started_at DESC, id",
+                "SELECT * FROM instances WHERE launch_recipe_id = ?1 ORDER BY started_at DESC, id",
             )?;
             let rows = stmt.query_map(params![profile.as_str()], map_session)?;
             for row in rows {
@@ -135,7 +135,7 @@ impl SessionsRepo<'_> {
         } else {
             let mut stmt = self
                 .conn
-                .prepare("SELECT * FROM sessions ORDER BY started_at DESC, id")?;
+                .prepare("SELECT * FROM instances ORDER BY started_at DESC, id")?;
             let rows = stmt.query_map([], map_session)?;
             for row in rows {
                 out.push(row?);
@@ -154,9 +154,9 @@ fn map_session(row: &Row<'_>) -> rusqlite::Result<InstanceRecord> {
     Ok(InstanceRecord {
         id: SessionId::new(row.get::<_, String>("id")?),
         conversation: row
-            .get::<_, Option<String>>("native_id")?
+            .get::<_, Option<String>>("conversation_id")?
             .map(ConversationId::new),
-        profile: ProfileId::new(row.get::<_, String>("profile_id")?),
+        profile: ProfileId::new(row.get::<_, String>("launch_recipe_id")?),
         machine: MachineId::new(row.get::<_, String>("machine")?),
         kind: InstanceKind::parse(&kind_raw).ok_or_else(|| {
             rusqlite::Error::FromSqlConversionFailure(
