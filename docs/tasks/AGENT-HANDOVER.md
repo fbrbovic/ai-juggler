@@ -20,22 +20,46 @@
 
 ## Current state snapshot (verify, do not trust blindly)
 
-- Research complete: `docs/review/full-competitive-ux-review.md`
-  (1,095 lines), `docs/review/AI-Juggler-Maximum-Depth-Report-and-Proposal.md`
-  (6,739 lines, parts in `docs/review/deep/`),
-  `docs/review/AI-Juggler-Expected-Workflow-Second-Pass.md`
-  (4,784 lines, parts in `docs/review/pass2/`).
-- Decisions settled: D-01..D-15 in the decision log (still Draft
-  until the maintainer explicitly accepts it as Final).
-- Tasks specified: 107 tasks in `docs/tasks/E1..E10`, all TODO.
-- Stage boundary: only Stage 1 (documents/research, E9 + E6/E909
-  research records) is approved. Implementation needs separate
-  approval per stage (D-15).
-- Built product (as researched): Rust/Tauri engine, Claude Code
-  adapter, supervisor with embedded terminals, instance-centric UI,
-  smart onboarding, handover v0. Usage/quota dashboards, Fleet,
-  Codex/ZCode adapters and signed releases were placeholders at
-  research time — verify before repeating.
+Updated 2026-10-13 by the Stage-2 implementing agent at the E1/E8
+boundary. Re-verify with `git log --oneline -20` and
+`grep -h "^### AJ-" docs/tasks/E*.md | grep -c "DONE-EVIDENCED"`.
+
+- Research complete and committed (review corpus above).
+- Decision log **Final** (maintainer instruction, 2026-10-13), now
+  D-01..D-16 — D-16 adds dual Light/Dark themes (implemented).
+- Stage status: Stage 1 (documents) merged as PR #46. **Stage 2
+  (implementation) is APPROVED and RUNNING** — maintainer instruction
+  2026-10-13 ("start Stage 2… autonomous… until 100% complete").
+- Progress: 21/107 tasks DONE-EVIDENCED — E9 (all 10), E8 partial
+  (AJ-E801/E802/E806: evidence store, visual harness, gates), E1
+  complete (AJ-E101..E108: terminology, Instance/Conversation split,
+  schema v5, bridge/TS renames, terminology lint gate).
+- Next in the execution order (IMPLEMENTATION-AGENT-PROMPT §6):
+  E4 (See: AJ-E401 read model → E402 indicator row → E406+ Inspector)
+  and E2 (Switch: AJ-E201 Switch Graph → E202 pack v2) — independent
+  tracks per their `Depends:` edges; then E5, E3, E6, E7, E10.
+- Wireframes: 27/27 APPROVED (docs/wireframes/wireframe-approvals.json)
+  including three maintainer amendments (01 focus filter + rail
+  search; 05 terminal maximize + pop-out window; global rail/inspector
+  collapse) and D-16 themes.
+- Working conventions proven in Stage 2: PR per task-group → 5 CI
+  checks → squash-merge → evidence manifest in the same change →
+  `scripts/evidence_index.sh` + both lint gates in `just verify`.
+  Baseline right now: 84 Rust tests green, 41 visual captures (both
+  themes), clean tree, main synced.
+- Live-machine facts (PR #37, docs/qa/gate-M1.md): five real t3.codes
+  accounts imported read-only (their originals under
+  `~/Library/Application Support/ClaudeCodeProfiles/` are NEVER to be
+  touched; copies live in the app data dir); login state of the
+  copies is logged-out pending the maintainer's one-click re-login;
+  `~/.claude` untouched. Handover v0 shipped (beta fidelity); its
+  one-file transplant limitation is documented for AJ-E204's rebuild.
+- Built product: Rust/Tauri engine, Claude Code adapter, supervisor
+  with embedded terminals (tabs in panels, pop-out pending AJ-E407
+  scope note), instance-centric UI with dual themes, smart onboarding
+  (scan incl. manager-tool roots, read-only import, guided sign-in),
+  handover v0. Usage/Fleet/Codex-ZCode adapters/signed releases not
+  yet built.
 
 ## Non-negotiable invariants (product + process)
 
