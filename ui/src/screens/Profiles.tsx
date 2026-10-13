@@ -239,7 +239,7 @@ function AccountCard({
                 <Button
                   size="sm"
                   variant="ghost"
-                  title="Delete profile"
+                  title="Delete launch settings"
                   onClick={() => void onDeleteProfile(profile.id)}
                 >
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round">
@@ -307,8 +307,8 @@ function NewProfileModal({
 
   return (
     <Modal
-      title={`New profile · ${account.label}`}
-      subtitle="A launch configuration under this account."
+      title={`Launch settings · ${account.label}`}
+      subtitle="Launch settings applied when this Account starts (model, environment)."
       onClose={onClose}
     >
       <div className="flex flex-col gap-4">
@@ -319,7 +319,7 @@ function NewProfileModal({
           <Input value={model} placeholder="opus" onChange={(event) => setModel(event.target.value)} />
         </Field>
         <Field label="Default directory (optional)">
-          <Input value={cwd} placeholder="~/Projects/app" onChange={(event) => setCwd(event.target.value)} />
+          <Input value={cwd} placeholder="Optional working directory (folder picker ships with AJ-E306)" onChange={(event) => setCwd(event.target.value)} />
         </Field>
         {error && <p className="text-xs text-danger">{error}</p>}
         <div className="ml-auto flex gap-2">

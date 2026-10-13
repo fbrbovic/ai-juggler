@@ -7,8 +7,8 @@ use serde::de::Error as _;
 
 use crate::error::CoreError;
 use crate::model::{
-    InstanceKind, MachineId, ProfileId, ProjectId, SessionId, SessionRecord, SessionStatus,
-    Timestamp, TranscriptRef,
+    ConversationId, InstanceKind, InstanceRecord, MachineId, ProfileId, ProjectId, SessionId,
+    SessionStatus, Timestamp, TranscriptRef,
 };
 
 /// Converts a stored-JSON parse failure into a row-mapping failure.
@@ -35,7 +35,7 @@ impl SessionsRepo<'_> {
     ///
     /// Returns [`CoreError::Storage`] on I/O or constraint violations
     /// (unknown profile, duplicate id).
-    pub fn insert(&self, session: &SessionRecord) -> Result<(), CoreError> {
+    pub fn insert(&self, session: &InstanceRecord) -> Result<(), CoreError> {
         self.conn.execute(
             "INSERT INTO sessions
                  (id, native_id, profile_id, machine, kind, project, cwd, status,
@@ -43,7 +43,7 @@ impl SessionsRepo<'_> {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 session.id.as_str(),
-                session.native_id,
+                session.conversation.as_ref().map(ConversationId::as_str),
                 session.profile.as_str(),
                 session.machine.as_str(),
                 session.kind.as_str(),
@@ -73,7 +73,7 @@ impl SessionsRepo<'_> {
     /// Returns [`CoreError::NotFound`] when the id does not exist,
     /// [`CoreError::Storage`] on SQLite failures, or
     /// [`CoreError::Serialization`] for values that cannot be stored.
-    pub fn update(&self, session: &SessionRecord) -> Result<(), CoreError> {
+    pub fn update(&self, session: &InstanceRecord) -> Result<(), CoreError> {
         let changed = self.conn.execute(
             "UPDATE sessions SET
                  native_id = ?2, status = ?3, last_activity = ?4,
@@ -81,7 +81,7 @@ impl SessionsRepo<'_> {
              WHERE id = ?1",
             params![
                 session.id.as_str(),
-                session.native_id,
+                session.conversation.as_ref().map(ConversationId::as_str),
                 session.status.as_str(),
                 session.last_activity.map(Timestamp::millis),
                 serde_json::to_string(&session.usage)?,
@@ -106,7 +106,7 @@ impl SessionsRepo<'_> {
     /// Returns [`CoreError::NotFound`] when missing, [`CoreError::Storage`]
     /// on SQLite failures, or [`CoreError::Serialization`] when stored state
     /// cannot be interpreted (degrades as an error, never a panic).
-    pub fn get(&self, id: &SessionId) -> Result<SessionRecord, CoreError> {
+    pub fn get(&self, id: &SessionId) -> Result<InstanceRecord, CoreError> {
         self.conn
             .query_row(
                 "SELECT * FROM sessions WHERE id = ?1",
@@ -122,7 +122,7 @@ impl SessionsRepo<'_> {
     /// # Errors
     ///
     /// Same as [`SessionsRepo::get`].
-    pub fn list(&self, profile: Option<&ProfileId>) -> Result<Vec<SessionRecord>, CoreError> {
+    pub fn list(&self, profile: Option<&ProfileId>) -> Result<Vec<InstanceRecord>, CoreError> {
         let mut out = Vec::new();
         if let Some(profile) = profile {
             let mut stmt = self.conn.prepare(
@@ -145,15 +145,17 @@ impl SessionsRepo<'_> {
     }
 }
 
-/// Maps a row to a [`SessionRecord`].
-fn map_session(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
+/// Maps a row to an [`InstanceRecord`] (row values unchanged; ADR-0008 A-1).
+fn map_session(row: &Row<'_>) -> rusqlite::Result<InstanceRecord> {
     let status_raw: String = row.get("status")?;
     let kind_raw: String = row.get("kind")?;
     let usage_json: String = row.get("usage_json")?;
     let transcript_json: Option<String> = row.get("transcript_ref_json")?;
-    Ok(SessionRecord {
+    Ok(InstanceRecord {
         id: SessionId::new(row.get::<_, String>("id")?),
-        native_id: row.get("native_id")?,
+        conversation: row
+            .get::<_, Option<String>>("native_id")?
+            .map(ConversationId::new),
         profile: ProfileId::new(row.get::<_, String>("profile_id")?),
         machine: MachineId::new(row.get::<_, String>("machine")?),
         kind: InstanceKind::parse(&kind_raw).ok_or_else(|| {

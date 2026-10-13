@@ -390,3 +390,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only — token names unchanged), System/Light/Dark choice persisted,
   `⌘⇧L` cycles, flash-free init, WCAG-minded light palette; both
   themes captured in the gallery.
+
+### E1 naming (Phase A + B1 + B2) — Providers/Accounts/Instances begin
+
+- **AJ-E101**: ADR-0008 confirmed Accepted + Amendment A-1 recorded
+  (identifier semantics: `SessionId` stays the *Instance* id; new
+  `ConversationId` newtype wraps the *native* conversation id; wire
+  and storage columns unchanged).
+- **AJ-E102 (Phase A — UI copy)**: user-facing copy swept to the
+  charter vocabulary ("provider:", "Launch settings", honest cwd
+  placeholder); gallery re-captured green in both themes.
+- **AJ-E103 (Phase B1 — domain aliases)**: `ProviderId = HarnessId`
+  and `ProviderAdapter` additive aliases; zero wire change.
+- **AJ-E104 (Phase B2 — Instance/Session split)**: `SessionRecord` →
+  `InstanceRecord` (old name aliased one minor version);
+  `native_id: Option<String>` → `conversation: Option<ConversationId>`
+  (DB column and values untouched — proven by a raw-SQL v4-fixture
+  round-trip test, user_version unchanged); `InstanceStatus` alias;
+  `launch_settings()` accessor pending AJ-E105's field rename;
+  `SessionInfo.conversation_id` exposes the conversation in the
+  view-model; 83 tests green.

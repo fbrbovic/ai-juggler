@@ -35,4 +35,9 @@ kind: string,
 /**
  * Owning project id, when the cwd resolved to a tracked project.
  */
-project_id: string | null, };
+project_id: string | null, 
+/**
+ * The native conversation inside this Instance, once discovered
+ * (AJ-E104: Instance row → conversation inside; None while Starting).
+ */
+conversation_id: string | null, };

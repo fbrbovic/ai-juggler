@@ -92,6 +92,7 @@ const MOCK_SESSIONS: SessionInfo[] = seeded.sessions ?? [
     started_at_ms: Date.now() - 1_200_000,
     kind: "terminal",
     project_id: "proj-ai-juggler",
+    conversation_id: "822e4125-e07d-4866-9954-ec9295efb079",
   },
   {
     id: "sess-done-1",
@@ -102,6 +103,7 @@ const MOCK_SESSIONS: SessionInfo[] = seeded.sessions ?? [
     started_at_ms: Date.now() - 86_400_000,
     kind: "terminal",
     project_id: "proj-payments",
+    conversation_id: null,
   },
   {
     id: "sess-done-2",
@@ -112,6 +114,7 @@ const MOCK_SESSIONS: SessionInfo[] = seeded.sessions ?? [
     started_at_ms: Date.now() - 43_200_000,
     kind: "terminal",
     project_id: "proj-payments",
+    conversation_id: "c3f10b52-9a41-4f0e-8f2a-7717db9c04aa",
   },
 ];
 

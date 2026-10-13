@@ -123,6 +123,9 @@ pub struct SessionInfo {
     pub kind: String,
     /// Owning project id, when the cwd resolved to a tracked project.
     pub project_id: Option<String>,
+    /// The native conversation inside this Instance, once discovered
+    /// (AJ-E104: Instance row → conversation inside; None while Starting).
+    pub conversation_id: Option<String>,
 }
 
 /// A tracked project for the UI — the juggling anchor (ADR-0007).
@@ -694,7 +697,7 @@ pub fn launch_profile(
         let project = storage.projects().touch(&canonical_cwd, None)?;
         storage.sessions().insert(&SessionRecord {
             id: session_id.clone(),
-            native_id: None,
+            conversation: None,
             profile: profile.id,
             machine: MachineId::new("this-mac"),
             kind: juggler_core::model::InstanceKind::Terminal,
@@ -955,6 +958,7 @@ fn session_infos(storage: &Storage) -> AppResult<Vec<SessionInfo>> {
                     .project
                     .as_ref()
                     .map(std::string::ToString::to_string),
+                conversation_id: record.conversation.as_ref().map(|c| c.as_str().to_string()),
             }
         })
         .collect())
@@ -1170,7 +1174,7 @@ pub fn session_handover_impl(
         // The continuation session, linked to the same project.
         storage.sessions().insert(&SessionRecord {
             id: new_session.clone(),
-            native_id: Some(native_id),
+            conversation: Some(juggler_core::model::ConversationId::new(native_id)),
             profile: profile_b.id,
             machine: MachineId::new("this-mac"),
             kind: juggler_core::model::InstanceKind::Terminal,

@@ -177,4 +177,11 @@ impl Storage {
     pub fn projects(&self) -> ProjectsRepo<'_> {
         ProjectsRepo::new(&self.conn)
     }
+
+    /// Raw connection access for migrations/fixture tooling (tests,
+    /// diagnostics). Normal writes go through the repositories.
+    #[must_use]
+    pub fn raw_conn(&self) -> &Connection {
+        &self.conn
+    }
 }
