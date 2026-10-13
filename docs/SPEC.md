@@ -19,11 +19,11 @@ AI Juggler is a native desktop application that **supervises** AI coding harness
 | Startup | < 1.5s cold start; session board interactive < 500ms after launch |
 | Footprint | < 150 MB RSS typical; UI at 60 fps with 20 live sessions |
 | Reliability | App crash never kills supervised sessions (children survive; state journaled); recovery on relaunch |
-| Resilience | All writes atomic (temp+rename); SQLite in WAL mode; harness-format parse failures degrade, never crash |
-| Privacy | No network calls except: update feed check, and user-initiated actions in managed harnesses. Telemetry opt-in only |
+| Resilience | All writes atomic (temp+rename); SQLite in WAL mode; Provider-format parse failures degrade, never crash |
+| Privacy | No network calls except: update feed check, and user-initiated actions in managed Providers. Telemetry opt-in only |
 | Resource monitoring | < 1% CPU overhead; launch-advisor projections within ±20% of observed session peaks after calibration |
 
-**Automation policy (product invariant).** The app *prepares*; the user *executes*. Automated behavior is strictly passive — monitoring, indexing, usage accounting, notifications, alerts, suggestions, and staging of actions. Every state-changing action (switching an account for new work, transplanting a session, priming a target, syncing project context) is bound to an explicit user click; there is no code path that performs one without it (asserted in `tests/guardrails.rs`). One deliberate, narrowly-scoped exception: an opt-in, per-profile *auto-restart on crash* (off by default) that relaunches a crashed process into the **same** profile — it never changes accounts, conversation content, or anything else user-authored. Two further recorded amendments exist, no others may be invented: (1) **verified cleanup** — opt-in per-Account automatic kill of ledger-verified leftover processes only, audit-logged (ADR-0010, §5.2); (2) **pack secret policy** — the user's remembered redaction choice governs pack contents (ADR-0009, §3.3); it never silently decides, and is always shown before a switch executes.
+**Automation policy (product invariant).** The app *prepares*; the user *executes*. Automated behavior is strictly passive — monitoring, indexing, usage accounting, notifications, alerts, suggestions, and staging of actions. Every state-changing action (switching an account for new work, transplanting a session, priming a target, syncing project context) is bound to an explicit user click; there is no code path that performs one without it (asserted in `tests/guardrails.rs`). One deliberate, narrowly-scoped exception: an opt-in, per-Launch-settings *auto-restart on crash* (off by default) that relaunches a crashed process into the **same** recipe — it never changes accounts, conversation content, or anything else user-authored. Two further recorded amendments exist, no others may be invented: (1) **verified cleanup** — opt-in per-Account automatic kill of ledger-verified leftover processes only, audit-logged (ADR-0010, §5.2); (2) **pack secret policy** — the user's remembered redaction choice governs pack contents (ADR-0009, §3.3); it never silently decides, and is always shown before a switch executes.
 
 ## 2. System architecture
 
@@ -44,7 +44,7 @@ flowchart LR
         DB[(SQLite<br/>rusqlite, WAL)]
         KEY[OS keychain<br/>keyring]
     end
-    subgraph HARNESSES["Managed harnesses (user-installed, unmodified)"]
+    subgraph PROVIDERS["Managed Providers (user-installed, unmodified)"]
         CC[Claude Code<br/>CLAUDE_CONFIG_DIR=...]
         CX[Codex<br/>CODEX_HOME=...]
         ZC[ZCode<br/>HOME=...]
@@ -64,7 +64,7 @@ flowchart LR
 **Layering rules**
 
 - The UI is a thin view; all state lives in the Rust core and is streamed to the UI via Tauri events (pre-aggregated payloads — the webview never parses raw transcripts).
-- Only adapters know harness specifics. Core speaks only in domain types.
+- Only adapters know Provider specifics. Core speaks only in domain types.
 - Everything on disk is append-only or atomic; nothing in a harness's own directories is ever written except through adapter-defined, user-visible actions (e.g., creating an isolated profile directory).
 
 ### Workspace layout (Cargo)
@@ -84,6 +84,17 @@ ai-juggler/
 ```
 
 ## 3. Domain model (ADR-0007, ADR-0008; terminology charter)
+
+<!-- Legacy→canonical glossary (ADR-0008; linked from PROPOSAL/EPICS) -->
+
+| Legacy term (≤ v0.0.x) | Canonical term | Since |
+|---|---|---|
+| harness | **Provider** | schema v5 / AJ-E102-107 |
+| legacy profile word | **Account** when it meant the login; **Launch settings** otherwise | D-10 |
+| profile (as launch config) | **Launch settings** (`LaunchRecipe` internal) | D-10 |
+| session (as running process) | **Instance** | ADR-0007/0008 |
+| session (conversation) | **Session/Conversation** — unchanged meaning | — |
+| handover | **Switch** (unlimited, bidirectional) | D-01 |
 
 Vocabulary (user-facing and normative in this spec): a **Provider** is a
 tool family you subscribe to (Claude Code, Codex, ZCode, later Gemini,
@@ -118,7 +129,7 @@ pub struct Profile {                     // UI noun: "Launch settings"
 pub struct SessionRecord {               // domain alias target: InstanceRecord
     pub id: SessionId,                   // juggler's instance id (AJ-E104)
     pub kind: InstanceKind,              // Terminal | Desktop (desktop = windowed
-                                         // harness: no embedding, Focus Window only)
+                                         // desktop Provider: no embedding, Focus Window only)
     pub native_id: Option<String>,       // the conversation id inside the instance
     pub profile: ProfileId,
     pub machine: MachineId,              // fleet: origin machine (default this Mac)
@@ -272,22 +283,22 @@ pub trait HarnessAdapter: Send + Sync {
 
 - Adapters are *read-only* toward native state except for their own managed dirs, and `prepare_account` is the only writer.
 - Every parser is versioned: adapters declare `verified_against: ["2.1.296"]`-style ranges; `discover()` warns on drift and capability-probes at runtime (never assumes).
-- Session IR is a versioned, neutral schema (`Transcript { meta, messages[], usage[] }`) with per-harness converters — this is what handover and the indexer share.
+- Session IR is a versioned, neutral schema (`Transcript { meta, messages[], usage[] }`) with per-Provider converters — this is what switching and the indexer share.
 
 ### 4.1 Adapter: Claude Code (reference implementation)
 
 - **Launch:** real `claude` binary; interactive via PTY, or headless `-p --output-format stream-json` for driven runs. Env: `CLAUDE_CONFIG_DIR=<managed>`.
 - **Sessions:** watch `<config_dir>/projects/**/*.jsonl` (notify debouncer); parse lines (`uuid/parentUuid/type/message/usage`) with fixture-tested, version-pinned parser; dedupe by message `uuid` across resumed forks (ccusage pattern).
 - **Usage/quota (per research §5):**
-  - *Quota feed:* install a managed statusline script per profile dir; its stdin JSON carries `rate_limits.five_hour/seven_day.used_percentage/resets_at` for Pro/Max — captured to the usage engine as **Measured**.
+  - *Quota feed:* install a managed statusline script per account dir; its stdin JSON carries `rate_limits.five_hour/seven_day.used_percentage/resets_at` for Pro/Max — captured to the usage engine as **Measured**.
   - *Tokens:* transcript `usage` objects per assistant message → **Measured**.
-  - *Exhaustion:* `system/api_retry` rate_limit events (headless), `StopFailure` hook, and transcript pattern matching for "hit your session/weekly limit" (installed as a managed hook in profile dirs) → session status transitions + notifications.
+  - *Exhaustion:* `system/api_retry` rate_limit events (headless), `StopFailure` hook, and transcript pattern matching for "hit your session/weekly limit" (installed as a managed hook in account dirs) → session status transitions + notifications.
 - **Resume:** `claude --resume <id>` / `--continue`; transcript-path resume for cross-dir portability.
 - **Prime (handover-in):** launch with the context pack as initial user turn (headless or interactive), or `--settings` overlay for per-session config.
 
 ### 4.2 Adapter: Codex
 
-- **Launch:** `codex` with `CODEX_HOME=<managed>`; profiles via adapter-generated `<name>.config.toml` (post-0.134 semantics — separate files, not legacy tables).
+- **Launch:** `codex` with `CODEX_HOME=<managed>`; recipes via adapter-generated `<name>.config.toml` (post-0.134 semantics — separate files, not legacy tables).
 - **Control plane (phase 2):** `codex app-server` JSON-RPC (thread/turn lifecycle, approvals) — schemas generated via `codex app-server generate-json-schema` and vendored; phase 1 uses PTY + `codex exec --json` for driven runs.
 - **Sessions:** watch `~/.codex… <home>/sessions/**/rollout-*.jsonl`; index from `session_meta` without full replay; `token_usage_record` lines → **Measured** tokens.
 - **Usage/quota:** no public API (research §5) — token burn is Measured; plan-credit correlation is **Estimated** (window reconstruction from token timestamps; calibrated as the user observes real resets) and labeled as such in the UI.
@@ -466,7 +477,7 @@ to the user — never silently merged.
 ### 7.5 Project context sync (one click, diff-previewed)
 
 Unchanged from before: rules files (AGENTS.md ↔ CLAUDE.md ↔
-`.zcode/AGENTS.md`), harness memory, todos, uncommitted work — master
+`.zcode/AGENTS.md`), Provider memory files, todos, uncommitted work — master
 copy chosen by the user, diff before apply. Export/import of packs (any
 session → any managed Provider) unchanged (T4).
 
@@ -553,7 +564,7 @@ glossed on first use in product copy.)
 - [x] Cleanup Centre + tiers + audit specified
 - [x] D-09 strings recorded; deep/11 supersessions noted (wireframes 01-09 own layout)
 
-## 10. Self-update & harness updates
+## 10. Self-update & Provider updates
 
 - **App:** `tauri-plugin-updater` + GitHub Releases feed (`latest.json` via tauri-action), staged: download → verify signature → apply on quit or relaunch prompt; channel switch in settings; "check for updates" manual trigger; disable-able entirely.
 - **Harness tracking:** adapters' `discover()` records installed versions; a background daily check against vendor release channels (GitHub/npm APIs) surfaces "Claude Code 2.1.301 available (you run 2.1.296)" with the adapter's verified-range status — the app never auto-updates a harness (its updater, your call).
@@ -578,7 +589,7 @@ invariants (§1, §8) hold on every node, and a node's spawn ledger is
 never acted on by a console without that node's permission level
 (`View` / `Control` / `NoAccess`).
 
-AI Juggler instances link over the network so one console can see — and manage — every harness session on every machine you own. The design goal is **onboarding ease**: connecting a new machine is a pairing code, not a config file.
+AI Juggler instances link over the network so one console can see — and manage — every Instance on every machine you own. The design goal is **onboarding ease**: connecting a new machine is a pairing code, not a config file.
 
 ### 11.1 Topology & roles
 
@@ -613,8 +624,8 @@ AI Juggler instances link over the network so one console can see — and manage
 
 ```
 ~/Library/Application Support/AI Juggler/        (macOS; XDG on Linux, %APPDATA% on Win)
-├── juggler.sqlite          # accounts, profiles, sessions index, usage events, lineage, footprint stats (WAL)
-├── accounts/<harness>/<account-id>/   # managed harness state dirs (the isolation roots)
+├── juggler.sqlite          # accounts, launch_recipes, instances index, usage events, lineage, footprint stats (WAL)
+├── accounts/<provider-id>/<account-id>/   # managed Provider state dirs (the isolation roots)
 ├── packs/                  # context packs + lineage metadata
 ├── fleet/                  # node identity keypair + paired-peer registry
 ├── logs/                   # rotated app logs (redaction-aware)
@@ -625,7 +636,7 @@ Nothing is ever written inside `~/.claude`, `~/.codex`, or `~/.zcode` (the user'
 
 ### 12.1 Onboarding workflow (smart onboarding, ADR-0006; cross-Provider per pass2/03)
 
-Onboarding assumes the user knows nothing about harness internals, and
+Onboarding assumes the user knows nothing about Provider internals, and
 generalizes beyond Claude-only to every registered Provider:
 
 1. **Detect** — the environment scan covers, per Provider: the vendor
@@ -653,9 +664,9 @@ generalizes beyond Claude-only to every registered Provider:
 ## 13. Testing strategy
 
 - **Unit:** usage math (esp. ZCode credit formula vs. published examples), window reconstruction, pack rendering.
-- **Fixture corpus:** committed, anonymized transcript samples per harness × version; parsers tested against them; CI job re-verifies against live format dumps monthly (canary).
-- **Fake harness adapter:** a script-driven CLI implementing the adapter contract for e2e supervisor/stuck/handover tests — CI runs the full lifecycle headlessly on all three OSes.
-- **Resource heuristics:** fixture process trees (fake harness spawning memory/CPU-hog children) drive overload alerts, admission-projection accuracy, and OOM-crash classification tests.
+- **Fixture corpus:** committed, anonymized transcript samples per Provider × version; parsers tested against them; CI job re-verifies against live format dumps monthly (canary).
+- **Fake Provider adapter:** a script-driven CLI implementing the adapter contract for e2e supervisor/stuck/handover tests — CI runs the full lifecycle headlessly on all three OSes.
+- **Resource heuristics:** fixture process trees (the fake Provider spawning memory/CPU-hog children) drive overload alerts, admission-projection accuracy, and OOM-crash classification tests.
 - **Fleet:** loopback multi-instance tests — two live instances in CI pairing over ephemeral ports, telemetry sync, permission enforcement, and a mixed-version downgrade matrix.
 - **Guardrail tests:** static + runtime assertions that no code path writes outside managed dirs, performs network calls outside allowlist, exposes account-switching of live sessions, or executes any account switch / handover / project sync without a user-initiated command.
 - **UI:** Playwright on the webview for board/wizard flows.
@@ -666,12 +677,12 @@ Task-level breakdown, live tracking, and the per-milestone validation-gate proce
 
 | M | Scope | Acceptance |
 |---|---|---|
-| **M0** | Workspace scaffold, CI (fmt/clippy/test, 3-OS build), adapter trait + fake harness, domain model + SQLite | Fake session launches, is watched, and shows on a debug board |
-| **M1** | Claude Code adapter: account wizard (login hand-off), isolated profiles, parallel launch, session board, embedded terminal *(pending decision #2)* | Two Claude accounts in parallel; zero writes to `~/.claude` |
-| **M2** | Codex + ZCode adapters; adopt-existing flow; stuck detection v1; resource manager v1 (monitoring, overload alerts, admission advisor, crash recovery) | Three harnesses, one board; stuck + overload heuristics pass fixture corpus; crashed session → one-click native resume |
+| **M0** | Workspace scaffold, CI (fmt/clippy/test, 3-OS build), adapter trait + fake Provider, domain model + SQLite | Fake session launches, is watched, and shows on a debug board |
+| **M1** | Claude Code adapter: account wizard (login hand-off), isolated account dirs, parallel launch, instance board, embedded terminal *(pending decision #2)* | Two Claude accounts in parallel; zero writes to `~/.claude` |
+| **M2** | Codex + ZCode adapters; adopt-existing flow; stuck detection v1; resource manager v1 (monitoring, overload alerts, admission advisor, crash recovery) | Three Providers, one board; stuck + overload heuristics pass fixture corpus; crashed session → one-click native resume |
 | **M3** | Usage engine + dashboards + alerts (Claude Measured, ZCode Computed, Codex Estimated); tray | Quota rings within ±5% of vendor-reported for Claude/ZCode |
 | **M4** | Handover: packs, takeover/return wizard, rules-file sync, export/import; lineage | Round-trip A→B→A preserves continuity (dogfood criterion) |
-| **M5** | Hardening, signed + notarized self-update, harness update tracking, onboarding polish; fleet transport spike (tonic/rustls prototype) → **v0.1 public beta** | Fresh-machine install → 2 parallel accounts < 5 min; updater works end-to-end on a signed build |
+| **M5** | Hardening, signed + notarized self-update, Provider update tracking, onboarding polish; fleet transport spike (tonic/rustls prototype) → **v0.1 public beta** | Fresh-machine install → 2 parallel accounts < 5 min; updater works end-to-end on a signed build |
 | **M6** | Fleet link: pairing wizard, mDNS discovery, telemetry sync, remote board (read-only) → **v0.2** | Second machine joins in < 60 s with a code; one board across two machines |
 | **M7** | Fleet control: launch/stop/handover from a console, aggregated usage, fleet alerts; Windows/Linux bring-up begins → **v0.3** | Full manage workflow across 3 machines; cross-machine handover demo |
 | **1.0** | Stabilization from beta feedback (protocol, adapters, UX) | Stable update channel opens |
