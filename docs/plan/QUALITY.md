@@ -111,3 +111,22 @@ Date: YYYY-MM-DD · Commit: <sha> · Report: docs/qa/gate-MX.md
 ## 9. Reviewer checklist (mirrored in the PR template)
 
 Structure & naming · layering conformance · error handling · test quality (not just presence) · docs on public APIs · CHANGELOG · fixture corpus grown if parsers touched · no secrets/unsafe · bench impact for hot paths · ADR if a decision was made.
+
+
+## Gate vocabulary (AJ-E806 — one green/red definition everywhere)
+
+| Gate name | Command | Runs on |
+|---|---|---|
+| verify | `just verify` (fmt, clippy -D warnings, tests, docs, **evidence**) | every PR |
+| ui | `pnpm --dir ui build` (tsc + vite) | every PR |
+| visual | `pnpm --dir ui visual:compare` (AJ-E803, thresholds + triptychs) | UI-changing PRs |
+| a11y | `pnpm --dir ui a11y` (AJ-E804, axe 0 critical, both themes) | UI-changing PRs |
+| perf | AJ-E805 measured table | milestones |
+| evidence | `./scripts/evidence_check.sh` | inside verify |
+
+Rules: a gate is never weakened, skipped, or re-thresholded without a
+PR stating reason + task ID + maintainer approval, recorded as a
+quality decision in the evidence manifest. Flaky gates are
+quarantined with a task ID and a 14-day expiry — never retried
+silently. visual/a11y attach when they exist (AJ-E803/E804); until
+then their absence is a recorded DEFERRED, not a silent pass.

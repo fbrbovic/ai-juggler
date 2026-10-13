@@ -213,6 +213,14 @@ export default function App() {
         event.preventDefault();
         setNewSession(true);
       }
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.shiftKey &&
+        event.key.toLowerCase() === "l"
+      ) {
+        event.preventDefault();
+        void import("./theme").then((theme) => theme.cycleTheme());
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

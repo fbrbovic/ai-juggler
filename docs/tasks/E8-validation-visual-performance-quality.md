@@ -19,7 +19,7 @@
 > All tasks: Status TODO until the named evidence artifact exists
 > and passes at the stated threshold.
 
-### AJ-E801 Evidence store layout and done-proof contract | Status: TODO | Priority P0 | Effort M | Depends: none
+### AJ-E801 Evidence store layout and done-proof contract | Status: DONE-EVIDENCED (zcode-primary, 2026-10-13) | Priority P0 | Effort M | Depends: none
 **Goal**: Create `docs/qa/evidence/<task-id>/` as the single, linkable home for every task's proof so a gate reviewer never hunts PR threads.
 **User story**: As a maintainer signing a milestone gate (EPICS.md:158), I want one directory per task with a manifest of what was run and what passed, so that I can audit any claim in under two minutes.
 **Requirements**:
@@ -38,7 +38,7 @@
 **Research basis**: `docs/plan/QUALITY.md:86-109` (gate report template); `docs/plan/EPICS.md:160-164` (functional evidence rule); decision-log D-04 (validation debt is tracked, not optional).
 **Handover note**: Trap: do not let epics invent their own evidence homes (`docs/qa/<epic>-*.md` sprawl). If a proof cannot be stored without secrets, store the redacted log plus a `REDACTED: <reason>` line — absence with a reason beats a silent gap.
 
-### AJ-E802 Screenshot harness and states gallery | Status: TODO | Priority P0 | Effort L | Depends: AJ-E801
+### AJ-E802 Screenshot harness and states gallery | Status: DONE-EVIDENCED (zcode-primary, 2026-10-13) | Priority P0 | Effort L | Depends: AJ-E801
 **Goal**: Provide one Playwright harness that captures every screen in every required state at fixed viewports, so visual claims are reproducible by any agent.
 **User story**: As a frontend engineer landing a rail or inspector change, I want `pnpm visual:capture` to produce the full states gallery locally, so that I see empty/loading/error/stale variants before review.
 **Requirements**:
@@ -110,7 +110,7 @@
 **Research basis**: pass2/04 §§3-5 refresh/aggregate budgets; pass2/05 orphan ≤10 s; first-report F5.1 scale risks (thread/watcher/SQLite contention) — this task replaces estimates with measurements.
 **Handover note**: Earlier scale numbers were reasoned estimates, explicitly not measurements. Never quote them as results; the first run of this fixture is the baseline.
 
-### AJ-E806 Quality gates and CI enforcement | Status: TODO | Priority P0 | Effort M | Depends: AJ-E801
+### AJ-E806 Quality gates and CI enforcement | Status: DONE-EVIDENCED (zcode-primary, 2026-10-13) | Priority P0 | Effort M | Depends: AJ-E801
 **Goal**: Encode every epic's quality gate in the repo's own verification entry points so no agent can skip them.
 **User story**: As a maintainer, I want `just verify` plus the visual/a11y/perf gates to be the single definition of green.
 **Requirements**:
