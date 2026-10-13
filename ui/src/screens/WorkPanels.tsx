@@ -196,11 +196,13 @@ export function SessionPanel({
 export function ProjectPanel({
   project,
   sessions,
+  accounts,
   onOpenSession,
   onLaunch,
 }: {
   project: ProjectInfo;
   sessions: SessionInfo[];
+  accounts: AccountInfo[];
   onOpenSession: (id: string) => void;
   onLaunch: (profile: ProfileInfo, project: ProjectInfo) => void;
 }) {
@@ -253,22 +255,34 @@ export function ProjectPanel({
             Launch with another account
           </p>
           <div className="flex flex-col gap-1.5">
-            {(profiles ?? []).slice(0, 5).map((profile) => (
-              <button
-                key={profile.id}
-                type="button"
-                onClick={() => onLaunch(profile, project)}
-                className="flex items-center gap-2 rounded-lg border border-hairline px-3 py-2 text-left text-xs transition-colors hover:border-accent/40 hover:bg-surface"
-              >
-                <IconTerminal width={13} height={13} />
-                <span className="font-medium">{profile.account_label}</span>
-                <span className="text-faint">·</span>
-                <span className="text-muted">{profile.name}</span>
-                {profile.model && (
-                  <span className="ml-auto font-mono text-[10px] text-faint">{profile.model}</span>
-                )}
-              </button>
-            ))}
+            {(profiles ?? []).slice(0, 5).map((profile) => {
+              const ready =
+                accounts.find((a) => a.id === profile.account_id)?.login_state === "logged_in";
+              return (
+                <button
+                  key={profile.id}
+                  type="button"
+                  disabled={!ready}
+                  title={ready ? undefined : "Needs sign-in first (Ready home)"}
+                  onClick={() => onLaunch(profile, project)}
+                  className={
+                    "flex items-center gap-2 rounded-lg border px-3 py-2 text-left text-xs transition-colors " +
+                    (ready
+                      ? "border-hairline hover:border-accent/40 hover:bg-surface"
+                      : "border-hairline/50 opacity-50")
+                  }
+                >
+                  <IconTerminal width={13} height={13} />
+                  <span className="font-medium">{profile.account_label}</span>
+                  <span className="text-faint">·</span>
+                  <span className="text-muted">{profile.name}</span>
+                  {profile.model && (
+                    <span className="ml-auto font-mono text-[10px] text-faint">{profile.model}</span>
+                  )}
+                  {!ready && <Chip tone="neutral">sign in first</Chip>}
+                </button>
+              );
+            })}
             {(profiles ?? []).length === 0 && (
               <p className="text-xs text-muted">
                 No profiles yet — add an account first (Accounts, top right).
