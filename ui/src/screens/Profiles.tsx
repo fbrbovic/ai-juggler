@@ -188,6 +188,8 @@ function AccountCard({
   onLogin: () => void;
   onLoginRechecked: () => Promise<void>;
 }) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const onToggleSettings = () => setSettingsOpen((v) => !v);
   const loggedIn = account.login_state === "logged_in";
   const loginTone: ChipTone = loggedIn ? "success" : "warning";
   return (
@@ -210,21 +212,47 @@ function AccountCard({
               Log in
             </Button>
           )}
-          <Button size="sm" variant="ghost" onClick={onNewProfile}>
-            + Profile
-          </Button>
         </div>
       </div>
 
-      <div className="divide-y divide-hairline">
+      <div className="flex items-center gap-2 border-t border-hairline px-5 py-3">
+        <Button
+          size="sm"
+          variant="primary"
+          disabled={profiles.length === 0 || !loggedIn}
+          title={loggedIn ? "Starts an Instance on this Account" : "Sign in first (Ready home)"}
+          onClick={() => onLaunch(profiles[0])}
+        >
+          <IconTerminal width={13} height={13} />
+          Start on {account.label}
+        </Button>
+        <Button size="sm" variant="secondary" onClick={onToggleSettings}>
+          Edit launch settings {settingsOpen ? "▾" : "▸"}
+        </Button>
+        <span className="ml-auto text-[11px] text-faint">
+          Applies when you start on this account.
+        </span>
+      </div>
+
+      <div className={settingsOpen ? "divide-y divide-hairline" : "hidden"}>
+        <div className="flex items-center justify-between px-5 py-2">
+          <span className="text-[11px] uppercase tracking-wider text-faint">Launch settings</span>
+          <button
+            type="button"
+            className="rounded-md px-2 py-1 text-[11px] text-muted hover:bg-surface hover:text-ink"
+            onClick={onNewProfile}
+          >
+            ＋ New settings set
+          </button>
+        </div>
         {profiles.length === 0 ? (
           <div className="px-5 py-4 text-xs text-faint">
-            No profiles yet — add one to launch sessions under this account.
+            No launch settings yet — the default applies when you start.
           </div>
         ) : (
           profiles.map((profile) => (
             <div key={profile.id} className="group flex items-center gap-3 px-5 py-2.5">
-              <span className="text-sm">{profile.name}</span>
+              <span className="text-sm">{profile.name === "Main" ? "Default" : profile.name}</span>
               {profile.model ? (
                 <Chip tone="neutral">{profile.model}</Chip>
               ) : (

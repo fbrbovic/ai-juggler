@@ -410,3 +410,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `launch_settings()` accessor pending AJ-E105's field rename;
   `SessionInfo.conversation_id` exposes the conversation in the
   view-model; 83 tests green.
+
+### E1 Phase B3 (AJ-E105) — Launch settings demotion
+
+- `Profile` → `LaunchRecipe` canonically (`Profile`/`LaunchRecipeId`
+  aliases retained one minor version); stored values untouched
+  (alias round-trip test green).
+- Accounts screen: per-Account "Start on <label>" primary (disabled
+  with reason while signed out) + "Edit launch settings" section,
+  collapsed by default, with the spec's helper copy; recipe rows show
+  "Default" for the auto-created Main. No new window.alert.
