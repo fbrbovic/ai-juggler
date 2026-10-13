@@ -339,3 +339,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on another account" chips on every session panel.
 - Login-state banner on sign-in terminals; `LaunchMode::Resume` in the
   adapter contract.
+
+### Stage 1 — plan documents rewritten to the settled decisions (D-01..D-15)
+
+- Decision log marked **Final** on maintainer instruction (2026-10-13);
+  second-opinion review corpus committed (two-pass reports, competitive
+  reviews, 107-task E-catalog with evidence contracts, 27 wireframes).
+- SPEC rewritten where the decisions demanded it: §3 domain
+  (Provider/Account/Instance vocabulary, Switch Graph, spawn ledger,
+  pack v2, honesty states), §5 (ledger-owned verified cleanup, D-08
+  tiers), §6 (two clocks, D-12), §7 (unlimited bidirectional
+  Switching, hybrid door, switch-back resume+delta, per-pair fidelity
+  badges), §9 (Inspector-primary UX, indicator grammar, Cleanup
+  Centre), §11 (Fleet at launch, D-13), §12.1 (cross-Provider
+  onboarding).
+- PROPOSAL re-centered (Switch → See → Clean; D-09 tagline); EPICS
+  resequenced with phase frame, slip rule, and expanded gate evidence.
+- ADR-0008..0013 accepted (terminology, pack v2 + user-owned
+  redaction, spawn ledger, Switch Graph, two clocks, Fleet at launch);
+  ADR-0003's automation invariant gains its two recorded amendments.
+- README truth-fixed (shipped vs specified vs labelled-beta table);
+  docs/qa/beta-exit.md defines the eight beta-exit gates.
+- Billing/renewal API research recorded (docs/research/billing-apis.md):
+  no sanctioned public renewal endpoints found for any Provider —
+  subscription clocks stay user-entered (D-12).
+- AJ-E901..E910 DONE-EVIDENCED with per-task evidence manifests and
+  the Stage-1 acceptance packet (docs/qa/evidence/AJ-E910/). No
+  product code changed (scope proof in the packet).

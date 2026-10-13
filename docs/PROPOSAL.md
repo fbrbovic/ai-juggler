@@ -7,11 +7,11 @@ Companion document: [Technical specification](./SPEC.md) · Evidence base: [rese
 
 ## 1. Summary
 
-AI Juggler is a free, open-source, native desktop app (Rust + Tauri) for developers who run **multiple AI coding subscriptions and harnesses** — Claude Code, Codex, ZCode, and later others — on one machine. It does three things no existing tool does together:
+AI Juggler is a free, open-source, native desktop app (Rust + Tauri) for developers who run **multiple AI coding subscriptions and harnesses** — Claude Code, Codex, ZCode, and later others — on one machine. Its thesis, in one line: **Start anywhere. Switch when you hit the wall. Never lose the thread — or leave a zombie behind.** One console for every Provider, Account, and Instance you juggle. It does three things no existing tool does together:
 
-1. **Profiles & parallelism** — define *profiles* (harness × account × settings), launch and run them side by side with one click; per-account isolation is handled for you.
-2. **Quota awareness & health** — live, visual usage dashboards per account and per plan, plus stuck-session detection across everything that's running.
-3. **Handover** — move work between tools and accounts: import/sync/export projects and chat sessions, let a fresh session take over mid-task when you choose, and hand control back later.
+1. **Switch** — unlimited, bidirectional switching of the *work* (conversation, context, rules, project state) between Accounts and Providers: one click when the pair is proven, an itemised wizard when lossy; switch back resumes the original with a delta of the excursion. Quota walls *trigger* switching; they are not the product.
+2. **See** — a right-hand Inspector for any selection (Provider, Account, Instance, Session, Project): usage, history, quality signals, owned processes, and the actions to manage them — honest fields only.
+3. **Clean** — every process AI Juggler spawns is owned to the end: verified leftovers surface in a Cleanup Centre; automatic cleanup exists only as a per-Account opt-in on verified-owned processes, always audit-logged.
 
 It is explicitly **not** another agent or harness. It orchestrates the tools you already have installed — a supervisor, never a middleman.
 
@@ -28,9 +28,9 @@ Modern AI-assisted development means several subscriptions across several tools.
 
 ### Goals
 
-- **G1 — One place to launch and manage** every harness profile you own, running in parallel without interference.
-- **G2 — Know before you go:** accurate, visual, per-account usage and quota state across all harnesses, with alerts before walls are hit.
-- **G3 — Never lose momentum:** user-initiated handover of a task to another session/account/tool, with a structured context pack, and the ability to hand control back when a quota window resets.
+- **G1 — One place to launch and manage** every Provider/Account you own, Instances running in parallel without interference.
+- **G2 — Know before you go:** accurate, visual, per-Account usage across all Providers — window clocks and (user-entered) subscription clocks — with alerts before walls are hit.
+- **G3 — Never lose momentum:** user-initiated, unlimited, bidirectional switching between Accounts and Providers, with a portable context pack, switch-back that resumes the original, and lineage visible in a Switch Graph.
 - **G4 — See everything:** a live session board — what's running, what's idle, what's stuck, what died.
 - **G5 — Extensible:** adding a new harness is an adapter, not a rewrite. Claude Code, Codex, ZCode first; the adapter API is public.
 - **G6 — Trustworthy:** local-first, credentials never handled or stored by the app, signed self-updates, resilient by construction.
@@ -70,7 +70,7 @@ AI Juggler's differentiator includes being **the most conservative tool in this 
 
 ## 6. Product concept
 
-### 6.1 Profiles & parallelism
+### 6.1 Providers, Accounts & parallelism (terminology per ADR-0008)
 
 A **profile** = harness + account + settings overlay (model, permissions, MCP servers, env). The app materializes each profile as an isolated harness state directory (`CLAUDE_CONFIG_DIR` for Claude Code, `CODEX_HOME` for Codex, per-account `HOME` for ZCode — the mechanisms research verified as working today) and launches the real CLI into it. Parallel profiles of the same tool no longer fight over one `~/.claude`/`~/.codex`/`~/.zcode`. Switching which account the *next* session uses is one click; running sessions are never switched underneath you.
 
@@ -82,7 +82,17 @@ Every running session across all harnesses in one live view: status (running / w
 
 Per-account and cross-account views: current 5-hour window and weekly/credit pools (Claude Pro/Max rate-limit feed from statusline JSON; Codex estimated from rollout token records; ZCode computed exactly from its local `model_usage` table and the published credit formula), burn-down trends (uPlot), reset timers, and alerts at configurable thresholds — including *before* starting a long task: "this session will likely exhaust account A's window; account B has 80% headroom."
 
-### 6.4 Handover & session sync
+### 6.4 Switching (unlimited & bidirectional) & session sync
+
+Moving work between tools and accounts — as many times as needed, back
+and forth — with chat history, context, rules and project state intact:
+one-click for proven same-Provider pairs, an itemised wizard for lossy
+or cross-Provider moves (labelled beta with per-pair fidelity badges),
+switch-back that resumes the original conversation plus one summarised
+delta turn. Post-close **process ownership** is part of this pillar:
+the dev servers, watchers and MCP transports an Instance spawned are
+tracked, surfaced, and (only on opt-in per Account) cleaned — verified,
+and audit-logged.
 
 The goal is **actual session continuity — sessions and chats moved with their context — not just a generated hand-off prompt**:
 

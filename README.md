@@ -1,10 +1,23 @@
 # 🤹 AI Juggler
 
-**One native desktop app to juggle all your AI coding agents.**
+**Start anywhere. Switch when you hit the wall. Never lose the thread — or leave a zombie behind.**
 
-AI Juggler is a desktop app for developers who run multiple AI coding subscriptions and harnesses — **Claude Code**, **Codex**, **ZCode**, and more — and are tired of juggling them by hand.
+*One console for every Provider, Account, and Instance you juggle.*
 
-> **Status: spec phase.** The product proposal and technical specification are being drafted for community review — see [docs](./docs). No releases yet. Watch the repo or join the discussion in GitHub Issues/Discussions.
+AI Juggler is a free, open-source, native desktop app (Rust + Tauri 2,
+macOS-first) for developers who run multiple AI coding subscriptions —
+**Claude Code**, **Codex**, **ZCode**, and more — and are tired of
+juggling them by hand. It supervises the tools you already have
+installed: it never proxies traffic, never handles vendor logins, and
+never stores credentials.
+
+> **Status: in beta development.** The engine, Claude Code adapter,
+> instance-centric UI, smart onboarding (machine scan + read-only
+> import + guided sign-in), and handover v0 (labelled beta fidelity —
+> see honesty notes below) are built and continuously validated. The
+> full switching programme (Switch Graph, per-pair fidelity
+> validation), cleanup tiers, usage clocks, and Fleet are specified and
+> in progress — see [docs/tasks](./docs/tasks). No releases yet.
 
 ---
 
@@ -21,13 +34,22 @@ Every developer solves this with a pile of shell scripts, terminal tabs, config-
 
 ## What it will do
 
-| Pillar | Capability |
-| --- | --- |
-| 🎭 **Profiles & parallelism** | Define profiles (tool × account × settings) and launch them in parallel with one click — isolation handled for you |
-| 🔀 **Handover & portability** | Import, sync, and export projects and chat sessions between tools; let a fresh account or different harness take over mid-task, and hand control back when a quota window resets |
-| 📊 **Usage dashboards** | Visual, per-account and per-plan usage and quota tracking, so you always know what you have left before you start a task |
-| 🩺 **Session health** | Live status of every running session, with stuck-session detection and safe lifecycle controls |
-| 🖥️ **Machine health** | RAM/CPU/swap/disk monitoring, overload warnings, launch headroom advice ("can this machine take another session?"), and crash recovery |
+| Pillar | Capability | State |
+| --- | --- | --- |
+| 🔀 **Switch** | Unlimited, bidirectional switching of the work (conversation, context, rules, project state) between Accounts and Providers — one click when the pair is proven, an itemised wizard when lossy; switch-back resumes the original | v0 shipped (beta fidelity, same-Provider); full engine specified ([E2](./docs/tasks/E2-switching-engine.md)) |
+| 👁️ **See** | A right-hand Inspector for any selection (Provider, Account, Instance, Session, Project): usage, history, quality signals, owned processes, actions — honest fields only | specified ([E4](./docs/tasks/E4-indicators-and-inspector.md)); today: instance-centric rail + panels + terminals |
+| 🧹 **Clean** | Every spawned process owned to the end: verified leftovers surfaced, per-Account opt-in automatic cleanup, every kill audited | specified ([E5](./docs/tasks/E5-process-ownership-and-cleanup.md)) |
+| 🎭 **Parallelism** | Accounts per Provider, isolated state dirs, one-click launches from projects or a folder picker | shipped |
+| 🚀 **Smart onboarding** | Scans the machine (including other manager tools' profile roots), imports existing setups read-only, guides the Provider's own sign-in | shipped (Claude Code); cross-Provider generalisation specified ([E3](./docs/tasks/E3-smart-onboarding.md)) |
+| 📊 **Usage (two clocks)** | Window clocks (5h/weekly) that trigger switching + user-entered subscription clocks | specified ([E6](./docs/tasks/E6-quota-cost-and-billing-research.md)) |
+| 🖥️ **Machine health** | RAM/CPU/swap/disk monitoring, overload warnings, launch headroom advice | specified (M3/E4) |
+| 🌐 **Fleet** | Your own machines, paired by code, one console | specified, at-launch beta ([E7](./docs/tasks/E7-fleet-at-launch.md)) |
+
+**Honesty notes:** switching between *different* Providers is labelled
+beta with per-pair fidelity badges — never marketed as lossless;
+cross-Provider claims always carry the badge. Cross-machine switches
+require matching binary versions and repo paths (surfaced in the
+wizard).
 | 🔗 **Fleet link** | Connect multiple computers over your network (pairing code, end-to-end secured) — see and manage every session across all of them from one console |
 | 🧩 **Extensible by design** | A clean adapter architecture — Claude Code, Codex, and ZCode first, new harnesses without changing the core |
 
