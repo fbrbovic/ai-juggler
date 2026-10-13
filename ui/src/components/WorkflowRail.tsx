@@ -32,6 +32,7 @@ import {
   StaleChip,
   attentionBadge,
   attentionSuffix,
+  attentionTooltip,
   ariaSummary,
   isActiveStatus,
   providerMark,
@@ -1043,6 +1044,7 @@ export function SessionRow({
         <span className="ml-auto inline-flex shrink-0 items-center gap-1">
           {badge ? (
             <span
+              title={attentionTooltip(session)}
               className={
                 "inline-flex items-center gap-1 rounded-full border px-1.5 py-px text-[10px] font-medium " +
                 chipToneClasses[badge.tone]
@@ -1260,6 +1262,7 @@ export function SessionCard({ session, onSelect }: { session: InstanceInfo; onSe
         <span className="ml-auto inline-flex shrink-0 items-center gap-1">
           {badge ? (
             <span
+              title={attentionTooltip(session)}
               className={
                 "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium " +
                 chipToneClasses[badge.tone]

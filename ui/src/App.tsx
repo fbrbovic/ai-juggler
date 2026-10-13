@@ -7,7 +7,7 @@ import {
   IconTerminal,
   IconUsage,
 } from "./components/icons";
-import { IndicatorLegend } from "./components/indicator";
+import { AttentionAnnouncer, IndicatorLegend } from "./components/indicator";
 import {
   DENSITY_ORDER,
   isDensityShortcut as isDensityShortcutEvent,
@@ -360,6 +360,7 @@ export default function App() {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden">
+      <AttentionAnnouncer sessions={sessions} />
       <WorkflowRail
         tab={tab}
         onTab={setTab}

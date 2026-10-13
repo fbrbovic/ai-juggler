@@ -12,12 +12,17 @@
 )]
 
 pub mod error;
+pub mod heuristics;
 pub mod journal;
 pub mod lifecycle;
 pub mod ring;
 pub mod supervisor;
 
 pub use error::SupervisorError;
+pub use heuristics::{
+    AttentionTransition, HeuristicEngine, HeuristicInputs, HeuristicThresholds, prompt_alive,
+    quota_signature,
+};
 pub use journal::{AdoptedProcess, Journal};
 pub use lifecycle::{ExitKind, LifecycleEvent};
 pub use ring::OutputRing;

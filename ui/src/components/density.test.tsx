@@ -43,6 +43,7 @@ function mk(overrides: Partial<InstanceInfo> = {}): InstanceInfo {
     git_branch: "main",
     git_dirty_count: null,
     needs_attention: null,
+    attention: null,
     started_at_ms: NOW - 42 * 60_000,
     last_activity_ms: NOW - 10_000,
     machine_id: "this-mac",

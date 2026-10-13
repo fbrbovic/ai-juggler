@@ -1,12 +1,12 @@
 //! Application state: storage, adapter registry, supervisor — the single
 //! backend instance behind every Tauri command (spec §2).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use juggler_adapter::AdapterRegistry;
 use juggler_core::storage::Storage;
-use juggler_supervisor::{LiveStatsCollector, Supervisor};
+use juggler_supervisor::{HeuristicEngine, HeuristicThresholds, LiveStatsCollector, Supervisor};
 
 /// Everything the commands operate on. `storage` is `Mutex`-wrapped:
 /// rusqlite connections are `Send` but not `Sync`.
@@ -23,6 +23,9 @@ pub struct AppState {
     /// owns the persistent process table so CPU% deltas survive ticks.
     /// Lock ordering: never held together with `storage`.
     pub resources: Mutex<LiveStatsCollector>,
+    /// Stuck/waiting/quota heuristics (AJ-E405); thresholds user-tunable
+    /// via `heuristics.json`.
+    pub heuristics: HeuristicEngine,
     /// Terminal ids with a live output forwarder (dedup: one forwarder per
     /// terminal no matter how often the UI re-attaches).
     pub terminal_taps: Mutex<std::collections::HashSet<String>>,
@@ -79,6 +82,7 @@ impl AppState {
             registry,
             storage: Mutex::new(storage),
             resources: Mutex::new(LiveStatsCollector::new()),
+            heuristics: HeuristicEngine::new(load_thresholds(&data_dir)),
             terminal_taps: Mutex::new(std::collections::HashSet::new()),
             data_dir,
         })
@@ -110,4 +114,14 @@ pub fn resolve_data_dir() -> Result<PathBuf, String> {
     dirs::data_dir()
         .map(|base| base.join("AI Juggler"))
         .ok_or_else(|| "no OS data directory available".to_string())
+}
+
+/// Loads the user-tunable heuristic thresholds from `heuristics.json`;
+/// missing/corrupt files fall back to the SPEC §5.1 defaults (never a
+/// crash — the Settings screen lands with its own task and writes here).
+fn load_thresholds(data_dir: &Path) -> HeuristicThresholds {
+    std::fs::read_to_string(data_dir.join("heuristics.json"))
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
 }
