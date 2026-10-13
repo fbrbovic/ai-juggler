@@ -68,6 +68,44 @@ body {
   background-attachment: fixed;
 }
 
+/*
+ * D-16 dual theme (Light + Dark). Dark is the default; the token names
+ * never change — only their values. [data-theme] is set on <html> by
+ * the theme controller (System/Light/Dark, ⌘⇧L cycles, persisted).
+ */
+[data-theme="light"] {
+  --color-canvas: #f7f8fb;
+  --color-canvas-hi: #eef0f6;
+  --color-surface: #ffffff;
+  --color-surface-2: #f2f4f9;
+  --color-surface-3: #e7eaf2;
+  --color-hairline: #d8dde8;
+
+  --color-ink: #171c26;
+  --color-muted: #57607a;
+  --color-faint: #8a92a6;
+
+  --color-accent: #5b5bf0;
+  --color-accent-hi: #4646e0;
+  --color-accent-soft: #5b5bf016;
+  --color-live: #0891b2;
+  --color-live-soft: #0891b216;
+
+  --color-success: #059669;
+  --color-success-soft: #05966914;
+  --color-warning: #b45309;
+  --color-warning-soft: #b4530914;
+  --color-danger: #dc2626;
+  --color-danger-soft: #dc262614;
+}
+
+[data-theme="light"] body {
+  background-image:
+    radial-gradient(1100px 700px at 12% -12%, #5b5bf00a, transparent 60%),
+    radial-gradient(900px 600px at 95% 8%, #0891b206, transparent 55%),
+    linear-gradient(180deg, var(--color-canvas-hi), var(--color-canvas) 40%);
+}
+
 ::selection {
   background: var(--color-accent-soft);
 }
@@ -153,4 +191,18 @@ main::-webkit-scrollbar-thumb:hover {
 main ::-webkit-scrollbar-track,
 main::-webkit-scrollbar-track {
   background: transparent;
+}
+
+
+/* Reduced motion: freeze micro-transitions and the live pulse —
+   accessibility (WCAG 2.3.3) and deterministic visual captures. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .dot-live, .animate-breathe {
+    animation: none !important;
+  }
 }

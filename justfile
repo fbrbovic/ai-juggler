@@ -9,6 +9,16 @@ verify:
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
     cargo doc --workspace --no-deps
+    just evidence
+
+# Evidence-store gate (AJ-E801): link resolution + secret scan + index freshness.
+evidence:
+    ./scripts/evidence_check.sh
+
+# UI gate (AJ-E806): typecheck + build. Visual (AJ-E803) and a11y (AJ-E804)
+# gates attach to UI-changing PRs; perf (AJ-E805) at milestones.
+ui:
+    pnpm --dir ui build
 
 fmt:
     cargo fmt --all

@@ -47,7 +47,26 @@ export function hasLiveBackend(): boolean {
   return hasBackend;
 }
 
-// --- design-preview mocks (plain-browser mode only) -----------------------
+// --- design-preview mocks (plain-browser + visual harness) ----------------
+// The harness (AJ-E802) seeds `window.__AIJ_FIXTURE__` before this module
+// loads; mock calls then serve the seeded fixture set (deterministic
+// captures) instead of the defaults below.
+
+export interface FixtureSet {
+  accounts: AccountInfo[];
+  profiles: ProfileInfo[];
+  sessions: SessionInfo[];
+  projects: ProjectInfo[];
+  stats: StatsInfo;
+}
+
+declare global {
+  interface Window {
+    __AIJ_FIXTURE__?: Partial<FixtureSet>;
+  }
+}
+
+const seeded = (typeof window !== "undefined" && window.__AIJ_FIXTURE__) || {};
 
 const MOCK_ACCOUNTS: AccountInfo[] = [
   { id: "claude-work", harness: "claude-code", label: "Work Max", plan: Some("max-20x"), login_state: "logged_in" },
@@ -60,9 +79,10 @@ const MOCK_PROFILES: ProfileInfo[] = [
   { id: "p-3", name: "Weekend build", account_id: "claude-personal", account_label: "Personal", harness: "claude-code", model: None(), default_cwd: None() },
 ];
 
-const MOCK_STATS: StatsInfo = { accounts: 2, profiles: 3, active_sessions: 0 };
+const MOCK_STATS: StatsInfo =
+  seeded.stats ?? { accounts: 2, profiles: 3, active_sessions: 0 };
 
-const MOCK_SESSIONS: SessionInfo[] = [
+const MOCK_SESSIONS: SessionInfo[] = seeded.sessions ?? [
   {
     id: "sess-live-1",
     profile_id: "p-1",
@@ -95,7 +115,7 @@ const MOCK_SESSIONS: SessionInfo[] = [
   },
 ];
 
-const MOCK_PROJECTS: ProjectInfo[] = [
+const MOCK_PROJECTS: ProjectInfo[] = seeded.projects ?? [
   {
     id: "proj-ai-juggler",
     root: "/Users/you/Dev/ai-juggler",
@@ -148,7 +168,7 @@ export async function harnessesList(): Promise<HarnessInfo[]> {
 
 export async function accountsList(): Promise<AccountInfo[]> {
   if (!hasBackend) {
-    return MOCK_ACCOUNTS;
+    return seeded.accounts ?? MOCK_ACCOUNTS;
   }
   return invoke<AccountInfo[]>("accounts_list");
 }
@@ -256,7 +276,7 @@ export async function accountLoginState(accountId: string): Promise<string> {
 
 export async function profilesList(): Promise<ProfileInfo[]> {
   if (!hasBackend) {
-    return MOCK_PROFILES;
+    return seeded.profiles ?? MOCK_PROFILES;
   }
   return invoke<ProfileInfo[]>("profiles_list");
 }

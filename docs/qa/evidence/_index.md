@@ -1,0 +1,17 @@
+# Evidence index (generated — do not edit; run scripts/evidence_index.sh)
+
+| Task | Verdicts | Last date | Manifest |
+|---|---|---|---|
+| AJ-E801 | PASS5 | 2026-10-13 | [manifest](AJ-E801/manifest.md) |
+| AJ-E802 | PASS7 | 2026-10-13 | [manifest](AJ-E802/manifest.md) |
+| AJ-E806 | PASS4 | 2026-10-13 | [manifest](AJ-E806/manifest.md) |
+| AJ-E901 | (no claims yet) | 2026-10-13 | [manifest](AJ-E901/manifest.md) |
+| AJ-E902 | (no claims yet) | 2026-10-13 | [manifest](AJ-E902/manifest.md) |
+| AJ-E903 | (no claims yet) | 2026-10-13 | [manifest](AJ-E903/manifest.md) |
+| AJ-E904 | (no claims yet) | 2026-10-13 | [manifest](AJ-E904/manifest.md) |
+| AJ-E905 | (no claims yet) | 2026-10-13 | [manifest](AJ-E905/manifest.md) |
+| AJ-E906 | (no claims yet) | — | [manifest](AJ-E906/manifest.md) |
+| AJ-E907 | (no claims yet) | — | [manifest](AJ-E907/manifest.md) |
+| AJ-E908 | (no claims yet) | — | [manifest](AJ-E908/manifest.md) |
+| AJ-E909 | (no claims yet) | 2026-10-13 | [manifest](AJ-E909/manifest.md) |
+| AJ-E910 | (directory without manifest — add one) | — | — |

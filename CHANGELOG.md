@@ -366,3 +366,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - AJ-E901..E910 DONE-EVIDENCED with per-task evidence manifests and
   the Stage-1 acceptance packet (docs/qa/evidence/AJ-E910/). No
   product code changed (scope proof in the packet).
+
+### Stage 2 begins — E8 evidence machinery (AJ-E801/E802/E806) + D-16 themes
+
+- **Evidence store (AJ-E801)**: `docs/qa/evidence/<task-id>/` with the
+  manifest template (6 fields + redaction checklist), a generated
+  `_index.md`, and `scripts/evidence_check.sh` (gate-doc link
+  resolution, credential-pattern secret scan, index freshness) wired
+  into `just verify` and the CI verify job.
+- **Visual harness (AJ-E802)**: Playwright against the production
+  build with seedable bridge fixtures — all 9 SessionStatus values,
+  honest-empty and ready-home sets; capture matrix 4 viewports
+  (incl. Tauri's 1024×680 minimum and 390×844) × 2 themes; 41
+  captures; browsable generated gallery; byte-identical determinism
+  self-test (pinned clock + reduced-motion); not-yet-existing states
+  recorded as NOT CAPTURED with owning task IDs, never omitted.
+- **Gates (AJ-E806)**: single gate vocabulary across justfile /
+  QUALITY.md / CI (verify, ui, evidence now; visual/a11y/perf named
+  with owners); seeded-failure proofs for unit and visual gates
+  (captured red, then green after removal); a11y seeded failure
+  recorded DEFERRED → AJ-E804.
+- **D-16 dual theme implemented**: Light + Dark token layer (values
+  only — token names unchanged), System/Light/Dark choice persisted,
+  `⌘⇧L` cycles, flash-free init, WCAG-minded light palette; both
+  themes captured in the gallery.
