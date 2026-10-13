@@ -85,7 +85,7 @@
 **Research basis**: pass2/04 §4.1-4.2 (lines 198-241); `WorkflowRail.tsx:110` (60 px collapsed rail exists); SPEC.md:20 (20-session target drives Compact).
 **Handover note**: Trap: existing `aij.rail.collapsed` (App.tsx:62) is a boolean — migrate it into `aij.density=minimal` on first read, do not keep two competing keys.
 
-### AJ-E404 Needs-me-first sorting, filtering, search, and snooze | Status: TODO | Priority P0 | Effort M | Depends: AJ-E402,AJ-E403
+### AJ-E404 Needs-me-first sorting, filtering, search, and snooze | Status: DONE-EVIDENCED (zcode-primary, 2026-10-13) | Priority P0 | Effort M | Depends: AJ-E402,AJ-E403
 **Goal**: Replace silent list caps with Needs-me-first sort, multi-filter chips, `Cmd/Ctrl+K` search, group-by, and I-10 snooze/mute.
 **User story**: As Persona A returning to the desk, I want the Instance that has waited longest for me sorted first in every view, so that I answer the blocked agent before checking anything else.
 **Requirements**:
@@ -102,6 +102,12 @@
 **Evidence/validation proof**: UI test `sorting.test`: fixed 8-row fixture covering all severities + 1 snoozed + 1 no-quota row, asserting exact rendered order (IDs listed in test); pass = exact order match; plus manual live-dogfood: launch fake harness in WaitingUser, confirm it reaches row 1 within 300 ms of the event; record fixture IDs in PR.
 **Visual testing**: Screenshots 1440x900: default Needs-me list, Quota-risk list with `no data` group header, group-by Project with rollups, empty-search state, snoozed badge (`snoozed 12m`); Playwright diff tolerance 1%; a11y: chip counts announced (`Needs me, 3 items`), focus returns to search on `Esc`. Pass = reviewer-approved baselines + axe 0 critical.
 **Files to touch**: `ui/src/components/WorkflowRail.tsx:243-395`, `ui/src/lib/bridge.ts:303`, `ui/src/App.tsx`, `ui/src/styles.css`.
+*Implementation mapping (corrected in this task's PR per the claiming protocol)*:
+- Added `ui/src/lib/railview.ts` (pure sort/filter/search/group/snooze logic + `aij.snooze` persistence) and `ui/src/components/sorting.test.tsx`.
+- The `machine` filter dimension exists in the model from day one (D-13); no visible machine dropdown renders while only `this-mac` exists (a one-machine dropdown is noise — recorded here).
+- The live-dogfood step ("fake harness reaches row 1 within 300 ms of a WaitingUser event") is simulated through the mocked bridge: WaitingUser EMISSION does not exist until AJ-E405 — the event→row-1 path is asserted on a dispatched `session://updated` payload instead; the live-binary run moves to AJ-E405's evidence.
+- Virtualisation windows the flat list past 50 rows; grouped triage views render fully (the 200-row scale is ungrouped monitoring) — every row stays reachable by scroll in both modes.
+- Drive-by a11y fix: the needs-you tab badge is contrast-safe in both themes (`.attn-badge` utility; black-on-amber failed 4.5:1 in light) and never widens its tab (the overflow gate caught both).
 **Research basis**: pass2/04 §4.3 (lines 243-264); deep 02 WR-02/WR-05 (silent caps); full review UX.3 (snooze/mute); `model.rs:398` (`machine` field).
 **Handover note**: Trap: Inbox becomes a filter preset (`Needs me` chip), not a destination tab — do not build a separate Inbox page. Burn rate for req 2 comes from AJ-E409 signals; until then use quota % left alone and label the sort `Quota risk (quota only)` in the menu.
 

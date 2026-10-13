@@ -4,6 +4,27 @@ import type { InstanceInfo, ProjectInfo } from "../lib/bridge";
 import type { Density } from "../lib/density";
 import { REFRESH_INTERVALS, staleCaption } from "../lib/density";
 import {
+  GROUP_LABELS,
+  NO_CHIP_FILTERS,
+  SORT_LABELS,
+  isSnoozed,
+  readSnooze,
+  snoozeCaption,
+  sortSessions,
+  storeSnooze,
+  unsnoozedNeedsCount,
+  chipCounts,
+  filterSessions,
+  groupSessions,
+  type ChipFilters,
+  type ChipId,
+  type GroupBy,
+  type RowGroup,
+  type SnoozeState,
+  type SortMode,
+} from "../lib/railview";
+import { Button } from "./primitives";
+import {
   AccountDisc,
   ChildBadges,
   GitBadge,
@@ -34,8 +55,6 @@ const TABS: { id: WorkTab; label: string; icon: ReactNode }[] = [
   { id: "instances", label: "Instances", icon: <IconTerminal width={15} height={15} /> },
   { id: "sessions", label: "Sessions", icon: <IconSessions width={15} height={15} /> },
 ];
-
-const isLive = (status: string) => status === "running" || status === "starting";
 
 const WIDTH_MIN = 208;
 const WIDTH_MAX = 360;
@@ -89,6 +108,14 @@ export function WorkflowRail({
   now?: number;
 }) {
   const minimal = density === "minimal";
+  // Snooze/mute state (AJ-E404 Req.6): rail-owned, persisted; the tab
+  // badge counts UNSNOOZED attention only.
+  const [snooze, setSnooze] = useState<SnoozeState>(() => readSnooze());
+  const updateSnooze = useCallback((next: SnoozeState) => {
+    setSnooze(next);
+    storeSnooze(next);
+  }, []);
+  const unsnoozedNeeds = unsnoozedNeedsCount(sessions, snooze, now);
   const [width, setWidth] = useState<number>(readWidth);
   const [dragging, setDragging] = useState(false);
   const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -181,6 +208,16 @@ export function WorkflowRail({
                   {item.label}
                 </span>
               )}
+              {/* Unsnoozed needs-you count rides the tab (Req.6) —
+                  absolutely positioned so it never widens the tab. */}
+              {item.id === "instances" && unsnoozedNeeds > 0 && (
+                <span
+                  className="attn-badge absolute right-0 top-0 flex items-center justify-center rounded-full px-1 text-[8.5px] font-bold leading-4 ring-1 ring-canvas"
+                  title={`${unsnoozedNeeds} instance${unsnoozedNeeds === 1 ? "" : "s"} need you`}
+                >
+                  !{unsnoozedNeeds}
+                </span>
+              )}
             </button>
           );
         })}
@@ -196,17 +233,8 @@ export function WorkflowRail({
           />
         ) : tab === "projects" ? (
           <ProjectList projects={projects} selectedId={selectedId} onSelect={onSelectProject} />
-        ) : tab === "instances" ? (
-          <InstanceList
-            sessions={sessions}
-            selectedId={selectedId}
-            onSelect={onSelectSession}
-            density={density}
-            freshness={freshness}
-            now={now}
-          />
         ) : (
-          <SessionList
+          <InstanceBoard
             sessions={sessions}
             loginTerminals={loginTerminals}
             selectedId={selectedId}
@@ -214,6 +242,9 @@ export function WorkflowRail({
             density={density}
             freshness={freshness}
             now={now}
+            projects={projects}
+            snooze={snooze}
+            onSnooze={updateSnooze}
           />
         )}
       </div>
@@ -315,62 +346,18 @@ function ProjectList({
   );
 }
 
-function InstanceList({
-  sessions,
-  selectedId,
-  onSelect,
-  density,
-  freshness,
-  now,
-}: {
-  sessions: InstanceInfo[];
-  selectedId: string | null;
-  onSelect: (id: string) => void;
-  density: Density;
-  freshness: Freshness;
-  now: number;
-}) {
-  const live = sessions.filter((s) => isLive(s.status));
-  const rest = sessions.filter((s) => !isLive(s.status)).slice(0, 8);
-  return (
-    <div className="flex flex-col gap-2">
-      <ListSection label="Live now">
-        {live.length === 0 ? (
-          <AllClearExplainer />
-        ) : (
-          live.map((s) => (
-            <SessionRow
-              key={s.id}
-              session={s}
-              selected={s.id === selectedId}
-              onSelect={onSelect}
-              density={density === "minimal" ? "compact" : density}
-              freshness={freshness}
-              now={now}
-            />
-          ))
-        )}
-      </ListSection>
-      {rest.length > 0 && (
-        <ListSection label="Recent">
-          {rest.map((s) => (
-            <SessionRow
-              key={s.id}
-              session={s}
-              selected={s.id === selectedId}
-              onSelect={onSelect}
-              density={density === "minimal" ? "compact" : density}
-              freshness={freshness}
-              now={now}
-            />
-          ))}
-        </ListSection>
-      )}
-    </div>
-  );
-}
+/** Virtualisation threshold: past this many rows the flat list windows. */
+const VIRTUALISE_AT = 50;
+const ROW_HEIGHT = { comfortable: 70, compact: 42 } as const;
 
-function SessionList({
+/**
+ * The sorted/filtered/searchable Instance board (AJ-E404): toolbar above
+ * the list, Needs-me sort by default (snoozed sink below peers, never
+ * disappear), quota-risk with a `no data` group, group-by rollups, ⌘K
+ * search, and windowed rendering past 50 rows. The legacy slice caps are
+ * gone — every matching row is reachable.
+ */
+export function InstanceBoard({
   sessions,
   loginTerminals,
   selectedId,
@@ -378,6 +365,9 @@ function SessionList({
   density,
   freshness,
   now,
+  projects,
+  snooze,
+  onSnooze,
 }: {
   sessions: InstanceInfo[];
   loginTerminals: { id: string; title: string; ended: boolean }[];
@@ -386,60 +376,476 @@ function SessionList({
   density: Density;
   freshness: Freshness;
   now: number;
+  projects: ProjectInfo[];
+  snooze: SnoozeState;
+  onSnooze: (next: SnoozeState) => void;
 }) {
+  const [sort, setSort] = useState<SortMode>("needs");
+  const [group, setGroup] = useState<GroupBy>("none");
+  const [filters, setFilters] = useState<ChipFilters>(NO_CHIP_FILTERS);
+  const [query, setQuery] = useState("");
+  const [menu, setMenu] = useState<{ row: InstanceInfo; x: number; y: number } | null>(null);
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportH, setViewportH] = useState(640);
+
+  // ⌘K focuses the rail search from anywhere (App dispatches the event).
+  useEffect(() => {
+    const focus = () => searchRef.current?.focus();
+    window.addEventListener("aij:focus-search", focus);
+    return () => window.removeEventListener("aij:focus-search", focus);
+  }, []);
+
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    const observe = () => setViewportH(element.clientHeight || 640);
+    observe();
+    // jsdom has no ResizeObserver; the initial measure above suffices.
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(observe);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  const effectiveDensity = density === "minimal" ? "compact" : density;
+  const filtered = filterSessions(sessions, filters, query, projects);
+  const sorted = sortSessions(filtered, sort, snooze, now, projects);
+  // Quota-risk groups the unknowns under `no data` (Req.2); other sorts
+  // group only when the user picked a Group-by.
+  const effectiveGroup: GroupBy | "quota-data" =
+    sort === "quota" && group === "none" ? "quota-data" : group;
+  const groups =
+    effectiveGroup === "quota-data"
+      ? quotaDataGroups(sorted)
+      : groupSessions(sorted, effectiveGroup === "none" ? "none" : effectiveGroup, projects);
+  const counts = chipCounts(sessions);
+
+  // Windowing (Req.7): only the flat, ungrouped list virtualises — the
+  // 200-row scale is ungrouped monitoring; grouped triage views stay
+  // fully rendered. Every row is reachable by scroll in both modes.
+  const flatRows = groups.length === 1 ? (groups[0]?.rows ?? []) : null;
+  let windowed: { start: number; end: number } | null = null;
+  if (flatRows && flatRows.length > VIRTUALISE_AT) {
+    const rowH = ROW_HEIGHT[effectiveDensity];
+    const start = Math.max(0, Math.floor(scrollTop / rowH) - 4);
+    const end = Math.min(flatRows.length, Math.ceil((scrollTop + viewportH) / rowH) + 4);
+    windowed = { start, end };
+  }
+
+  const openMenu = (row: InstanceInfo, x: number, y: number) => setMenu({ row, x, y });
+  const snoozeFor = (row: InstanceInfo, ms: number | null, muted = false) => {
+    const next = { ...snooze };
+    if (muted) next[row.id] = { until: null, muted: true };
+    else next[row.id] = { until: ms === null ? null : Date.now() + ms, muted: false };
+    onSnooze(next);
+    setMenu(null);
+  };
+  const clearSnooze = (row: InstanceInfo) => {
+    const next = { ...snooze };
+    delete next[row.id];
+    onSnooze(next);
+    setMenu(null);
+  };
+
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex min-h-0 flex-1 flex-col gap-2" data-testid="instance-board">
+      {/* Toolbar: search ⌘K, filter chips with counts, Sort/Group + key
+          dropdowns (native selects: accessible + keyboard in a narrow rail). */}
+      <div className="flex flex-col gap-1.5">
+        <div className="relative">
+          <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-faint">⌕</span>
+          <input
+            ref={searchRef}
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setQuery("");
+                searchRef.current?.focus();
+              }
+            }}
+            placeholder="Search ⌘K"
+            aria-label="Search instances by account, project, branch, model or provider"
+            className="w-full rounded-lg border border-hairline bg-surface/70 py-1.5 pl-6 pr-2 text-[11.5px] text-ink outline-none placeholder:text-faint focus-visible:ring-1 focus-visible:ring-accent/60"
+          />
+        </div>
+        <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Filters">
+          <FilterChip active={filters.chips.length === 0 && !filters.provider && !filters.account && !filters.project} onClick={() => setFilters(NO_CHIP_FILTERS)}>
+            All
+          </FilterChip>
+          <FilterChip
+            active={filters.chips.includes("needs")}
+            onClick={() => toggleChip(setFilters, "needs")}
+            count={counts.needs}
+          >
+            Needs me
+          </FilterChip>
+          <FilterChip active={filters.chips.includes("running")} onClick={() => toggleChip(setFilters, "running")} count={counts.running}>
+            Running
+          </FilterChip>
+          <FilterChip active={filters.chips.includes("ended")} onClick={() => toggleChip(setFilters, "ended")} count={counts.ended}>
+            Ended
+          </FilterChip>
+        </div>
+        <div className="flex flex-wrap items-center gap-1">
+          <Select ariaLabel="Sort by" value={sort} onChange={(value) => setSort(value as SortMode)} options={SORT_LABELS.map((entry) => ({ value: entry.id, label: entry.label }))} />
+          <Select ariaLabel="Group by" value={group} onChange={(value) => setGroup(value as GroupBy)} options={GROUP_LABELS.map((entry) => ({ value: entry.id, label: `Group: ${entry.label}` }))} />
+          <Select
+            ariaLabel="Filter by provider"
+            value={filters.provider ?? ""}
+            onChange={(value) => setFilters((current) => ({ ...current, provider: value || null }))}
+            options={[{ value: "", label: "Provider: all" }, ...unique(sessions, (row) => row.provider).map((value) => ({ value, label: value }))]}
+          />
+          <Select
+            ariaLabel="Filter by account"
+            value={filters.account ?? ""}
+            onChange={(value) => setFilters((current) => ({ ...current, account: value || null }))}
+            options={[{ value: "", label: "Account: all" }, ...unique(sessions, (row) => row.account_id).map((value) => ({ value, label: accountLabelOf(sessions, value) }))]}
+          />
+          <Select
+            ariaLabel="Filter by project"
+            value={filters.project ?? ""}
+            onChange={(value) => setFilters((current) => ({ ...current, project: value || null }))}
+            options={[{ value: "", label: "Project: all" }, ...projects.map((project) => ({ value: project.id, label: project.name }))]}
+          />
+        </div>
+      </div>
+
+      {/* Sign-ins ride above the board on the Sessions tab. */}
       {loginTerminals.length > 0 && (
         <ListSection label="Sign-ins">
-          {loginTerminals.map((t) => {
-            const active = t.id === selectedId;
-            return (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => onSelect(t.id)}
-                className={
-                  "relative flex min-w-0 w-full items-center gap-2 rounded-lg py-[7px] pl-3 pr-2.5 text-left outline-none transition-colors " +
-                  "focus-visible:ring-1 focus-visible:ring-accent/60 " +
-                  (active ? "bg-surface" : "hover:bg-surface/60")
-                }
-              >
-                {active && (
-                  <span className="absolute left-0.5 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full bg-accent" />
-                )}
-                <span
-                  className={
-                    "size-1.5 shrink-0 rounded-full " +
-                    (t.ended ? "bg-faint" : "bg-live animate-breathe")
-                  }
-                />
-                <span className="min-w-0 flex-1 truncate text-[12.5px]">{t.title}</span>
-              </button>
-            );
-          })}
+          {loginTerminals.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => onSelect(t.id)}
+              className={
+                "relative flex min-w-0 w-full items-center gap-2 rounded-lg py-[7px] pl-3 pr-2.5 text-left outline-none transition-colors focus-visible:ring-1 focus-visible:ring-accent/60 " +
+                (t.id === selectedId ? "bg-surface" : "hover:bg-surface/60")
+              }
+            >
+              {t.id === selectedId && (
+                <span className="absolute left-0.5 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full bg-accent" />
+              )}
+              <span className={"size-1.5 shrink-0 rounded-full " + (t.ended ? "bg-faint" : "bg-live animate-breathe")} />
+              <span className="min-w-0 flex-1 truncate text-[12.5px]">{t.title}</span>
+            </button>
+          ))}
         </ListSection>
       )}
-      <ListSection label="Sessions">
-        {sessions.length === 0 ? (
-          <p className="px-3 py-1 text-[11px] text-faint">
-            No sessions yet — start one below.
-          </p>
+
+      <div
+        ref={scrollRef}
+        className="rail-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden"
+        onScroll={(event) => setScrollTop((event.target as HTMLDivElement).scrollTop)}
+      >
+        {sorted.length === 0 ? (
+          sessions.length === 0 ? (
+            /* Nothing exists at all — the All-clear explainer (legend
+               surface 3). */
+            <AllClearExplainer />
+          ) : (
+            <div className="flex flex-col items-center gap-2 px-2 py-8 text-center">
+              <p className="text-[11.5px] font-medium text-muted">No instances match</p>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => {
+                  setFilters(NO_CHIP_FILTERS);
+                  setQuery("");
+                  searchRef.current?.focus();
+                }}
+              >
+                Clear filters
+              </Button>
+            </div>
+          )
+        ) : flatRows && windowed ? (
+          <div className="flex flex-col gap-0.5">
+            <div style={{ height: windowed.start * ROW_HEIGHT[effectiveDensity] }} />
+            {flatRows.slice(windowed.start, windowed.end).map((row) => (
+              <BoardRow
+                key={row.id}
+                row={row}
+                selected={row.id === selectedId}
+                onSelect={onSelect}
+                density={effectiveDensity}
+                freshness={freshness}
+                now={now}
+                snooze={snooze}
+                onContextMenu={openMenu}
+              />
+            ))}
+            <div style={{ height: (flatRows.length - windowed.end) * ROW_HEIGHT[effectiveDensity] }} />
+            <p className="px-3 pt-1 text-center text-[9px] text-faint">
+              {flatRows.length} instances
+            </p>
+          </div>
         ) : (
-          sessions.slice(0, 15).map((s) => (
-            <SessionRow
-              key={s.id}
-              session={s}
-              selected={s.id === selectedId}
-              onSelect={onSelect}
-              density={density === "minimal" ? "compact" : density}
-              freshness={freshness}
-              now={now}
-            />
+          groups.map((entry) => (
+            <div key={entry.id} className="mb-1 flex flex-col gap-0.5">
+              {entry.label !== "" && (
+                <p className="flex items-baseline gap-1.5 px-3 pb-0.5 pt-1 text-[10px] font-medium uppercase tracking-[0.08em] text-faint">
+                  <span className="truncate normal-case tracking-normal">{entry.label}</span>
+                  {entry.rollup && <span className="shrink-0 font-normal normal-case tracking-normal text-faint/80">· {entry.rollup}</span>}
+                </p>
+              )}
+              {entry.rows.map((row) => (
+                <BoardRow
+                  key={row.id}
+                  row={row}
+                  selected={row.id === selectedId}
+                  onSelect={onSelect}
+                  density={effectiveDensity}
+                  freshness={freshness}
+                  now={now}
+                  snooze={snooze}
+                  onContextMenu={openMenu}
+                />
+              ))}
+            </div>
           ))
         )}
-      </ListSection>
+      </div>
+
+      {menu && (
+        <RowContextMenu
+          row={menu.row}
+          snooze={snooze}
+          now={now}
+          x={menu.x}
+          y={menu.y}
+          onSnoozeFor={(ms) => snoozeFor(menu.row, ms)}
+          onMute={() => snoozeFor(menu.row, null, true)}
+          onClear={() => clearSnooze(menu.row)}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </div>
   );
+}
+
+function BoardRow({
+  row,
+  selected,
+  onSelect,
+  density,
+  freshness,
+  now,
+  snooze,
+  onContextMenu,
+}: {
+  row: InstanceInfo;
+  selected: boolean;
+  onSelect: (id: string) => void;
+  density: "comfortable" | "compact";
+  freshness: Freshness;
+  now: number;
+  snooze: SnoozeState;
+  onContextMenu: (row: InstanceInfo, x: number, y: number) => void;
+}) {
+  const caption = snoozeCaption(row, snooze, now);
+  return (
+    <div className="group relative">
+      {caption && (
+        <span className="absolute -top-0.5 right-2 z-10 rounded bg-surface-3 px-1 text-[8.5px] font-medium text-muted" title={caption}>
+          {caption}
+        </span>
+      )}
+      <SessionRow
+        session={row}
+        selected={selected}
+        onSelect={onSelect}
+        density={density}
+        freshness={freshness}
+        now={now}
+      />
+      {/* The I-10 context menu trigger (Req.6): right-click the row, or
+          this ⋯ button for pointer-free access. */}
+      <button
+        type="button"
+        aria-label={`Row actions for ${row.account_label}`}
+        aria-haspopup="menu"
+        onClick={(event) => onContextMenu(row, event.clientX, event.clientY)}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          onContextMenu(row, event.clientX, event.clientY);
+        }}
+        className="absolute bottom-1 left-0.5 z-10 rounded px-0.5 text-[10px] text-faint opacity-0 transition-opacity outline-none hover:text-ink focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-accent/60 group-hover:opacity-100"
+      >
+        ⋯
+      </button>
+    </div>
+  );
+}
+
+/** The I-10 context menu: snooze durations + mute (Req.6). */
+function RowContextMenu({
+  row,
+  snooze,
+  now,
+  x,
+  y,
+  onSnoozeFor,
+  onMute,
+  onClear,
+  onClose,
+}: {
+  row: InstanceInfo;
+  snooze: SnoozeState;
+  now: number;
+  x: number;
+  y: number;
+  onSnoozeFor: (ms: number | null) => void;
+  onMute: () => void;
+  onClear: () => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const onDown = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) onClose();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+  const snoozed = isSnoozed(row, snooze, now);
+  const resetAt = row.quota?.resets_at_ms ?? null;
+  const style = {
+    left: Math.min(x, window.innerWidth - 190),
+    top: Math.min(y, window.innerHeight - 190),
+  };
+  return (
+    <div
+      ref={ref}
+      role="menu"
+      aria-label={`Attention options for ${row.account_label}`}
+      style={style}
+      className="fixed z-50 flex w-44 flex-col gap-0.5 rounded-xl border border-hairline bg-surface p-1.5 shadow-card"
+    >
+      <span className="px-2 pb-1 pt-0.5 text-[9.5px] font-medium uppercase tracking-wide text-faint">
+        {row.account_label}
+      </span>
+      {snoozed ? (
+        <MenuButton onClick={onClear}>Unsnooze / unmute</MenuButton>
+      ) : (
+        <>
+          <MenuButton onClick={() => onSnoozeFor(15 * 60_000)}>Snooze 15m</MenuButton>
+          <MenuButton onClick={() => onSnoozeFor(60 * 60_000)}>Snooze 1h</MenuButton>
+          <MenuButton
+            onClick={() => onSnoozeFor(resetAt !== null ? Math.max(0, resetAt - now) : 24 * 60 * 60_000)}
+            disabled={resetAt === null}
+            title={resetAt === null ? "No known reset time for this quota window" : undefined}
+          >
+            Until reset
+          </MenuButton>
+          <MenuButton onClick={onMute}>Mute this instance</MenuButton>
+        </>
+      )}
+    </div>
+  );
+}
+
+function MenuButton({ onClick, disabled, title, children }: { onClick: () => void; disabled?: boolean; title?: string; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className="rounded-lg px-2 py-1 text-left text-[11.5px] text-ink outline-none transition-colors hover:bg-surface-2 focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-default disabled:text-faint disabled:hover:bg-transparent"
+    >
+      {children}
+    </button>
+  );
+}
+
+function FilterChip({ active, onClick, count, children }: { active: boolean; onClick: () => void; count?: number; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      aria-label={count !== undefined ? `${children}, ${count} items` : String(children)}
+      onClick={onClick}
+      className={
+        "rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors outline-none focus-visible:ring-1 focus-visible:ring-accent/60 " +
+        (active
+          ? "border-accent/40 bg-accent-soft text-accent-hi"
+          : "border-hairline text-muted hover:bg-surface hover:text-ink")
+      }
+    >
+      {children}
+      {count !== undefined && <span className="ml-1 tabular-nums opacity-80">{count}</span>}
+    </button>
+  );
+}
+
+function Select({ ariaLabel, value, onChange, options }: { ariaLabel: string; value: string; onChange: (value: string) => void; options: { value: string; label: string }[] }) {
+  return (
+    <select
+      aria-label={ariaLabel}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      className="max-w-full truncate rounded-lg border border-hairline bg-surface/70 px-1.5 py-1 text-[10px] text-muted outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+    >
+      {options.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function toggleChip(
+  setFilters: React.Dispatch<React.SetStateAction<ChipFilters>>,
+  chip: ChipId,
+) {
+  setFilters((current) => {
+    const active = current.chips.includes(chip);
+    return {
+      ...current,
+      chips: active
+        ? current.chips.filter((entry) => entry !== chip)
+        : [...current.chips, chip],
+    };
+  });
+}
+
+function unique(rows: InstanceInfo[], pick: (row: InstanceInfo) => string | null): string[] {
+  return [...new Set(rows.map(pick).filter((value): value is string => value !== null))].sort();
+}
+
+function accountLabelOf(rows: InstanceInfo[], accountId: string): string {
+  return rows.find((row) => row.account_id === accountId)?.account_label ?? accountId;
+}
+
+/** Quota-risk grouping: known quota first, unknown under `no data` (Req.2). */
+function quotaDataGroups(sorted: InstanceInfo[]): RowGroup[] {
+  const known = sorted.filter((row) => row.quota !== null);
+  const unknown = sorted.filter((row) => row.quota === null);
+  const groups: RowGroup[] = [{ id: "quota-known", label: "", rollup: "", rows: known }];
+  if (unknown.length > 0) {
+    groups.push({
+      id: "no-data",
+      label: "no data",
+      rollup: `${unknown.length} without a quota feed`,
+      rows: unknown,
+    });
+  }
+  return groups;
 }
 
 function ListSection({ label, children }: { label: string; children: ReactNode }) {
@@ -521,6 +927,7 @@ export function SessionRow({
         type="button"
         onClick={() => onSelect(session.id)}
         aria-label={ariaSummary(session)}
+        data-instance-id={session.id}
         className={
           "relative flex min-w-0 w-full flex-col gap-0.5 rounded-lg px-2.5 py-1.5 pl-3 text-left outline-none transition-colors " +
           "focus-visible:ring-1 focus-visible:ring-accent/60 " +
@@ -608,6 +1015,7 @@ export function SessionRow({
       type="button"
       onClick={() => onSelect(session.id)}
       aria-label={ariaSummary(session)}
+      data-instance-id={session.id}
       className={
         "relative flex min-w-0 w-full flex-col gap-1 rounded-lg px-2.5 py-2 pl-3 text-left outline-none transition-colors " +
         "focus-visible:ring-1 focus-visible:ring-accent/60 " +

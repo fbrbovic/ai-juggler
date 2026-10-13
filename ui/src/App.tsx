@@ -320,6 +320,12 @@ export default function App() {
         event.preventDefault();
         setNewSession(true);
       }
+      // ⌘K/Ctrl+K focuses the rail search (AJ-E404 Req.4); Esc clears it
+      // inside the input and focus stays there.
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        window.dispatchEvent(new Event("aij:focus-search"));
+      }
       if (isDensityShortcutEvent(event, hasLiveBackend())) {
         event.preventDefault();
         cycleDensity();
@@ -401,9 +407,9 @@ export default function App() {
             </div>
           ) : (
             <div className="flex flex-col gap-1.5 px-3 py-2.5">
-              <div className="flex items-center gap-2">
+              <div className="flex min-w-0 items-center gap-2 overflow-hidden">
                 <span className="dot-live size-1.5 shrink-0 rounded-full bg-success" />
-                <span className="truncate text-[11px]">this-mac · healthy</span>
+                <span className="min-w-0 shrink truncate text-[11px]">this-mac · healthy</span>
                 {/* The rail-footer `?` legend popover (AJ-E403 Req.6,
                     surface 1 of 3 — identical content everywhere). */}
                 <LegendPopover />

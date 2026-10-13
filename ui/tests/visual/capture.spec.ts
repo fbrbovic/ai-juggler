@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "05-session-panel", "16-onboarding-detect"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "16-onboarding-detect"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -252,6 +252,66 @@ test("rail — stale row renders stale - Nm", async ({ page }) => {
   await expect(page.getByText("stale - 3m").first()).toBeVisible();
   await page.screenshot({ path: resolve(GALLERY, "01-rail-density/stale-row-1440x900.png") });
 });
+
+// AJ-E404 captures: the sorted/filtered rail states (1440x900).
+test("rail — needs-me sort default", async ({ page }) => {
+  await seedRail(page, {});
+  await expect(page.getByText("Handed over").first()).toBeVisible();
+  await page.screenshot({ path: resolve(GALLERY, "01-rail-sort/needs-me-1440x900.png") });
+});
+
+test("rail — quota risk with no data group", async ({ page }) => {
+  await seedRail(page, {});
+  await page.selectOption('select[aria-label="Sort by"]', "quota");
+  await expect(page.getByText("no data").first()).toBeVisible();
+  await page.screenshot({ path: resolve(GALLERY, "01-rail-sort/quota-risk-1440x900.png") });
+});
+
+test("rail — group by project with rollups", async ({ page }) => {
+  await seedRail(page, {});
+  await page.selectOption('select[aria-label="Group by"]', "project");
+  await expect(page.getByText(/running/).first()).toBeVisible();
+  await page.screenshot({ path: resolve(GALLERY, "01-rail-sort/group-by-project-1440x900.png") });
+});
+
+test("rail — empty search state", async ({ page }) => {
+  await seedRail(page, {});
+  await page.locator('input[type="search"]').fill("does-not-exist");
+  await expect(page.getByText("No instances match")).toBeVisible();
+  await page.screenshot({ path: resolve(GALLERY, "01-rail-sort/empty-search-1440x900.png") });
+});
+
+test("rail — snoozed badge (snoozed 12m)", async ({ page }) => {
+  const t0 = T0;
+  await seedRail(page, {
+    snooze: { "sess-3": { until: t0 + 12 * 60_000, muted: false } },
+  });
+  await expect(page.getByText("snoozed 12m").first()).toBeVisible();
+  await page.screenshot({ path: resolve(GALLERY, "01-rail-sort/snoozed-1440x900.png") });
+});
+
+/** Shared rail seeding for the sort/filter captures. */
+async function seedRail(
+  page: import("@playwright/test").Page,
+  options: { snooze?: Record<string, { until: number | null; muted: boolean }> },
+) {
+  await page.addInitScript(
+    ({ fixture, t0, snooze }) => {
+      (window as never as { __AIJ_FIXTURE__: unknown }).__AIJ_FIXTURE__ = fixture;
+      if (snooze) localStorage.setItem("aij.snooze", JSON.stringify(snooze));
+      localStorage.setItem("aij.theme", "dark");
+      localStorage.setItem("aij.onboarding.dismissed", "1");
+      sessionStorage.setItem("aij.ready.skipped", "1");
+      Date.now = () => t0;
+    },
+    { fixture: allStatuses, t0: T0, snooze: options.snooze },
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+  await expect(page.getByRole("tab", { name: "Sessions" })).toBeVisible();
+  await page.getByRole("tab", { name: "Sessions" }).click();
+}
 
 // Determinism self-test (Req.4): same fixture twice → byte-identical PNG.
 test("determinism — two captures are byte-identical", async ({ page }) => {  const capture = async (suffix: string) => {
