@@ -232,7 +232,10 @@ fn backfill_real_projects() {
             project.root,
             project.accounts_used,
             project.history_sessions,
-            project.active_instance.as_ref().map(|i| i.label.clone())
+            project
+                .active_instance
+                .as_ref()
+                .map(|i| i.account_label.clone())
         );
     }
 }

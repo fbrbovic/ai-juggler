@@ -232,7 +232,7 @@ export default function App() {
       : selection.kind === "project"
         ? (selectedProject?.name ?? "Project")
         : selectedSession
-          ? selectedSession.label
+          ? selectedSession.account_label
           : selectedLogin
             ? selectedLogin.title
             : tab === "projects"
@@ -506,7 +506,7 @@ function Overview({
               {live.map((s) => (
                 <div key={s.id} className="flex items-center gap-3 py-2.5 text-xs">
                   <span className="dot-live size-1.5 rounded-full bg-live" />
-                  <span className="font-medium">{s.label}</span>
+                  <span className="font-medium">{s.account_label}</span>
                   <span className="text-faint">{s.kind}</span>
                   <Chip tone="live">{s.status}</Chip>
                 </div>

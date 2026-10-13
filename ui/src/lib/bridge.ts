@@ -6,12 +6,17 @@ import type { AccountInfo } from "../types/generated/AccountInfo";
 import type { DiscoveredInfo } from "../types/generated/DiscoveredInfo";
 import type { ImportResult } from "../types/generated/ImportResult";
 import type { InstanceInfo } from "../types/generated/InstanceInfo";
+import type { InstanceQuotaInfo } from "../types/generated/InstanceQuotaInfo";
+import type { InstanceResourcesInfo } from "../types/generated/InstanceResourcesInfo";
 import type { LaunchRecipeInfo } from "../types/generated/LaunchRecipeInfo";
 import type { LaunchResult } from "../types/generated/LaunchResult";
+import type { NeedsAttention } from "../types/generated/NeedsAttention";
 import type { ProjectInfo } from "../types/generated/ProjectInfo";
 import type { ProviderInfo } from "../types/generated/ProviderInfo";
+import type { QuotaSnapshotInfo } from "../types/generated/QuotaSnapshotInfo";
 import type { StatsInfo } from "../types/generated/StatsInfo";
 import type { TerminalInfo } from "../types/generated/TerminalInfo";
+import type { TokenCountsInfo } from "../types/generated/TokenCountsInfo";
 
 export type {
   AppInfo,
@@ -19,12 +24,17 @@ export type {
   DiscoveredInfo,
   ImportResult,
   InstanceInfo,
+  InstanceQuotaInfo,
+  InstanceResourcesInfo,
   LaunchRecipeInfo,
   LaunchResult,
+  NeedsAttention,
   ProjectInfo,
   ProviderInfo,
+  QuotaSnapshotInfo,
   StatsInfo,
   TerminalInfo,
+  TokenCountsInfo,
 };
 
 // Deprecated one-version aliases (AJ-E107).
@@ -36,6 +46,10 @@ export type { InstanceInfo as SessionInfo } from "../types/generated/InstanceInf
 export const EVENTS = {
   appReady: "app://ready",
   sessionsUpdated: "session://updated",
+  /** 5 s resource tick (I-07/I-08 deltas; AJ-E401). */
+  sessionsResources: "session://resources",
+  /** 30 s quota tick (I-05 deltas; AJ-E401). */
+  sessionsQuota: "session://quota",
 } as const;
 
 const hasBackend =
@@ -80,14 +94,34 @@ const MOCK_PROFILES: LaunchRecipeInfo[] = [
 const MOCK_STATS: StatsInfo =
   seeded.stats ?? { accounts: 2, profiles: 3, active_sessions: 0 };
 
+// Mock rows mirror the AJ-E401 read-model fixtures: one full row, one
+// quota-less row, one model-less/terminal row — nulls where the backend
+// reports absence, never zeros or guessed names.
 const MOCK_SESSIONS: InstanceInfo[] = seeded.sessions ?? [
   {
     id: "sess-live-1",
     launch_recipe_id: "p-1",
     provider: "claude-code",
-    label: "Work Max",
+    account_id: "claude-work",
+    account_label: "Work Max",
+    model: Some("opus"),
     status: "running",
+    quota: Some({
+      used_percentage: 42.5,
+      resets_at_ms: Date.now() + 3_600_000,
+      confidence: "computed",
+    }),
+    tokens: Some({ input: 12_345, output: 6_789, cache_read: 100, cache_write: 200, reasoning: 42 }),
+    cpu_pct: Some(3.5),
+    rss_bytes: Some(123_456),
+    child_count: Some(2),
+    subtask_count: null,
+    git_branch: Some("feat/read-model"),
+    git_dirty_count: null,
+    needs_attention: null,
     started_at_ms: Date.now() - 1_200_000,
+    last_activity_ms: Date.now() - 30_000,
+    machine_id: "this-mac",
     kind: "terminal",
     project_id: "proj-ai-juggler",
     conversation_id: "822e4125-e07d-4866-9954-ec9295efb079",
@@ -96,9 +130,22 @@ const MOCK_SESSIONS: InstanceInfo[] = seeded.sessions ?? [
     id: "sess-done-1",
     launch_recipe_id: "p-3",
     provider: "claude-code",
-    label: "Personal",
+    account_id: "claude-personal",
+    account_label: "Personal",
+    model: null,
     status: "finished",
+    quota: null,
+    tokens: null,
+    cpu_pct: null,
+    rss_bytes: null,
+    child_count: Some(0),
+    subtask_count: null,
+    git_branch: null,
+    git_dirty_count: null,
+    needs_attention: null,
     started_at_ms: Date.now() - 86_400_000,
+    last_activity_ms: Date.now() - 80_000_000,
+    machine_id: "this-mac",
     kind: "terminal",
     project_id: "proj-payments",
     conversation_id: null,
@@ -107,9 +154,22 @@ const MOCK_SESSIONS: InstanceInfo[] = seeded.sessions ?? [
     id: "sess-done-2",
     launch_recipe_id: "p-2",
     provider: "claude-code",
-    label: "Work Max",
+    account_id: "claude-work",
+    account_label: "Work Max",
+    model: Some("sonnet"),
     status: "finished",
+    quota: Some({ used_percentage: 100, resets_at_ms: Date.now() + 7_200_000, confidence: "measured" }),
+    tokens: Some({ input: 98_000, output: 51_000, cache_read: 9_000, cache_write: 4_000, reasoning: 800 }),
+    cpu_pct: null,
+    rss_bytes: null,
+    child_count: Some(0),
+    subtask_count: null,
+    git_branch: Some("main"),
+    git_dirty_count: null,
+    needs_attention: null,
     started_at_ms: Date.now() - 43_200_000,
+    last_activity_ms: Date.now() - 600_000,
+    machine_id: "this-mac",
     kind: "terminal",
     project_id: "proj-payments",
     conversation_id: "c3f10b52-9a41-4f0e-8f2a-7717db9c04aa",
@@ -369,6 +429,69 @@ export function onSessionsUpdated(
     })
     .catch(() => {
       // backend gone; callers poll via sessionsList
+    });
+  return () => {
+    disposed = true;
+    unlisten?.();
+  };
+}
+
+/**
+ * 5 s resource tick (AJ-E401): coalesced I-07/I-08 deltas for live
+ * Instances — merge by `id` into the session rows; absent ids keep
+ * their honest `null`s.
+ */
+export function onSessionsResources(
+  handler: (deltas: InstanceResourcesInfo[]) => void,
+): () => void {
+  if (!hasBackend) {
+    return () => {};
+  }
+  let unlisten: (() => void) | null = null;
+  let disposed = false;
+  listen<InstanceResourcesInfo[]>(EVENTS.sessionsResources, (event) =>
+    handler(event.payload),
+  )
+    .then((stop) => {
+      if (disposed) {
+        stop();
+      } else {
+        unlisten = stop;
+      }
+    })
+    .catch(() => {
+      // backend gone; the row payload still carries resource fields
+    });
+  return () => {
+    disposed = true;
+    unlisten?.();
+  };
+}
+
+/**
+ * 30 s quota tick (AJ-E401): coalesced I-05 deltas — merge by `id`;
+ * `quota: null` is the honest "no feed exists for this Provider".
+ */
+export function onSessionsQuota(
+  handler: (deltas: InstanceQuotaInfo[]) => void,
+): () => void {
+  if (!hasBackend) {
+    return () => {};
+  }
+  let unlisten: (() => void) | null = null;
+  let disposed = false;
+  listen<InstanceQuotaInfo[]>(EVENTS.sessionsQuota, (event) =>
+    handler(event.payload),
+  )
+    .then((stop) => {
+      if (disposed) {
+        stop();
+      } else {
+        unlisten = stop;
+      }
+    })
+    .catch(() => {
+      // backend gone; the row payload still carries the quota field
     });
   return () => {
     disposed = true;

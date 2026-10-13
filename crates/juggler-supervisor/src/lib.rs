@@ -21,4 +21,4 @@ pub use error::SupervisorError;
 pub use journal::{AdoptedProcess, Journal};
 pub use lifecycle::{ExitKind, LifecycleEvent};
 pub use ring::OutputRing;
-pub use supervisor::{SpawnedProcess, Supervisor};
+pub use supervisor::{LiveProcessStats, LiveStatsCollector, SpawnedProcess, Supervisor};
