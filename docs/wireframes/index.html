@@ -196,9 +196,12 @@
 <section class="screen" id="s01">
 <h2><span class="sid">01</span>App shell + Workflow Rail with indicators</h2>
 <p class="tasks">Tasks: AJ-E401, AJ-E402, AJ-E403, AJ-E404 · Epic E4 · Decisions D-01, D-02, D-06</p>
-<div class="cols"><div class="wf"><div class="titlebar"><span class="dot"></span><span class="dot"></span><span class="dot"></span> AI Juggler — faruk-macbook <span style="margin-left:auto">⌘K Search / Command &nbsp; ● Fleet: 2 machines</span></div>
+<div class="cols"><div class="wf"><div class="titlebar"><span class="dot"></span><span class="dot"></span><span class="dot"></span> AI Juggler — faruk-macbook <span style="margin-left:auto">◄▐ Rail ⌘B &nbsp; ▌► Inspector ⌘⇧I &nbsp; ⌘K Search &nbsp; ● Fleet: 2 machines</span></div>
 <div class="winbody">
-<div class="rail"><div class="rsec">Projects ⌘1</div>
+<div class="rail"><div class="btnrow" style="gap:4px;margin-bottom:6px"><button class="btn" style="flex:0 0 auto;padding:2px 8px;background:#7c7cf4;color:#fff;border-color:#7c7cf4">All</button><button class="btn" style="flex:0 0 auto;padding:2px 8px">Projects</button><button class="btn" style="flex:0 0 auto;padding:2px 8px">Instances</button><button class="btn" style="flex:0 0 auto;padding:2px 8px">Sessions</button></div>
+<div class="foot" style="margin:0 0 6px">Show: All / one type — the rail keeps its layout, other sections hide. ⌘\ cycles.</div>
+<div style="border:1px solid #333a4a;border-radius:6px;padding:4px 8px;margin-bottom:6px;color:#8b93a7">🔍 Search projects, instances, sessions… <span style="float:right;opacity:.6">⌘F</span></div>
+<div class="rsec">Projects ⌘1</div>
 <div class="row sel"><span class="grow">▸ AIJuggler</span><span class="badge bad">2 need you</span></div>
 <div class="row"><span class="grow">▸ client-api</span><span class="badge">3 running</span></div>
 <div class="row"><span class="grow">▸ dotfiles</span><span class="badge warn">1 parked</span></div>
@@ -210,15 +213,18 @@
 <div class="row"><span class="grow">fix-auth-tests</span><span class="badge bad">Stuck?</span></div>
 <div class="row"><span class="grow">refactor-rail</span><span class="badge acc">Waiting</span></div>
 <div class="row"><span class="grow">docs-pass</span><span class="badge ok">Done</span></div>
-<div class="btnrow"><button class="btn pri">＋ New session ⌘N</button></div><div class="foot">Density: Comfortable ▾ · Legend (?)</div></div>
+<div class="btnrow"><button class="btn pri">＋ New session ⌘N</button></div><div class="foot">Density: Comfortable ▾ · Legend (?) · ⌘B collapses this rail to icons (state dots + type icons remain; width remembered)</div></div>
 <div class="maincol"><div class="tabs"><span class="on">Needs me (2)</span><span>Running</span><span>Parked</span><span>Finished</span></div>
 <div class="card"><h5>⬢ fix-auth-tests — Claude · Work · Opus <span class="badge bad">STUCK? no output 6m</span></h5><div class="kv"><span>Project / branch</span><b>AIJuggler · juggler/fix-auth</b></div><div class="kv"><span>Quota (5h window)</span><b>▰▰▰▰▱ 78% · resets 14:20</b></div><div class="kv"><span>CPU / RAM · children</span><b>12% · 410 MB · 3 processes</b></div><div class="btnrow"><button class="btn pri">Open session</button><button class="btn">Switch account…</button><button class="btn">Park until reset</button></div></div>
 <div class="card"><h5>⬢ refactor-rail — Claude · Personal · Sonnet <span class="badge acc">WAITING FOR YOU</span></h5><div class="kv"><span>Last question</span><b>“Apply the new rail layout?”</b></div><div class="kv"><span>Waiting</span><b>12 minutes</b></div><div class="btnrow"><button class="btn pri">Answer</button><button class="btn">Open</button></div></div>
 <div class="note-strip">Indicators are never colour-only: every state also has a text label. Data shown only when measured; otherwise “Unavailable — reason”.</div></div>
-<div class="insp"><b>Right Inspector</b><div class="foot">Select anything on the left → its full snapshot appears here. See screens 06–09.</div><div class="tabs"><span class="on">Overview</span><span>Usage</span><span>History</span></div><div class="kv"><span>Selection</span><b>Instance: Claude·Work</b></div><div class="kv"><span>Status</span><b>Running · 2 sessions</b></div><div class="kv"><span>Identity check</span><b><span class="badge ok">Verified</span></b></div></div>
+<div class="insp"><b>Right Inspector</b><div class="foot">Select anything on the left → its full snapshot appears here. See screens 06–09. ⌘⇧I collapses to an edge tab (label + attention count stay visible).</div><div class="tabs"><span class="on">Overview</span><span>Usage</span><span>History</span></div><div class="kv"><span>Selection</span><b>Instance: Claude·Work</b></div><div class="kv"><span>Status</span><b>Running · 2 sessions</b></div><div class="kv"><span>Identity check</span><b><span class="badge ok">Verified</span></b></div></div>
 </div></div>
 <aside class="notes"><h4>Purpose</h4><p>The daily home (D-01: See). One glance answers “who needs me, what is running, where is quota going”.</p>
-<h4>Controls</h4><ul><li>Rail sections Projects / Instances / Sessions with <code>⌘1..⌘3</code>, arrow-key navigation</li><li>Every row: Provider icon, Account, model, state text, quota bar, child-process count</li><li>Tabs: Needs me / Running / Parked / Finished; density switch; legend</li><li>New session <code>⌘N</code>; global palette <code>⌘K</code></li></ul>
+<h4>Controls</h4><ul><li>Rail sections Projects / Instances / Sessions with <code>⌘1..⌘3</code>, arrow-key navigation</li>
+<li><b>Focus filter</b> at the rail top: All / Projects / Instances / Sessions — keeps the combined view you like, hides the other sections when you want focus (<code>⌘\</code> cycles; ⌘1..⌘3 jump straight to a type)</li>
+<li><b>Rail search</b>: type to filter rows across all three sections (matches project names, instance accounts/models, session titles); ⌘F focuses it; Esc clears</li><li>Every row: Provider icon, Account, model, state text, quota bar, child-process count</li><li>Tabs: Needs me / Running / Parked / Finished; density switch; legend</li><li>New session <code>⌘N</code>; global palette <code>⌘K</code></li>
+<li><b>Collapse-anywhere (every screen):</b> <code>⌘B</code> toggles the left rail to an icon strip (state dots and per-type icons stay; selection preserved; width remembered per window); <code>⌘⇧I</code> collapses the Right Inspector to a slim edge tab showing the selection's label + attention badge — content keeps updating, one click/hover restores. Terminal-maximize (screen 05) is the extreme case of the same pattern. Applies to ALL 27 screens, including pop-out windows</li></ul>
 <h4>States that must exist</h4><ul><li>Populated, empty (per section), loading skeleton, stale (“stale — 2m”), error banner with data retained</li></ul>
 <h4>Approve if</h4><ul><li>Row information and tab grouping match how you triage</li></ul>
 <div class="verdict" data-verdict></div></aside></div></section>
@@ -270,7 +276,8 @@
 <p class="tasks">Tasks: AJ-E407, AJ-E1001 · Epic E4</p>
 <div class="cols"><div class="wf"><div class="titlebar"><span class="dot"></span><span class="dot"></span><span class="dot"></span> fix-auth-tests — AIJuggler</div>
 <div class="winbody"><div class="rail"><div class="rsec">Session</div><div class="kv"><span>Provider</span><b>Claude Code</b></div><div class="kv"><span>Account</span><b>Work</b></div><div class="kv"><span>Model (actual)</span><b>Opus 4.x</b></div><div class="kv"><span>State</span><b>Running</b></div><div class="kv"><span>Context</span><b>61%</b></div><div class="bar"><i style="width:61%"></i></div><div class="kv"><span>Branch</span><b>juggler/fix-auth</b></div><div class="btnrow"><button class="btn pri">Switch account… ⌘⇧S</button><button class="btn">Park</button><button class="btn">Stop ■</button></div></div>
-<div class="maincol"><div class="term"><span class="dim">$ claude  (CLAUDE_CONFIG_DIR=…/accounts/work)</span>
+<div class="maincol"><div class="btnrow" style="margin:0 0 6px"><span class="foot" style="flex:1;margin:0">Terminal — fix-auth-tests</span><button class="btn" style="flex:0 0 auto;padding:2px 8px">⤢ Maximize ⌥⤢</button><button class="btn" style="flex:0 0 auto;padding:2px 8px">⧉ Open in window ⇧⧉</button><span class="foot" style="flex:0 0 auto;margin:0">Maximize: terminal fills the app window (header/inspector collapse to a strip; Esc restores). Pop-out: a real OS window on any display — same session, same scrollback, stays live when the main window closes.</span></div>
+<div class="term"><span class="dim">$ claude  (CLAUDE_CONFIG_DIR=…/accounts/work)</span>
 ✻ Fixing the three failing auth tests…
 <span class="acc">●</span> Edit src/auth/session.test.ts
 <span class="dim">  ⎿ Updated 3 tests, running suite…</span>
@@ -278,7 +285,9 @@
 <span class="dim">  ⎿ waiting for output…</span></div>
 <div class="btnrow"><button class="btn">⌘F Find in terminal</button><button class="btn">Copy</button><button class="btn">Links: on</button><span class="foot">Terminal: search, copy, clickable links, reconnect keeps scrollback.</span></div></div>
 <div class="insp"><b>Inspector · Session</b><div class="tabs"><span class="on">Overview</span><span>Usage</span><span>Processes</span></div><div class="kv"><span>Tokens in/out</span><b>84k / 12k</b></div><div class="kv"><span>Cost</span><b>$1.84 measured</b></div><div class="kv"><span>Subtasks</span><b>2 sub-agents</b></div><div class="kv"><span>Children</span><b>npm test (running)</b></div></div></div></div>
-<aside class="notes"><h4>Purpose</h4><p>The real, unmodified Provider CLI in an embedded terminal — Juggler supervises, never middlemans.</p><h4>Controls</h4><ul><li>Header always shows Provider/Account/model/state/context — wrong-account guard (AJ-E1001)</li><li>Switch <code>⌘⇧S</code>, Park, Stop ladder; terminal Find/Copy/Links</li></ul><h4>States</h4><ul><li>Reconnect after app restart restores scrollback; crashed shows exit + leftovers link</li></ul><div class="verdict" data-verdict></div></aside></div></section>
+<aside class="notes"><h4>Purpose</h4><p>The real, unmodified Provider CLI in an embedded terminal — Juggler supervises, never middlemans.</p><h4>Controls</h4><ul><li>Header always shows Provider/Account/model/state/context — wrong-account guard (AJ-E1001)</li><li>Switch <code>⌘⇧S</code>, Park, Stop ladder; terminal Find/Copy/Links</li>
+<li><b>Maximize</b> <code>⌥⤢</code> — terminal takes the whole app window (rail/inspector collapse to a hover strip; Esc or repeat to restore)</li>
+<li><b>Open in window</b> <code>⇧⧉</code> — detaches the terminal into its own OS window for multi-monitor setups: same PTY, same scrollback, live in both places, closing either keeps the session running; a popped-out window can itself maximize to its display. Rail shows a ↗ badge on sessions living in external windows</li></ul><h4>States</h4><ul><li>Reconnect after app restart restores scrollback; crashed shows exit + leftovers link</li></ul><div class="verdict" data-verdict></div></aside></div></section>
 
 <section class="screen" id="s06">
 <h2><span class="sid">06</span>Right Inspector — Overview tab (any selection)</h2>
@@ -542,7 +551,7 @@
 <h3 style="margin:12px 0 4px">Cleanup</h3><div class="kv"><span>Default for new Accounts</span><b>Notify only ▾</b></div><div class="kv"><span>Work account auto-clean</span><b>On — verified-owned only · audit logged</b></div>
 <h3 style="margin:12px 0 4px">Accounts &amp; renewal</h3><div class="kv"><span>Claude·Work renews</span><b>[1 Nov] · warn 7 days before</b></div><div class="kv"><span>Claude·Personal</span><b>[not set — warnings off]</b></div>
 <div class="foot">Juggler never guesses a renewal date and never imposes a secrets policy: both are yours, remembered, and shown before they take effect.</div></div></div></div>
-<aside class="notes"><h4>Purpose</h4><p>Every “whose choice is it?” decision from the discussion lives here, visible and reversible.</p><h4>Controls</h4><ul><li>Redaction: global + per-Provider override (D-14); Cleanup opt-in per Account (D-08)</li><li>Renewal dates manual-only (D-12); notifications anti-fatigue defaults</li></ul><div class="verdict" data-verdict></div></aside></div></section>
+<aside class="notes"><h4>Purpose</h4><p>Every “whose choice is it?” decision from the discussion lives here, visible and reversible.</p><h4>Controls</h4><ul><li><b>Appearance:</b> Theme — Light · Dark · System (D-16; Dark default; ⌘⇧L cycles everywhere; both themes WCAG-checked)</li><li>Redaction: global + per-Provider override (D-14); Cleanup opt-in per Account (D-08)</li><li>Renewal dates manual-only (D-12); notifications anti-fatigue defaults</li></ul><div class="verdict" data-verdict></div></aside></div></section>
 
 <section class="screen" id="s27">
 <h2><span class="sid">27</span>Command palette, notifications, parked/resume moments</h2>

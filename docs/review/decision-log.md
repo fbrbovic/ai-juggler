@@ -164,7 +164,24 @@
   behaviour changes, releases, and any later implementation
   stage, each of which returns for its own approval.
 
+### D-16 Dual theme — Light + Dark — SETTLED (2026-10-13)
+- Decision: the system ships **two themes, Light and Dark**. Dark
+  remains the default; `System` (follow the OS) is offered; the
+  toggle lives in Settings and cycles with `⌘⇧L`. Both themes are
+  first-class: every screen, state, chart, terminal colour, and
+  accessibility affordance (contrast, focus rings, WCAG 1.4.1
+  text+icon redundancy) must pass in both; the token layer
+  (`ui/src/styles.css` custom properties) is the single source, with
+  no hard-coded colours allowed anywhere.
+- Consequences: AJ-E401 (shell read model/indicators) and AJ-E403
+  (density/legend) gain explicit light-theme states in their visual
+  testing (every state captured in BOTH themes); the a11y gate
+  (AJ-E804) runs in both themes; screen 26 (Settings) gains the
+  Appearance section. Wireframe convention recorded in
+  `docs/wireframes/README.md`.
+
 ## Unresolved (in discussion order)
 
-- None. The decision tree is exhausted; this log remains Draft
-  until the maintainer explicitly accepts it as Final.
+- None. D-01..D-15 were marked Final on maintainer instruction
+  (2026-10-13); D-16 was settled by maintainer instruction the same
+  day and follows the same law.
