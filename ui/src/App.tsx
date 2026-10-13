@@ -166,6 +166,7 @@ export default function App() {
       current.some((t) => t.id === id) ? current : [...current, { id, title, ended: false }],
     );
     setTab("sessions");
+    setGlobal(null); // the panel must show the terminal, not stay on Accounts
     setSelection({ kind: "login", id });
   }, []);
 
@@ -342,6 +343,7 @@ export default function App() {
             <ProjectPanel
               project={selectedProject}
               sessions={sessions}
+              accounts={accounts}
               onOpenSession={selectSession}
               onLaunch={async (profile, project) => {
                 const result = await launchSession(profile.id, project.root);
