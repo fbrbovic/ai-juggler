@@ -168,7 +168,7 @@ export function WorkflowRail({
                 <button
                   key={s.id}
                   type="button"
-                  title={s.label}
+                  title={s.account_label}
                   onClick={() => onSelectSession(s.id)}
                   className="flex size-8 items-center justify-center rounded-lg hover:bg-surface"
                 >
@@ -428,7 +428,7 @@ function SessionRow({
       />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[12.5px] font-medium leading-tight text-ink">
-          {session.label}
+          {session.account_label}
         </span>
         <span className="block truncate text-[10.5px] leading-tight text-faint">
           {session.status}

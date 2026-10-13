@@ -20,7 +20,7 @@ name: string,
 /**
  * Last activity, epoch milliseconds (when known).
  */
-last_activity_ms: number, 
+last_activity_ms: number | null, 
 /**
  * The instance currently managing this project, when live.
  */

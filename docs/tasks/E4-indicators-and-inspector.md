@@ -13,7 +13,7 @@
 > Fleet-shaped from day one (D-13): every filter/sort key includes `machine`.
 > All tasks: Status TODO until the named evidence artifact exists and passes.
 
-### AJ-E401 Enrich the Instance read model (I-01..I-11 data contract) | Status: TODO | Priority P0 | Effort L | Depends: none
+### AJ-E401 Enrich the Instance read model (I-01..I-11 data contract) | Status: DONE-EVIDENCED (zcode-primary, 2026-10-13) | Priority P0 | Effort L | Depends: none
 **Goal**: Extend `SessionInfo` so one payload carries every indicator-row and inspector field, with explicit absence instead of fabricated values.
 **User story**: As a multi-account developer (Persona A, PROPOSAL.md:51), I want the rail to know my account, model, quota, and resources without clicking each Instance, so that I can spot the quota wall at a glance.
 **Requirements**:
@@ -28,6 +28,11 @@
 **Evidence/validation proof**: `cargo test -p juggler-app session_info` with fixtures (full row, quota-less row, model-less row, unknown status) asserting null-not-zero; output + `git diff ui/src/types/generated/SessionInfo.ts` stored in PR description; pass = all fixtures green and diff shows only additive fields.
 **Visual testing**: None (data contract); screenshot proof deferred to AJ-E402. State in PR: "no visual surface changed".
 **Files to touch**: `crates/juggler-app/src/commands.rs:108,911`, `crates/juggler-core/src/model.rs:263,279,288,389`, `ui/src/types/generated/SessionInfo.ts` (generated), `ui/src/lib/bridge.ts:303,325`, `ui/src/lib/bridge.ts` MOCK_SESSIONS (:65).
+*Implementation mapping (corrected in this task's PR per the claiming protocol — the task text was written against the pre-E104/E107 tree)*:
+- `SessionInfo` is now `InstanceInfo` (AJ-E107); its `label` field WAS the account label, so Req.1's `account_label` lands as a rename of `label` (serde alias `label` kept one version), and the mechanical rename sites are `ui/src/App.tsx`, `ui/src/components/WorkflowRail.tsx`, `ui/src/screens/WorkPanels.tsx`, `ui/tests/visual/fixtures.ts` — no visual surface changed.
+- `crates/juggler-core/src/model.rs` needed NO change: post-E104 the record already carries `machine`, `last_activity`, `usage`; quota/confidence/token wire mirrors (`QuotaSnapshotInfo`, `TokenCountsInfo`) live in `commands.rs` per the established `*Info` flat-wire pattern.
+- Added `crates/juggler-supervisor/src/supervisor.rs` (`live_stats` batched API + `LiveStatsCollector`: `descendants()` refreshes the whole process table per call — per-row use would blow the 20 ms budget), `crates/juggler-app/src/state.rs` (collector in `AppState`), `crates/juggler-app/src/lib.rs` (5 s resource + 30 s quota tick threads beside the lifecycle forwarder).
+- Drive-by wire fix, same contract: `ProjectInfo.last_activity_ms` and the new nullable numerics emit `number | null` (the old `#[ts(type = "number")]` on `Option` fields erased nullability — a lying type).
 **Research basis**: pass2/04 §3 table I-01..I-11 (lines 175-185); `SessionInfo.ts:3-38` (8 fields today); `model.rs:145,164,263,279,288`.
 **Handover note**: Trap: `ProfileInfo.account_label`/`model` exist (ProfileInfo.ts:15,23) but are NOT on SessionInfo today — do not invent a second join in the UI. If a field cannot be sourced yet, ship it nullable; never backfill with estimates.
 

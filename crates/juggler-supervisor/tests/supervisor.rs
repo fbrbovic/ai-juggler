@@ -335,3 +335,49 @@ fn twenty_streaming_sessions_fan_out_without_deadlock() {
         );
     }
 }
+
+/// AJ-E401: the batched live-stats collector reads every supervised
+/// session from one process-table refresh; the first sample cannot know
+/// CPU deltas, so `cpu_pct` is honestly `None` (never a fabricated 0.0),
+/// and a finished session reports definitive zeros.
+#[test]
+fn live_stats_collector_batches_and_masks_first_cpu_sample() {
+    use juggler_supervisor::LiveStatsCollector;
+
+    let workdir = tempfile::tempdir().unwrap();
+    let supervisor = Supervisor::new();
+    let session = SessionId::new("s-live-stats");
+
+    supervisor
+        .spawn(&session, &sh_spec("sleep 30", workdir.path()))
+        .unwrap();
+
+    let mut collector = LiveStatsCollector::new();
+    let first = collector.refresh(&supervisor);
+    let stat = first
+        .get(&session)
+        .expect("supervised session present in batched stats");
+    assert_eq!(stat.cpu_pct, None, "first sample has no CPU delta yet");
+    assert!(
+        stat.rss_bytes > 0,
+        "a live /bin/sh must report resident memory"
+    );
+    assert_eq!(stat.child_count, 0, "no descendants were spawned");
+
+    // Second sample: sysinfo now has a delta window, CPU is a number.
+    std::thread::sleep(Duration::from_millis(300));
+    let second = collector.refresh(&supervisor);
+    assert!(second[&session].cpu_pct.is_some());
+
+    // After exit the handle stays with `finished` set: definitive zeros,
+    // never an unmeasurable mystery.
+    supervisor.stop(&session, Duration::from_secs(5)).unwrap();
+    let _ = wait_for_exit(&supervisor, &session);
+    let third = collector.refresh(&supervisor);
+    let dead = third
+        .get(&session)
+        .expect("finished session still reported (dead zeros)");
+    assert_eq!(dead.child_count, 0);
+    assert_eq!(dead.rss_bytes, 0);
+    assert_eq!(dead.cpu_pct, Some(0.0));
+}

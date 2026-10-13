@@ -27,6 +27,15 @@ pub const EVENT_APP_READY: &str = "app://ready";
 /// Name of the event carrying the refreshed session list.
 pub const EVENT_SESSIONS_UPDATED: &str = "session://updated";
 
+/// Name of the 5 s resource tick (I-07/I-08 deltas, AJ-E401): one
+/// coalesced payload per tick for every active Instance.
+pub const EVENT_SESSIONS_RESOURCES: &str = "session://resources";
+
+/// Name of the 30 s quota tick (I-05 deltas, AJ-E401): one coalesced
+/// payload per tick; per-Instance `quota` stays `null` until a feed
+/// exists (AJ-E606+).
+pub const EVENT_SESSIONS_QUOTA: &str = "session://quota";
+
 /// Builds and runs the desktop application.
 pub fn run() {
     let data_dir = state::resolve_data_dir().unwrap_or_else(|message| {
@@ -65,6 +74,11 @@ pub fn run() {
             }
         });
     }
+
+    // Cloned before `manage` takes ownership: the read-model tick threads
+    // (below, in `setup`) share the same state as the command handlers.
+    let resource_tick_state = Arc::clone(&app_state);
+    let quota_tick_state = Arc::clone(&app_state);
 
     tauri::Builder::default()
         // Registered first: a second launch defers to the running app
@@ -112,6 +126,7 @@ pub fn run() {
         ])
         .setup(|app| {
             let _ = app.emit(EVENT_APP_READY, commands::AppInfo::current());
+            spawn_read_model_ticks(app.handle().clone(), resource_tick_state, quota_tick_state);
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -119,4 +134,29 @@ pub fn run() {
             eprintln!("ai-juggler: fatal: {error}");
             std::process::exit(1);
         });
+}
+
+/// Read-model ticks (AJ-E401 Req.4): `session://updated` stays event-driven
+/// (<300 ms via the lifecycle forwarder); these two add the 5 s resource
+/// and 30 s quota refreshes as separate, coalesced emissions. Each tick
+/// emits at most one payload and nothing at all while no Instance is
+/// active, so an idle app costs the UI zero wakeups.
+fn spawn_read_model_ticks(
+    app: tauri::AppHandle,
+    resource_state: Arc<state::AppState>,
+    quota_state: Arc<state::AppState>,
+) {
+    let quota_app = app.clone();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            let _ = commands::emit_resources(&app, &resource_state);
+        }
+    });
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+            let _ = commands::emit_quota(&quota_app, &quota_state);
+        }
+    });
 }

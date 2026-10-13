@@ -119,7 +119,7 @@ fn two_accounts_same_directory_share_one_tracked_project() {
     .unwrap();
     let projects = commands::projects_list_impl(&state).unwrap();
     let active = projects[0].active_instance.as_ref().expect("live instance");
-    assert_eq!(active.label, "Work Max");
+    assert_eq!(active.account_label, "Work Max");
     assert_eq!(active.kind, "terminal");
     assert_eq!(projects[0].instance_count, 3);
 }

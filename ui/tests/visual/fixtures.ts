@@ -1,4 +1,4 @@
-import type { FixtureSet } from "../../src/lib/bridge";
+import type { FixtureSet, InstanceInfo } from "../../src/lib/bridge";
 
 /**
  * Deterministic fixture sets for the visual harness (AJ-E802 Req.1):
@@ -15,18 +15,57 @@ const baseProfiles = [
   { id: "p-2", name: "Main", account_id: "claude-personal", account_label: "Personal", provider: "claude-code", model: null, default_cwd: null },
 ];
 
-// One session per SessionStatus (model.rs:188 + Stopped).
+// One session per SessionStatus (model.rs:188 + Stopped). Rows carry the
+// full AJ-E401 read model: nulls where a real row would have no source
+// (never zeros), quota/token/resource data only where measured.
 const T0 = 1_728_800_000_000; // pinned clock base (deterministic)
-const mk = (n: number, status: string, label: string) => ({
-  id: `sess-${n}`,
-  launch_recipe_id: n % 2 ? "p-1" : "p-2",
-  provider: "claude-code",
-  label,
-  status,
-  started_at_ms: T0 - n * 3_600_000,
-  kind: "terminal",
-  project_id: n % 2 ? "proj-1" : "proj-2",
-});
+const mk = (n: number, status: InstanceInfo["status"], label: string): InstanceInfo => {
+  const work = label === "Work Max";
+  const active = !["finished", "stopped", "failed", "handed_over"].includes(status);
+  const attention: InstanceInfo["needs_attention"] =
+    status === "waiting_user"
+      ? "waiting_user"
+      : status === "stuck"
+        ? "stuck"
+        : status === "quota_blocked"
+          ? "quota_blocked"
+          : status === "failed"
+            ? "failed"
+            : null;
+  const quota: InstanceInfo["quota"] =
+    status === "running"
+      ? { used_percentage: 42.5, resets_at_ms: T0 + 3_600_000, confidence: "computed" }
+      : status === "quota_blocked"
+        ? { used_percentage: 100, resets_at_ms: T0 + 7_200_000, confidence: "measured" }
+        : null;
+  return {
+    id: `sess-${n}`,
+    launch_recipe_id: work ? "p-1" : "p-2",
+    provider: "claude-code",
+    account_id: work ? "claude-work" : "claude-personal",
+    account_label: label,
+    model: work ? "opus" : null,
+    status,
+    quota,
+    tokens:
+      status === "running"
+        ? { input: 12_345, output: 6_789, cache_read: 100, cache_write: 200, reasoning: 42 }
+        : null,
+    cpu_pct: status === "running" ? 3.5 : null,
+    rss_bytes: status === "running" ? 123_456 : null,
+    child_count: active ? (status === "running" ? 2 : null) : 0,
+    subtask_count: null,
+    git_branch: work ? "feat/read-model" : null,
+    git_dirty_count: null,
+    needs_attention: attention,
+    started_at_ms: T0 - n * 3_600_000,
+    last_activity_ms: T0 - n * 3_500_000,
+    machine_id: "this-mac",
+    kind: "terminal",
+    project_id: work ? "proj-1" : "proj-2",
+    conversation_id: status === "running" ? "822e4125-e07d-4866-9954-ec9295efb079" : null,
+  };
+};
 
 export const allStatuses: FixtureSet = {
   accounts: baseAccounts,

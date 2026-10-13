@@ -61,7 +61,7 @@ export function SessionPanel({
   onHandover: (sessionId: string, targetProfileId: string) => void;
 }) {
   const isLoginTerminal = Boolean(loginTerminal);
-  const title = loginTerminal?.title ?? session?.label ?? "Session";
+  const title = loginTerminal?.title ?? session?.account_label ?? "Session";
   const status = session?.status;
   const view = status ? statusTone(status) : null;
   const terminalId = loginTerminal?.id ?? session?.id;
@@ -221,7 +221,7 @@ export function ProjectPanel({
         <h2 className="text-lg font-semibold tracking-tight">{project.name}</h2>
         {project.active_instance ? (
           <Chip tone="live" dot>
-            {project.active_instance.label} on it
+            {project.active_instance.account_label} on it
           </Chip>
         ) : (
           <Chip tone="neutral">idle</Chip>
@@ -239,7 +239,7 @@ export function ProjectPanel({
               className="flex items-center gap-2 rounded-lg border border-hairline px-3 py-2.5 text-left transition-colors hover:border-accent/40 hover:bg-surface"
             >
               <span className="dot-live size-1.5 rounded-full bg-live" />
-              <span className="text-sm">{project.active_instance.label}</span>
+              <span className="text-sm">{project.active_instance.account_label}</span>
               <Chip tone={statusTone(project.active_instance.status).tone}>
                 {statusTone(project.active_instance.status).label}
               </Chip>
@@ -316,7 +316,7 @@ export function ProjectPanel({
                           : "bg-faint")
                     }
                   />
-                  <span className="min-w-0 flex-1 truncate font-medium">{s.label}</span>
+                  <span className="min-w-0 flex-1 truncate font-medium">{s.account_label}</span>
                   <span className="text-faint">{since(s.started_at_ms)}</span>
                   <Chip tone={statusTone(s.status).tone}>{statusTone(s.status).label}</Chip>
                 </button>

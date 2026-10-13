@@ -6,7 +6,7 @@ use std::sync::Mutex;
 
 use juggler_adapter::AdapterRegistry;
 use juggler_core::storage::Storage;
-use juggler_supervisor::Supervisor;
+use juggler_supervisor::{LiveStatsCollector, Supervisor};
 
 /// Everything the commands operate on. `storage` is `Mutex`-wrapped:
 /// rusqlite connections are `Send` but not `Sync`.
@@ -19,6 +19,10 @@ pub struct AppState {
     pub registry: AdapterRegistry,
     /// Process supervisor owning launched sessions.
     pub supervisor: Supervisor,
+    /// Batched live process stats for the Instance read model (AJ-E401):
+    /// owns the persistent process table so CPU% deltas survive ticks.
+    /// Lock ordering: never held together with `storage`.
+    pub resources: Mutex<LiveStatsCollector>,
     /// Terminal ids with a live output forwarder (dedup: one forwarder per
     /// terminal no matter how often the UI re-attaches).
     pub terminal_taps: Mutex<std::collections::HashSet<String>>,
@@ -74,6 +78,7 @@ impl AppState {
             supervisor,
             registry,
             storage: Mutex::new(storage),
+            resources: Mutex::new(LiveStatsCollector::new()),
             terminal_taps: Mutex::new(std::collections::HashSet::new()),
             data_dir,
         })

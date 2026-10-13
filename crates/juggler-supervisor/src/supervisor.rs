@@ -28,6 +28,88 @@ pub struct SpawnedProcess {
     pub pid: u32,
 }
 
+/// Live process statistics for one supervised Instance (AJ-E401 read
+/// model). Sums cover the root process plus its descendants; CPU% is
+/// only reported once the collector has two table samples (a single
+/// refresh cannot measure a delta).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct LiveProcessStats {
+    /// Descendant process count (the root itself is not counted).
+    pub child_count: u32,
+    /// CPU utilization summed over the tree, percent; `None` until the
+    /// second table refresh (never a fabricated 0.0).
+    pub cpu_pct: Option<f64>,
+    /// Resident memory summed over the tree, bytes.
+    pub rss_bytes: u64,
+}
+
+impl LiveProcessStats {
+    /// Definitive zeros for a session whose process has exited — nothing
+    /// can be running or resident after exit.
+    #[must_use]
+    pub fn dead() -> Self {
+        Self {
+            child_count: 0,
+            cpu_pct: Some(0.0),
+            rss_bytes: 0,
+        }
+    }
+}
+
+/// Owns the persistent process table so per-process CPU% deltas survive
+/// between ticks (sysinfo computes usage between refreshes). One
+/// collector serves both the 5 s resource tick and `instances_list`.
+#[derive(Debug, Default)]
+pub struct LiveStatsCollector {
+    system: sysinfo::System,
+    sampled: bool,
+}
+
+impl LiveStatsCollector {
+    /// Creates a collector with an empty (not yet refreshed) table.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Refreshes the process table once and returns batched stats for
+    /// every supervised session. The first ever call cannot measure CPU
+    /// deltas, so every `cpu_pct` is `None` on it — honest absence, not
+    /// a zero that would read as "idle".
+    pub fn refresh(&mut self, supervisor: &Supervisor) -> HashMap<SessionId, LiveProcessStats> {
+        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate};
+        self.system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing().with_cpu().with_memory(),
+        );
+        let stats = supervisor.live_stats(&self.system);
+        let sampled = self.sampled;
+        self.sampled = true;
+        if sampled {
+            stats
+        } else {
+            stats
+                .into_iter()
+                .map(|(session, stat)| {
+                    let masked = if stat.cpu_pct == Some(0.0_f64) {
+                        None
+                    } else {
+                        stat.cpu_pct
+                    };
+                    (
+                        session,
+                        LiveProcessStats {
+                            cpu_pct: masked,
+                            ..stat
+                        },
+                    )
+                })
+                .collect()
+        }
+    }
+}
+
 struct ChildHandle {
     pid: u32,
     ring: Arc<Mutex<OutputRing>>,
@@ -355,6 +437,56 @@ impl Supervisor {
         Ok(descendants_of(handle.pid))
     }
 
+    /// Batched live stats for every supervised session, read from ONE
+    /// already-refreshed process table (AJ-E401: the read model must not
+    /// trigger a table refresh per row). The caller owns the [`sysinfo`]
+    /// table — via [`LiveStatsCollector`] — so CPU% deltas persist
+    /// between ticks. Finished sessions report definitive zeros; a live
+    /// root sums CPU/RSS over the root process and its descendants
+    /// (children counted, the root itself not).
+    ///
+    /// CPU% is only meaningful when the table has been refreshed at least
+    /// twice; [`LiveStatsCollector::refresh`] masks the first sample.
+    #[must_use]
+    pub fn live_stats(&self, system: &sysinfo::System) -> HashMap<SessionId, LiveProcessStats> {
+        let roots: Vec<(SessionId, u32, bool)> = self
+            .children
+            .lock()
+            .map(|children| {
+                children
+                    .iter()
+                    .map(|(session, handle)| {
+                        (
+                            session.clone(),
+                            handle.pid,
+                            handle.finished.load(Ordering::Relaxed),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut parents: HashMap<u32, Vec<u32>> = HashMap::new();
+        for (pid, process) in system.processes() {
+            if let Some(parent) = process.parent() {
+                parents
+                    .entry(parent.as_u32())
+                    .or_default()
+                    .push(pid.as_u32());
+            }
+        }
+        roots
+            .into_iter()
+            .map(|(session, root, finished)| {
+                let stats = if finished {
+                    LiveProcessStats::dead()
+                } else {
+                    tree_stats(system, &parents, root)
+                };
+                (session, stats)
+            })
+            .collect()
+    }
+
     /// Feeds keyboard input to a PTY session's process.
     ///
     /// # Errors
@@ -576,6 +708,39 @@ fn descendants_of(root: u32) -> Vec<u32> {
         queue.extend(parents.get(&pid).cloned().into_iter().flatten());
     }
     found
+}
+
+/// Sums CPU/RSS over the root process and its descendants from a table
+/// that has already been refreshed by the caller (no refresh here —
+/// `Supervisor::live_stats` batches many sessions over one table).
+fn tree_stats(
+    system: &sysinfo::System,
+    parents: &HashMap<u32, Vec<u32>>,
+    root: u32,
+) -> LiveProcessStats {
+    let mut cpu = 0.0_f64;
+    let mut rss = 0_u64;
+    let mut child_count = 0_u32;
+    let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut queue: std::collections::VecDeque<u32> = std::iter::once(root).collect();
+    while let Some(pid) = queue.pop_front() {
+        if !seen.insert(pid) {
+            continue; // ppid cycles must not loop forever
+        }
+        if let Some(process) = system.process(sysinfo::Pid::from_u32(pid)) {
+            cpu += f64::from(process.cpu_usage());
+            rss += process.memory();
+            if pid != root {
+                child_count += 1;
+            }
+        }
+        queue.extend(parents.get(&pid).cloned().into_iter().flatten());
+    }
+    LiveProcessStats {
+        child_count,
+        cpu_pct: Some(cpu),
+        rss_bytes: rss,
+    }
 }
 
 /// Path-qualified helper for callers constructing journal locations.
