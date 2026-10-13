@@ -157,7 +157,7 @@ must translate that word to Account on entry and never echo it
 back. If AJ-E106 has landed first, update the table name here too;
 never leave type/table names disagreeing in one release.
 
-### AJ-E106 DB schema v5 — provider_id / instances / launch_recipes migration | Status: TODO | Priority P0 | Effort M | Depends: AJ-E105
+### AJ-E106 DB schema v5 — provider_id / instances / launch_recipes migration | Status: DONE-EVIDENCED (zcode-primary, 2026-10-13) | Priority P0 | Effort M | Depends: AJ-E105
 **Goal**:
 Rename storage identifiers to the canonical nouns in one versioned
 migration (v5) that upgrades every existing user database in place

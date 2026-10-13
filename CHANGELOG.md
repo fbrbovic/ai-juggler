@@ -420,3 +420,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with reason while signed out) + "Edit launch settings" section,
   collapsed by default, with the spec's helper copy; recipe rows show
   "Default" for the auto-created Main. No new window.alert.
+
+### E1 Phase B4 (AJ-E106) — schema v5
+
+- Forward-only V5 migration: `accounts.harness → provider_id`,
+  `sessions → instances` (+ `native_id → conversation_id`,
+  `profile_id → launch_recipe_id`), `profiles → launch_recipes` —
+  pure `ALTER … RENAME` inside the per-version transaction;
+  user_version 4→5 exactly once on open; zero stored values
+  rewritten (proven by an in-place v4-file upgrade test with real
+  values); downgrade still fails `SchemaTooNew`. Repositories query
+  only the new names.

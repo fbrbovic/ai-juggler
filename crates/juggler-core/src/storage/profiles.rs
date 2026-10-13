@@ -31,7 +31,7 @@ impl ProfilesRepo<'_> {
     /// (unknown account, duplicate id).
     pub fn insert(&self, profile: &Profile) -> Result<(), CoreError> {
         self.conn.execute(
-            "INSERT INTO profiles (id, account_id, name, settings_json, default_cwd, created_at)
+            "INSERT INTO launch_recipes (id, account_id, name, settings_json, default_cwd, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 profile.id.as_str(),
@@ -53,7 +53,7 @@ impl ProfilesRepo<'_> {
     /// [`CoreError::Storage`] on SQLite failures.
     pub fn update(&self, profile: &Profile) -> Result<(), CoreError> {
         let changed = self.conn.execute(
-            "UPDATE profiles SET account_id = ?2, name = ?3, settings_json = ?4, default_cwd = ?5
+            "UPDATE launch_recipes SET account_id = ?2, name = ?3, settings_json = ?4, default_cwd = ?5
              WHERE id = ?1",
             params![
                 profile.id.as_str(),
@@ -76,7 +76,7 @@ impl ProfilesRepo<'_> {
     pub fn get(&self, id: &ProfileId) -> Result<Profile, CoreError> {
         self.conn
             .query_row(
-                "SELECT * FROM profiles WHERE id = ?1",
+                "SELECT * FROM launch_recipes WHERE id = ?1",
                 params![id.as_str()],
                 map_profile,
             )
@@ -91,9 +91,9 @@ impl ProfilesRepo<'_> {
     /// Returns [`CoreError::Storage`] on SQLite failures or
     /// [`CoreError::Serialization`] for corrupt stored settings.
     pub fn list_by_account(&self, account: &AccountId) -> Result<Vec<Profile>, CoreError> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT * FROM profiles WHERE account_id = ?1 ORDER BY created_at, id")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT * FROM launch_recipes WHERE account_id = ?1 ORDER BY created_at, id",
+        )?;
         let rows = stmt.query_map(params![account.as_str()], map_profile)?;
         let mut out = Vec::new();
         for row in rows {
@@ -109,9 +109,10 @@ impl ProfilesRepo<'_> {
     /// Returns [`CoreError::NotFound`] when missing, or
     /// [`CoreError::Storage`] on SQLite failures.
     pub fn delete(&self, id: &ProfileId) -> Result<(), CoreError> {
-        let changed = self
-            .conn
-            .execute("DELETE FROM profiles WHERE id = ?1", params![id.as_str()])?;
+        let changed = self.conn.execute(
+            "DELETE FROM launch_recipes WHERE id = ?1",
+            params![id.as_str()],
+        )?;
         super::accounts::require_changed(changed, "profile", id.as_str())
     }
 }

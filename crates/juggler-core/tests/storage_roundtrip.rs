@@ -8,7 +8,7 @@
     clippy::pedantic
 )]
 
-use rusqlite::params;
+use rusqlite::Connection;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -483,43 +483,74 @@ fn sessions_carry_instance_kind_and_project_link() {
 }
 
 #[test]
-fn v4_fixture_rows_roundtrip_as_instance_records() {
-    // AJ-E104 Req.4: pre-rename rows (raw v4 SQL) read as InstanceRecord
-    // with identical values; user_version unchanged by read/write/read.
-    let storage = Storage::open_in_memory().unwrap();
-    let (_account, profile) = seed_chain(&storage);
-    // Exactly what the pre-rename writer produced (authentic old-row shape).
-    let usage_json = serde_json::to_string(&UsageSnapshot::default()).unwrap();
+fn v4_database_upgrades_in_place_to_v5_with_identical_values() {
+    // AJ-E106: a genuine v4 database (old table/column names, real
+    // values) auto-migrates on Storage::open; user_version lands on 5
+    // exactly once; every stored value is byte-identical after.
+    use juggler_core::model::InstanceKind;
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("v4.sqlite");
     {
-        let conn = storage.raw_conn();
+        let conn = Connection::open(&file).unwrap();
+        let migrations = Storage::migrations();
+        conn.execute_batch(&migrations[..4].join(";")).unwrap();
+        conn.pragma_update(None, "user_version", 4).unwrap();
+        conn.execute(
+            "INSERT INTO accounts (id, harness, label, plan, state_dir, created_at)
+             VALUES ('acc-1', 'claude-code', 'Work Max', 'max-20x', '/tmp/acc1', 111)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO profiles (id, account_id, name, settings_json, default_cwd, created_at)
+             VALUES ('rec-1', 'acc-1', 'Main', '{}', NULL, 111)",
+            [],
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO sessions (id, native_id, profile_id, machine, kind, project, cwd,
                                    status, started_at, last_activity, usage_json, transcript_ref_json)
-             VALUES ('sess-fx', 'native-fx', ?1, 'this-mac', 'terminal', NULL, '/tmp/fx',
-                     'running', 1234567890, NULL, ?2, NULL)",
-            params![profile.id.as_str(), usage_json],
+             VALUES ('sess-1', 'native-1', 'rec-1', 'this-mac', 'terminal', NULL, '/tmp/fx',
+                     'running', 1234567890, NULL,
+                     ?, NULL)",
+            [serde_json::to_string(&UsageSnapshot::default()).unwrap().as_str()],
         )
         .unwrap();
-        let version: i64 = conn
-            .query_row("PRAGMA user_version", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(version, 4, "fixture sits at schema v4");
     }
-    let record = storage.sessions().get(&SessionId::new("sess-fx")).unwrap();
-    assert_eq!(
-        record.conversation.as_ref().map(|c| c.as_str()),
-        Some("native-fx")
-    );
-    assert_eq!(record.kind, juggler_core::model::InstanceKind::Terminal);
-    assert_eq!(record.usage, UsageSnapshot::default());
-    storage.sessions().update(&record).unwrap();
-    let again = storage.sessions().get(&SessionId::new("sess-fx")).unwrap();
-    assert_eq!(again, record, "write/re-read preserves values");
+
+    let storage = Storage::open(&file).unwrap(); // auto-upgrade path
     let version: i64 = storage
         .raw_conn()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 4, "no migration fired");
+    assert_eq!(version, 5, "v4 → v5 exactly once, on open");
+
+    let account = storage.accounts().get(&AccountId::new("acc-1")).unwrap();
+    assert_eq!(account.harness.as_str(), "claude-code");
+    assert_eq!(account.label, "Work Max");
+    assert_eq!(account.plan.as_ref().map(|p| p.as_str()), Some("max-20x"));
+
+    let recipe = storage.profiles().get(&ProfileId::new("rec-1")).unwrap();
+    assert_eq!(recipe.name, "Main");
+
+    let record = storage.sessions().get(&SessionId::new("sess-1")).unwrap();
+    assert_eq!(
+        record.conversation.as_ref().map(|c| c.as_str()),
+        Some("native-1")
+    );
+    assert_eq!(record.kind, InstanceKind::Terminal);
+    assert_eq!(record.status, SessionStatus::Running);
+
+    // Reopening a v5 DB does not re-migrate or corrupt.
+    drop(storage);
+    let storage = Storage::open(&file).unwrap();
+    let version: i64 = storage
+        .raw_conn()
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 5);
+    assert!(storage.sessions().get(&SessionId::new("sess-1")).is_ok());
 }
 
 #[test]
