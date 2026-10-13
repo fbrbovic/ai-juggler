@@ -348,8 +348,21 @@ fn live_stats_collector_batches_and_masks_first_cpu_sample() {
     let supervisor = Supervisor::new();
     let session = SessionId::new("s-live-stats");
 
+    // Spawn `sleep` DIRECTLY (no shell): /bin/sh -c forks on some
+    // platforms (Linux dash) but not others (macOS), so a shell child
+    // count would be environment-dependent. `sleep` never has children —
+    // child_count 0 is a deterministic fact.
     supervisor
-        .spawn(&session, &sh_spec("sleep 30", workdir.path()))
+        .spawn(
+            &session,
+            &LaunchSpec {
+                program: PathBuf::from("/bin/sleep"),
+                args: vec!["30".into()],
+                env: EnvMap::from([("JUGGLER_TEST".to_string(), "1".to_string())]),
+                cwd: workdir.path().to_path_buf(),
+                needs_pty: false,
+            },
+        )
         .unwrap();
 
     let mut collector = LiveStatsCollector::new();
@@ -360,9 +373,9 @@ fn live_stats_collector_batches_and_masks_first_cpu_sample() {
     assert_eq!(stat.cpu_pct, None, "first sample has no CPU delta yet");
     assert!(
         stat.rss_bytes > 0,
-        "a live /bin/sh must report resident memory"
+        "a live /bin/sleep must report resident memory"
     );
-    assert_eq!(stat.child_count, 0, "no descendants were spawned");
+    assert_eq!(stat.child_count, 0, "sleep never spawns children");
 
     // Second sample: sysinfo now has a delta window, CPU is a number.
     std::thread::sleep(Duration::from_millis(300));
