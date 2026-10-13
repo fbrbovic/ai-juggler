@@ -288,42 +288,50 @@ export function formatCountdown(resetsAtMs: number, nowMs: number = Date.now()):
   return `${Math.floor(hours / 24)}d${hours % 24}h`;
 }
 
-/** I-07: trailing mini sparkline. `samples` is the honest measured
- * history (oldest → newest); fewer than two samples renders the
- * placeholder dash — never an invented flat line. */
+/**
+ * I-07: trailing dual mini sparkline — RAM solid, CPU% outline (legend
+ * contract, AJ-E403). `samples` is the honest measured history (oldest →
+ * newest); fewer than two samples renders the placeholder dash — never
+ * an invented flat line.
+ */
 export function Sparkline({
-  samples,
+  series,
   width = 46,
   height = 14,
   title,
 }: {
-  samples: number[];
+  series: { cpu: number[]; ram: number[] };
   width?: number;
   height?: number;
   title?: string;
 }) {
-  if (samples.length < 2) {
+  if (series.cpu.length < 2 || series.ram.length < 2) {
     return (
       <span className="text-[10px] leading-none text-faint" title={title ?? "resources unavailable"}>
         —
       </span>
     );
   }
-  const max = Math.max(...samples, 1);
-  const step = width / (samples.length - 1);
-  const points = samples
-    .map((value, i) => `${(i * step).toFixed(1)},${(height - (value / max) * (height - 2) - 1).toFixed(1)}`)
-    .join(" ");
+  const line = (values: number[], scaleMax: number) => {
+    const max = Math.max(...values, scaleMax, 1);
+    const step = width / (values.length - 1);
+    return values
+      .map((value, i) => `${(i * step).toFixed(1)},${(height - (value / max) * (height - 2) - 1).toFixed(1)}`)
+      .join(" ");
+  };
   return (
     <svg
       width={width}
       height={height}
-      className="shrink-0 text-accent-hi"
+      className="shrink-0"
       role="img"
       aria-label={title ?? "resource history"}
       focusable="false"
     >
-      <polyline points={points} fill="none" stroke="currentColor" strokeWidth={1.25} strokeLinejoin="round" />
+      {/* solid = RAM */}
+      <polyline points={line(series.ram, 1)} fill="none" stroke="var(--color-accent-hi)" strokeWidth={1.6} strokeLinejoin="round" />
+      {/* outline = CPU% */}
+      <polyline points={line(series.cpu, 100)} fill="none" stroke="var(--color-live)" strokeWidth={1.1} strokeDasharray="2 1.6" strokeLinejoin="round" />
     </svg>
   );
 }

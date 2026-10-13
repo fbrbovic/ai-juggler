@@ -197,32 +197,45 @@ export function attentionSuffix(
 
 // --- I-07 sparkline history (honest: measured samples only) ------------------
 
-const CPU_HISTORY_MAX = 60; // 5 min at the 5 s resource tick
+const HISTORY_MAX = 60; // 5 min at the 5 s resource tick
 
-const cpuHistory = new Map<string, number[]>();
+type ResourceWindow = { cpu: number[]; ram: number[] };
+const resourceHistory = new Map<string, ResourceWindow>();
 const lastAppendAt = new Map<string, number>();
 
 /**
- * Remembers one measured CPU sample for the Instance and returns the
- * trailing window (oldest → newest). Only real samples enter the
+ * Remembers one measured resource sample (CPU% + RAM bytes) and returns
+ * the trailing windows (oldest → newest). Only real samples enter the
  * history; absence renders the placeholder dash, never a flat zero.
  * Rapid identical re-appends (React StrictMode double-render) collapse
  * into one sample.
  */
-export function rememberCpuSample(id: string, sample: number | null, nowMs: number = Date.now()): number[] {
-  if (sample !== null) {
-    const window = cpuHistory.get(id) ?? [];
+export function rememberResourceSample(
+  id: string,
+  cpu: number | null,
+  ram: number | null,
+  nowMs: number = Date.now(),
+): ResourceWindow {
+  if (cpu !== null && ram !== null) {
+    const window = resourceHistory.get(id) ?? { cpu: [], ram: [] };
     const lastAt = lastAppendAt.get(id) ?? 0;
-    const isDuplicate =
-      window.length > 0 && window[window.length - 1] === sample && nowMs - lastAt < 2_500;
-    if (!isDuplicate) {
-      window.push(sample);
-      if (window.length > CPU_HISTORY_MAX) window.shift();
-      cpuHistory.set(id, window);
+    const duplicate =
+      window.cpu.length > 0 &&
+      window.cpu[window.cpu.length - 1] === cpu &&
+      window.ram[window.ram.length - 1] === ram &&
+      nowMs - lastAt < 2_500;
+    if (!duplicate) {
+      window.cpu.push(cpu);
+      window.ram.push(ram);
+      if (window.cpu.length > HISTORY_MAX) {
+        window.cpu.shift();
+        window.ram.shift();
+      }
+      resourceHistory.set(id, window);
       lastAppendAt.set(id, nowMs);
     }
   }
-  return cpuHistory.get(id) ?? [];
+  return resourceHistory.get(id) ?? { cpu: [], ram: [] };
 }
 
 // --- Screen-reader summary ----------------------------------------------------
@@ -329,4 +342,100 @@ export function GitBadge({ session }: { session: InstanceInfo }): ReactNode {
       {dirty ? <span className="shrink-0 text-warning">· {dirty}●</span> : null}
     </span>
   );
+}
+
+// --- AJ-E403: the stale-data rule ---------------------------------------------
+
+/**
+ * `stale - Nm` caption chip (Req.5). Contrast-safe by construction: the
+ * value keeps its full text colour (never dimmed below 4.5:1) and the
+ * caption carries the meaning — the manual-contrast fallback the task
+ * prescribes when dimming would break contrast.
+ */
+export function StaleChip({ caption }: { caption: string | null }) {
+  if (caption === null) return null;
+  return (
+    <span className="inline-flex shrink-0 items-center rounded border border-warning/40 bg-warning-soft px-1 text-[9px] font-medium whitespace-nowrap text-warning" title={`Value is ${caption} — older than 2× its refresh interval`}>
+      {caption}
+    </span>
+  );
+}
+
+// --- AJ-E403: the shared legend (identical in every surface) -------------------
+
+const LEGEND_STATES: { label: string; Icon: typeof IconStateRunning; tone: StateChipTone; meaning: string }[] = [
+  { label: "Starting", Icon: IconStateStarting, tone: "accent", meaning: "starting" },
+  { label: "Running", Icon: IconStateRunning, tone: "live", meaning: "running" },
+  { label: "Needs you", Icon: IconStateWaiting, tone: "warning", meaning: "waiting_user" },
+  { label: "Stuck?", Icon: IconStateStuck, tone: "warning", meaning: "stuck (heuristic)" },
+  { label: "Quota blocked", Icon: IconStateQuota, tone: "danger", meaning: "quota_blocked" },
+  { label: "Finished", Icon: IconStateFinished, tone: "success", meaning: "finished" },
+  { label: "Stopped", Icon: IconStateStopped, tone: "neutral", meaning: "stopped" },
+  { label: "Failed", Icon: IconStateFailed, tone: "danger", meaning: "failed" },
+  { label: "Handed over", Icon: IconStateHandover, tone: "accent", meaning: "handed_over" },
+];
+
+/**
+ * The one legend (Req.6): 9 states as icon+text+colour, the quota bar
+ * semantics (fill = used %, tier tag Meas/Comp/Est = confidence), and
+ * the sparkline semantics (solid = RAM, outline = CPU%). Rendered
+ * identically wherever it appears — rail footer `?` popover, Overview
+ * header, and the all-clear empty state.
+ */
+export function IndicatorLegend({ compact = false }: { compact?: boolean }) {
+  return (
+    <div className={compact ? "flex flex-col gap-1.5 text-[10px]" : "flex flex-col gap-2 text-[11px]"} role="list" aria-label="Indicator legend">
+      <div className="grid grid-cols-1 gap-1">
+        {LEGEND_STATES.map((state) => (
+          <span key={state.label} className="flex min-w-0 items-center gap-2" role="listitem">
+            <state.Icon width={12} height={12} className={legendTone(state.tone)} />
+            <span className="font-medium text-ink">{state.label}</span>
+            <span className="truncate text-faint">· {state.meaning}</span>
+          </span>
+        ))}
+      </div>
+      <span className="flex min-w-0 flex-wrap items-center gap-1.5 border-t border-hairline pt-1.5 text-muted" role="listitem">
+        <span className="relative inline-block h-1.5 w-10 overflow-hidden rounded-full bg-surface-3">
+          <span className="absolute inset-y-0 left-0 w-2/3 rounded-full bg-accent" />
+        </span>
+        <span>Quota fill = used %</span>
+        <span className="rounded border border-hairline px-1 text-[9px] uppercase text-faint">Meas/Comp/Est</span>
+        <span>= confidence</span>
+      </span>
+      <span className="flex min-w-0 items-center gap-2 text-muted" role="listitem">
+        <svg width={26} height={10} aria-hidden="true" focusable="false">
+          <polyline points="1,5 8,2 15,7 22,4 25,5" fill="none" stroke="var(--color-accent-hi)" strokeWidth={1.6} />
+        </svg>
+        <span>sparkline solid = RAM</span>
+        <svg width={26} height={10} aria-hidden="true" focusable="false">
+          <polyline points="1,5 8,7 15,3 22,6 25,4" fill="none" stroke="var(--color-live)" strokeWidth={1.2} strokeDasharray="2 1.6" />
+        </svg>
+        <span>outline = CPU%</span>
+      </span>
+      <span className="flex items-center gap-1.5 border-t border-hairline pt-1.5 text-faint" role="listitem">
+        <span className="inline-flex items-center rounded border border-warning/40 bg-warning-soft px-1 text-[9px] font-medium text-warning">stale - Nm</span>
+        <span>older than 2× refresh — never shown as fresh</span>
+      </span>
+    </div>
+  );
+}
+
+function legendTone(tone: StateChipTone): string {
+  switch (tone) {
+    case "live": return "text-live";
+    case "success": return "text-success";
+    case "warning": return "text-warning";
+    case "danger": return "text-danger";
+    case "accent": return "text-accent-hi";
+    default: return "text-muted";
+  }
+}
+
+/**
+ * Active statuses (mirrors the backend read model): non-terminal, so the
+ * minimal rail keeps waiting/stuck/quota-blocked Instances visible — the
+ * collapsed rail must still scream "needs you" (AJ-E403 user story).
+ */
+export function isActiveStatus(status: string): boolean {
+  return status === "starting" || status === "running" || status === "waiting_user" || status === "stuck" || status === "quota_blocked";
 }
