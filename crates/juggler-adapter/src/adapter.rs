@@ -125,3 +125,6 @@ pub trait HarnessAdapter: Send + Sync {
 
 /// Shared adapter handle type used by the registry and supervisor.
 pub type SharedAdapter = Arc<dyn HarnessAdapter>;
+
+/// ADR-0008 vocabulary alias: adapters integrate one *Provider*.
+pub type ProviderAdapter = dyn HarnessAdapter;

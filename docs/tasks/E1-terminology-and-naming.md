@@ -18,7 +18,7 @@
 > compliance); it is never find-replaced to Provider. (4) External tools'
 > `profile = account` (cc-switch/Codex) is never imported.
 
-### AJ-E101 ADR-0008 terminology charter and rename freeze | Status: TODO | Priority P0 | Effort S | Depends: —
+### AJ-E101 ADR-0008 terminology charter and rename freeze | Status: DONE-EVIDENCED (zcode-primary, 2026-10-13) | Priority P0 | Effort S | Depends: —
 **Goal**: Ratify one canonical glossary (Provider/Account/Instance/Session/Launch settings) so every later rename task cites a single source instead of re-deciding.
 **User story**: As the maintainer (P4 Operator), I want the rename rules written once so that contributors stop inventing a fourth synonym per screen.
 **Requirements**:
@@ -36,7 +36,7 @@
 **Research basis**: [decision-log.md](/Users/farukbrbovic/Dev/AIJuggler/docs/review/decision-log.md:21) D-02/D-10; pass2/01 §4.1–4.2 rename map; pass2/08 §3.4 ADR table; [0007-instance-centric-information-architecture.md](/Users/farukbrbovic/Dev/AIJuggler/docs/adr/0007-instance-centric-information-architecture.md:38).
 **Handover note**: Next agent must not start AJ-E102 until this ADR is Accepted. Trap: pass2/01 once proposed "ADR-0014" — that numbering is superseded by pass2/08 §3.4 (0008); do not create 0014.
 
-### AJ-E102 Phase A — UI copy sweep to Provider/Account/Instance | Status: TODO | Priority P0 | Effort M | Depends: AJ-E101
+### AJ-E102 Phase A — UI copy sweep to Provider/Account/Instance | Status: DONE-EVIDENCED (zcode-primary, 2026-10-13) | Priority P0 | Effort M | Depends: AJ-E101
 **Goal**: Every user-visible string says Provider/Account/Instance (and "Launch settings" for Profile), while routes, props, and IPC names stay aliased and working.
 **User story**: As a first-run user (P1 Multi-Maxer), I want "Add account" and Provider names I recognise so I never have to learn what a "harness" or "profile" is.
 **Requirements**:
@@ -54,7 +54,7 @@
 **Research basis**: pass2/01 §4.2 UI rows; pass2/08 §3.4 Phase A; pass2/00 §3; deep/01 B-08 (reversed) and B-11 row grammar.
 **Handover note**: Do not rename TS types or bridge functions here — AJ-E107 owns that. Trap: `SessionInfo.ts:3` collapse (Instance rendered as filtered Session) is a data bug, not copy; flag it for AJ-E104, do not paper over it with labels.
 
-### AJ-E103 Phase B1 — Domain aliases ProviderId and ProviderAdapter | Status: TODO | Priority P0 | Effort M | Depends: AJ-E101
+### AJ-E103 Phase B1 — Domain aliases ProviderId and ProviderAdapter | Status: DONE-EVIDENCED (zcode-primary, 2026-10-13) | Priority P0 | Effort M | Depends: AJ-E101
 **Goal**: Introduce `ProviderId`/`ProviderAdapter` as the canonical domain names with `HarnessId`/`HarnessAdapter` as deprecated aliases, without breaking serialised data or external adapters.
 **User story**: As an adapter author, I want my existing adapter to keep compiling for one minor version so the rename never forces a flag-day rewrite.
 **Requirements**:
@@ -72,7 +72,7 @@
 **Research basis**: pass2/01 §4.2 Domain/Adapter rows; pass2/08 §3.4 Phase B ("serialisation-compatible aliases, one minor version"); [crates/juggler-adapter/src/adapter.rs](/Users/farukbrbovic/Dev/AIJuggler/crates/juggler-adapter/src/adapter.rs) semver note.
 **Handover note**: Removal of the deprecated aliases is explicitly out of scope (needs its own major-version task). Trap: `id_newtype!` macro generates `Debug` as `HarnessId(...)` — update the macro invocation, not hand-written impls, or snapshot tests will churn.
 
-### AJ-E104 Phase B2 — Split Instance from Session (InstanceRecord + ConversationId) | Status: TODO | Priority P0 | Effort L | Depends: AJ-E103
+### AJ-E104 Phase B2 — Split Instance from Session (InstanceRecord + ConversationId) | Status: DONE-EVIDENCED (zcode-primary, 2026-10-13) | Priority P0 | Effort L | Depends: AJ-E103
 **Goal**: Make Instance a real domain entity (occurrence) with the conversation (Session) inside it, ending the shipped collapse where Instances are merely filtered Sessions.
 **User story**: As a daily user (P1), I want an Instance row to mean "this tool running here under this Account" so switching, resources, and leftovers attach to the right thing.
 **Requirements**:

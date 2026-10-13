@@ -163,7 +163,10 @@ fn handover_moves_context_to_another_account_and_resumes_it() {
         .iter()
         .find(|s| s.id.as_str() == handed.session_id)
         .unwrap();
-    assert_eq!(continuation.native_id.as_deref(), Some("native-sess-42"));
+    assert_eq!(
+        continuation.conversation.as_ref().map(|c| c.as_str()),
+        Some("native-sess-42")
+    );
     assert_eq!(continuation.project, source.project);
     assert!(continuation.transcript_ref.is_some());
 

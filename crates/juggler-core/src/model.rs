@@ -48,6 +48,18 @@ id_newtype! {
     /// Identifies a harness kind, e.g. `claude-code`, `codex`, `zcode`.
     HarnessId
 }
+
+/// ADR-0008 terminology: `Provider` is the user-facing noun for a tool
+/// family. Additive alias — same type, same wire values, no migration.
+pub type ProviderId = HarnessId;
+
+impl HarnessId {
+    /// Alias constructor matching the ADR-0008 vocabulary.
+    #[must_use]
+    pub fn provider(value: impl Into<std::sync::Arc<str>>) -> Self {
+        Self::new(value)
+    }
+}
 id_newtype! {
     /// Identifies a managed account (harness login) owned by the user.
     AccountId
@@ -69,6 +81,11 @@ id_newtype! {
     /// Identifies a tracked local project (directory) — the juggling
     /// anchor (ADR-0007).
     ProjectId
+}
+id_newtype! {
+    /// The *native* conversation identifier inside an Instance
+    /// The native conversation id of a Provider session. See amendment A-1.
+    ConversationId
 }
 
 /// Unix epoch milliseconds — the crate's canonical timestamp representation.
@@ -383,14 +400,19 @@ pub struct ProjectRecord {
     pub history: ProjectHistory,
 }
 
-/// A supervised session (instance record) as tracked by AI Juggler
-/// (`docs/SPEC.md` §3, ADR-0007).
+/// ADR-0008 alias: wire strings unchanged; naming only.
+pub type InstanceStatus = SessionStatus;
+
+/// A supervised Instance as tracked by AI Juggler (`docs/SPEC.md` §3,
+/// ADR-0007/0008). The conversation lives *inside*: see `conversation`.
 #[derive(Clone, PartialEq, Debug)]
-pub struct SessionRecord {
-    /// Stable identifier assigned by AI Juggler.
+pub struct InstanceRecord {
+    /// Stable identifier assigned by AI Juggler (the *Instance* id;
+    /// supervisor/journal key — ADR-0008 A-1).
     pub id: SessionId,
-    /// The harness's own session id, once discovered.
-    pub native_id: Option<String>,
+    /// The native conversation inside this Instance, once discovered
+    /// (None while Starting — never a fabricated id).
+    pub conversation: Option<ConversationId>,
     /// Profile the session runs under.
     pub profile: ProfileId,
     /// Machine the session runs on (fleet dimension; local default
@@ -413,4 +435,15 @@ pub struct SessionRecord {
     pub usage: UsageSnapshot,
     /// Where the native transcript lives, once discovered.
     pub transcript_ref: Option<TranscriptRef>,
+}
+
+/// ADR-0008: old name kept one minor version as a pure alias.
+pub type SessionRecord = InstanceRecord;
+
+impl InstanceRecord {
+    /// Launch-settings accessor (field rename lands with AJ-E105).
+    #[must_use]
+    pub fn launch_settings(&self) -> &ProfileId {
+        &self.profile
+    }
 }

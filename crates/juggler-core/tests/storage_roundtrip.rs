@@ -8,6 +8,7 @@
     clippy::pedantic
 )]
 
+use rusqlite::params;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -121,7 +122,7 @@ fn arb_session(profile: ProfileId) -> impl Strategy<Value = SessionRecord> {
         .prop_map(
             move |(id, native, machine, cwd, status, started, activity, usage, tr)| SessionRecord {
                 id: SessionId::new(id),
-                native_id: native,
+                conversation: native.map(juggler_core::model::ConversationId::new),
                 profile: profile.clone(),
                 machine: MachineId::new(machine),
                 kind: juggler_core::model::InstanceKind::Terminal,
@@ -156,7 +157,7 @@ fn sessions_equivalent(a: &SessionRecord, b: &SessionRecord) -> bool {
         _ => return false,
     }
     a.id == b.id
-        && a.native_id == b.native_id
+        && a.conversation == b.conversation
         && a.profile == b.profile
         && a.machine == b.machine
         && a.cwd == b.cwd
@@ -228,7 +229,7 @@ proptest! {
         seed_chain(&storage);
         storage.sessions().insert(&session).unwrap();
         session.status = SessionStatus::QuotaBlocked;
-        session.native_id = Some("native-1".into());
+        session.conversation = Some(juggler_core::model::ConversationId::new("native-1"));
         storage.sessions().update(&session).unwrap();
         prop_assert_eq!(storage.sessions().get(&session.id).unwrap().status, SessionStatus::QuotaBlocked);
     }
@@ -257,7 +258,7 @@ fn deleting_account_cascades() {
     let (account, profile) = seed_chain(&storage);
     let session = SessionRecord {
         id: SessionId::new("s1"),
-        native_id: None,
+        conversation: None,
         profile: profile.id,
         machine: MachineId::new("this-mac"),
         kind: juggler_core::model::InstanceKind::Terminal,
@@ -398,7 +399,7 @@ fn session_list_without_filter_returns_all() {
     let (_, profile) = seed_chain(&storage);
     let session = SessionRecord {
         id: SessionId::new("s-all"),
-        native_id: None,
+        conversation: None,
         profile: profile.id,
         machine: MachineId::new("this-mac"),
         kind: juggler_core::model::InstanceKind::Terminal,
@@ -456,7 +457,7 @@ fn sessions_carry_instance_kind_and_project_link() {
         .unwrap();
     let mut session = SessionRecord {
         id: SessionId::new("sess-kind"),
-        native_id: None,
+        conversation: None,
         profile: profile.id,
         machine: MachineId::new("this-mac"),
         kind: juggler_core::model::InstanceKind::Desktop,
@@ -479,4 +480,44 @@ fn sessions_carry_instance_kind_and_project_link() {
     updated.project = None;
     storage.sessions().update(&updated).unwrap();
     assert_eq!(storage.sessions().get(&session.id).unwrap().project, None);
+}
+
+#[test]
+fn v4_fixture_rows_roundtrip_as_instance_records() {
+    // AJ-E104 Req.4: pre-rename rows (raw v4 SQL) read as InstanceRecord
+    // with identical values; user_version unchanged by read/write/read.
+    let storage = Storage::open_in_memory().unwrap();
+    let (_account, profile) = seed_chain(&storage);
+    // Exactly what the pre-rename writer produced (authentic old-row shape).
+    let usage_json = serde_json::to_string(&UsageSnapshot::default()).unwrap();
+    {
+        let conn = storage.raw_conn();
+        conn.execute(
+            "INSERT INTO sessions (id, native_id, profile_id, machine, kind, project, cwd,
+                                   status, started_at, last_activity, usage_json, transcript_ref_json)
+             VALUES ('sess-fx', 'native-fx', ?1, 'this-mac', 'terminal', NULL, '/tmp/fx',
+                     'running', 1234567890, NULL, ?2, NULL)",
+            params![profile.id.as_str(), usage_json],
+        )
+        .unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 4, "fixture sits at schema v4");
+    }
+    let record = storage.sessions().get(&SessionId::new("sess-fx")).unwrap();
+    assert_eq!(
+        record.conversation.as_ref().map(|c| c.as_str()),
+        Some("native-fx")
+    );
+    assert_eq!(record.kind, juggler_core::model::InstanceKind::Terminal);
+    assert_eq!(record.usage, UsageSnapshot::default());
+    storage.sessions().update(&record).unwrap();
+    let again = storage.sessions().get(&SessionId::new("sess-fx")).unwrap();
+    assert_eq!(again, record, "write/re-read preserves values");
+    let version: i64 = storage
+        .raw_conn()
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 4, "no migration fired");
 }

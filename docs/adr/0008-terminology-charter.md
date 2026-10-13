@@ -45,6 +45,22 @@ The maintainer's canonical workflow names the desired nouns outright:
 - **Keep "harness"/"profile"** — rejected: maintainer named the nouns;
   homonym with external tools is the highest-risk confusion.
 
+## Amendment A-1 (AJ-E104, 2026-10-13): identifier semantics for the split
+
+Requirement 1 required picking one convention for the conversation
+identifier. Settled:
+
+- **`SessionId` remains the *Instance* identifier** (juggler-assigned;
+  unchanged type, wire, supervisor/journal keys — zero migration).
+- **`ConversationId` is a new newtype for the *native* conversation
+  identifier** (Claude uuid / Codex thread / ZCode sess_*). It replaces
+  the untyped `native_id: Option<String>` field; the DB column
+  `native_id` and its values are unchanged (the type wraps the same
+  string). `conversation: Option<ConversationId>` is honest-None while
+  the conversation is undiscovered (the "Starting…" UI state covers it)
+  rather than fabricating an id.
+- `pub type InstanceStatus = SessionStatus;` — wire strings unchanged.
+
 ## Consequences
 
 E1 executes in three phases with schema v5 as the migration anchor.
