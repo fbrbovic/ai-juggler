@@ -1353,7 +1353,7 @@ pub mod legacy_aliases {
     ///
     /// # Errors
     ///
-    /// Returns the typed [`AppError`] message on failure.
+    /// Returns the parent command's typed error on failure.
     pub fn profiles_list_alias(
         state: tauri::State<'_, Arc<AppState>>,
     ) -> AppResult<Vec<LaunchRecipeInfo>> {
@@ -1365,7 +1365,7 @@ pub mod legacy_aliases {
     ///
     /// # Errors
     ///
-    /// Returns the typed [`AppError`] message on failure.
+    /// Returns the parent command's typed error on failure.
     pub fn sessions_list_alias(
         state: tauri::State<'_, Arc<AppState>>,
     ) -> AppResult<Vec<InstanceInfo>> {
