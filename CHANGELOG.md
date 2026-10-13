@@ -446,3 +446,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alias files); bridge exposes canonical functions with `@deprecated`
   legacy aliases; all UI call sites on canonical names; gallery green
   end-to-end with the new wire fields.
+
+### Renamed (E1, AJ-E101–E108) — terminology per ADR-0008
+
+Old → new: harness → **Provider**; profile (as account) → **Account**;
+profile (as launch config) → **Launch settings** (`LaunchRecipe`
+internal); session (running process) → **Instance**; handover →
+**Switch**. Stored data and wire IDs are unchanged; old databases
+migrate automatically (schema v5). Deprecated aliases (Rust types,
+serde fields, Tauri command names, bridge functions, TS types) remain
+for one version. The terminology lint gate (`just terminology`) now
+enforces the vocabulary in SPEC/PROPOSAL/EPICS and JSX copy.

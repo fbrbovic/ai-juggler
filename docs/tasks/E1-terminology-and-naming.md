@@ -288,7 +288,7 @@ Never hand-edit generated TS — change the Rust DTO and re-export.
 Trap: `LaunchResult.session_id` is wire data; rename the Rust field
 only with `#[serde(alias = "session_id")]` or the UI breaks silently.
 
-### AJ-E108 Docs sweep and terminology lint gate | Status: TODO | Priority P1 | Effort S | Depends: AJ-E107
+### AJ-E108 Docs sweep and terminology lint gate | Status: DONE-EVIDENCED (zcode-primary, 2026-10-13) | Priority P1 | Effort S | Depends: AJ-E107
 **Goal**:
 Bring SPEC, PROPOSAL, and EPICS to the canonical nouns and add a
 lint gate so legacy user-facing terms cannot creep back.
