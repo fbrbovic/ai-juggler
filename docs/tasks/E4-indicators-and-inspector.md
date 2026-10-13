@@ -36,7 +36,7 @@
 **Research basis**: pass2/04 §3 table I-01..I-11 (lines 175-185); `SessionInfo.ts:3-38` (8 fields today); `model.rs:145,164,263,279,288`.
 **Handover note**: Trap: `ProfileInfo.account_label`/`model` exist (ProfileInfo.ts:15,23) but are NOT on SessionInfo today — do not invent a second join in the UI. If a field cannot be sourced yet, ship it nullable; never backfill with estimates.
 
-### AJ-E402 Render the 11-field indicator row and card variant | Status: TODO | Priority P0 | Effort L | Depends: AJ-E401
+### AJ-E402 Render the 11-field indicator row and card variant | Status: DONE-EVIDENCED (zcode-primary, 2026-10-13) | Priority P0 | Effort L | Depends: AJ-E401
 **Goal**: Rewrite `SessionRow` to render I-01..I-11 in the pass2/04 §3 order, plus a two-line card variant with identical fields.
 **User story**: As Persona A with 8 running Instances, I want provider, account, model, quota, cost, resources, children, branch, and attention state on every row, so that I never open the wrong Instance.
 **Requirements**:
@@ -51,6 +51,12 @@
 **Evidence/validation proof**: Vitest/Jest (repo harness) `SessionRow.test` with 14 fixtures (9 states, no-quota, no-pricing, non-git, 0 children, unknown status) asserting exact strings above; stored in CI log; pass = 14/14 and no `$0.00`/`percent 0` string in snapshot.
 **Visual testing**: Screenshots at 1440x900 and 390x844 (responsive rail collapse), Comfortable density, fixtures: running+quota, needs-you, quota-blocked, no-data row; compare by pixel-diff (Playwright) tolerance 1%; screen-reader pass: every number reachable as text, `aria-label` contains full field text. Pass = diff <1% vs approved baseline + axe clean.
 **Files to touch**: `ui/src/components/WorkflowRail.tsx:295,397,429`, `ui/src/components/primitives.tsx:165`, `ui/src/components/icons.tsx:22`, `ui/src/App.tsx:442,513`, `ui/src/lib/bridge.ts:65`.
+*Implementation mapping (corrected in this task's PR per the claiming protocol — the task assumed a Vitest/Jest harness that did not exist yet)*:
+- Added `ui/src/components/indicator.tsx` — the single I-01..I-11 display-mapping module shared by row, card and tests (row/card parity is structural, not convention).
+- Component-test harness added: `ui/vitest.config.ts`, `ui/src/components/SessionRow.test.tsx` (25 tests over the 14 named fixtures), devDeps in `ui/package.json` (vitest, @testing-library/*, jsdom); `pnpm test` wired into the CI ui job (gate STRENGTHENED, recorded in the evidence manifest).
+- `ui/tests/visual/a11y.spec.ts` — axe-core 0 critical/serious gate in both themes (D-16) + a no-overflow layout gate (rows must never spill their rail width; provider abbrev/model/age/resource text yield first, chips and discs never clip).
+- `ui/src/styles.css` gains the `.acct-disc` per-Account hue utility (hue is data from a stable id hash; both themes fixed via tokens per D-16).
+- The rail's legacy `slice(0,6/8/15)` caps are deliberately LEFT for AJ-E404 Req.7 (deleted together with virtualisation); noted here so it is not read as a miss.
 **Research basis**: pass2/04 §3 (lines 163-192), §7.1 wireframe (438-460); deep 01 B-11/B-14; `WorkflowRail.tsx:429` (label+dot today).
 **Handover note**: Provider glyphs (Claude/Codex/ZCode) do not exist in icons.tsx:22 (8 generic glyphs) — add marks, do not reuse status dots. Trap: do not sort or filter here; AJ-E404 owns ranking.
 

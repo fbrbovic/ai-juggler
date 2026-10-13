@@ -141,6 +141,23 @@ body {
   animation: breathe 2.4s var(--ease-out-soft) infinite;
 }
 
+/*
+ * I-02 account disc (AJ-E402): per-Account hue derived from a stable
+ * hash of the account id (data, not a palette choice); saturation and
+ * lightness stay fixed per theme so contrast holds in both (D-16 —
+ * the token layer stays the single source of colour rules).
+ */
+.acct-disc {
+  background: hsl(var(--acct-hue, 255) 55% 55% / 0.2);
+  border: 1px solid hsl(var(--acct-hue, 255) 55% 60% / 0.45);
+  color: hsl(var(--acct-hue, 255) 75% 74%);
+}
+[data-theme="light"] .acct-disc {
+  background: hsl(var(--acct-hue, 255) 55% 42% / 0.12);
+  border: 1px solid hsl(var(--acct-hue, 255) 50% 38% / 0.4);
+  color: hsl(var(--acct-hue, 255) 60% 30%);
+}
+
 /* Numerals with a quiet violet→ink gradient: modern without noise. */
 .numeral {
   background: linear-gradient(160deg, #ffffff 20%, #9d9dfb 120%);

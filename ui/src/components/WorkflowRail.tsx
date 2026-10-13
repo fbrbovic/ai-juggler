@@ -1,6 +1,22 @@
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { IconProjects, IconSessions, IconTerminal } from "./icons";
 import type { InstanceInfo, ProjectInfo } from "../lib/bridge";
+import {
+  AccountDisc,
+  ChildBadges,
+  GitBadge,
+  attentionBadge,
+  attentionSuffix,
+  ariaSummary,
+  providerMark,
+  rememberCpuSample,
+  stateChip,
+  tokenSummary,
+  ageSummary,
+  formatBytes,
+  type StateChipTone,
+} from "./indicator";
+import { QuotaBar, Sparkline } from "./primitives";
 
 /** The three workflow tabs the whole navbar switches between. */
 export type WorkTab = "projects" | "instances" | "sessions";
@@ -394,7 +410,24 @@ function ListSection({ label, children }: { label: string; children: ReactNode }
   );
 }
 
-function SessionRow({
+/** Tone classes for the compact state/attention chip (token-driven). */
+const chipToneClasses: Record<StateChipTone, string> = {
+  neutral: "bg-surface-2 text-muted border-hairline",
+  success: "bg-success-soft text-success border-success/25",
+  warning: "bg-warning-soft text-warning border-warning/25",
+  danger: "bg-danger-soft text-danger border-danger/25",
+  live: "bg-live-soft text-live border-live/25",
+  accent: "bg-accent-soft text-accent-hi border-accent/25",
+};
+
+/**
+ * The indicator row (AJ-E402): I-01..I-11 in pass2/04 §3 render order —
+ * provider mark, account disc, model chip, state chip, quota bar with
+ * tier tag, tokens, children, git, attention, age, resource sparkline.
+ * Absent data renders the exact honest copy (`Quota: no data`,
+ * `default model`, `Unknown`, `—`), never fabricated numbers.
+ */
+export function SessionRow({
   session,
   selected,
   onSelect,
@@ -403,12 +436,24 @@ function SessionRow({
   selected: boolean;
   onSelect: (id: string) => void;
 }) {
+  const mark = providerMark(session.provider);
+  const badge = attentionBadge(session);
+  const chip = stateChip(session.status);
+  const suffix = attentionSuffix(session);
+  const tokens = tokenSummary(session.tokens);
+  const samples = rememberCpuSample(session.id, session.cpu_pct);
+  const resources =
+    session.cpu_pct !== null && session.rss_bytes !== null
+      ? `${Math.round(session.cpu_pct)}% · ${formatBytes(session.rss_bytes)}`
+      : null;
+
   return (
     <button
       type="button"
       onClick={() => onSelect(session.id)}
+      aria-label={ariaSummary(session)}
       className={
-        "relative flex min-w-0 w-full items-center gap-2 rounded-lg py-[7px] pl-3 pr-2.5 text-left outline-none transition-colors " +
+        "relative flex min-w-0 w-full flex-col gap-1 rounded-lg px-2.5 py-2 pl-3 text-left outline-none transition-colors " +
         "focus-visible:ring-1 focus-visible:ring-accent/60 " +
         (selected ? "bg-surface" : "hover:bg-surface/60")
       }
@@ -416,29 +461,172 @@ function SessionRow({
       {selected && (
         <span className="absolute left-0.5 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full bg-accent" />
       )}
-      <span
-        className={
-          "size-1.5 shrink-0 rounded-full " +
-          (isLive(session.status)
-            ? "bg-live animate-breathe"
-            : session.status === "failed"
-              ? "bg-danger"
-              : "bg-faint")
-        }
-      />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-[12.5px] font-medium leading-tight text-ink">
-          {session.account_label}
+      {/* I-01 I-02 I-03 … I-04/I-10. Narrow rails make the provider
+          abbrev and model yield first (truncate); the disc, chip text and
+          glyphs never clip (WCAG 1.4.1). */}
+      <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+        <span
+          className="inline-flex min-w-0 shrink items-center gap-1 text-[10.5px] font-medium text-ink"
+          title={session.provider}
+        >
+          <mark.Icon width={11} height={11} className="shrink-0 text-accent-hi" />
+          <span className="truncate">{mark.abbrev}</span>
         </span>
-        <span className="block truncate text-[10.5px] leading-tight text-faint">
-          {session.status}
+        <AccountDisc accountId={session.account_id} label={session.account_label} />
+        <span className="min-w-0 shrink truncate text-[10.5px] text-muted" title={session.model ?? "default model"}>
+          {session.model ?? <span className="text-faint">default model</span>}
+        </span>
+        <span className="ml-auto inline-flex shrink-0 items-center gap-1">
+          {badge ? (
+            <span
+              className={
+                "inline-flex items-center gap-1 rounded-full border px-1.5 py-px text-[10px] font-medium " +
+                chipToneClasses[badge.tone]
+              }
+            >
+              {badge.tone === "warning" || badge.tone === "danger" ? "!" : null}
+              {badge.text}
+            </span>
+          ) : (
+            <span
+              className={
+                "inline-flex items-center gap-1 rounded-full border px-1.5 py-px text-[10px] font-medium " +
+                chipToneClasses[chip.tone]
+              }
+            >
+              <chip.Icon width={10} height={10} />
+              {chip.label}
+            </span>
+          )}
+        </span>
+      </span>
+      {/* I-10 suffix (wait duration / reset countdown) + I-09 I-11. The
+          age text yields (truncate) before anything else clips. */}
+      <span className="flex min-w-0 items-center gap-1.5 overflow-hidden text-[10px] text-faint">
+        {badge && suffix ? (
+          <span
+            className={
+              "shrink-0 whitespace-nowrap font-medium " +
+              (badge.tone === "danger" ? "text-danger" : "text-warning")
+            }
+          >
+            {suffix}
+          </span>
+        ) : null}
+        <GitBadge session={session} />
+        <span className="ml-auto min-w-0 shrink truncate whitespace-nowrap tabular-nums">
+          {ageSummary(session.started_at_ms, session.last_activity_ms)}
+        </span>
+      </span>
+      {/* I-05 */}
+      <QuotaBar quota={session.quota} />
+      {/* I-06 I-08 I-07 — right-hand resource text yields before anything
+          clips. */}
+      <span className="flex min-w-0 items-center gap-1.5 overflow-hidden text-[10px] text-muted">
+        {tokens ? <span className="shrink-0 tabular-nums">{tokens}</span> : null}
+        <ChildBadges session={session} />
+        <span className="ml-auto inline-flex min-w-0 shrink items-center gap-1.5">
+          <Sparkline
+            samples={samples}
+            title={resources ? `cpu ${resources}` : "resources unavailable"}
+          />
+          {resources ? <span className="min-w-0 truncate tabular-nums">{resources}</span> : null}
         </span>
       </span>
       {session.kind === "desktop" && (
-        <span className="shrink-0 text-[9px] font-medium uppercase tracking-wide text-accent-hi">
+        <span className="self-start text-[9px] font-medium uppercase tracking-wide text-accent-hi">
           app
         </span>
       )}
+    </button>
+  );
+}
+
+/**
+ * The two-line card variant (AJ-E402 Req.4): identical I-01..I-11 fields
+ * to the rail row, sparkline widened to the 5-min window. Used by the
+ * Overview live list — no number exists here that the rail cannot
+ * explain.
+ */
+export function SessionCard({ session, onSelect }: { session: InstanceInfo; onSelect?: (id: string) => void }) {
+  const mark = providerMark(session.provider);
+  const badge = attentionBadge(session);
+  const chip = stateChip(session.status);
+  const suffix = attentionSuffix(session);
+  const tokens = tokenSummary(session.tokens);
+  const samples = rememberCpuSample(session.id, session.cpu_pct);
+  const resources =
+    session.cpu_pct !== null && session.rss_bytes !== null
+      ? `${Math.round(session.cpu_pct)}% · ${formatBytes(session.rss_bytes)}`
+      : null;
+  return (
+    <button
+      type="button"
+      onClick={onSelect ? () => onSelect(session.id) : undefined}
+      aria-label={ariaSummary(session)}
+      className="flex w-full min-w-0 flex-col gap-1.5 rounded-xl px-3 py-2.5 text-left outline-none transition-colors hover:bg-surface-2/60 focus-visible:ring-1 focus-visible:ring-accent/60"
+    >
+      <span className="flex min-w-0 items-center gap-2">
+        <span className="inline-flex shrink-0 items-center gap-1.5 text-[11.5px] font-medium text-ink">
+          <mark.Icon width={12} height={12} className="text-accent-hi" />
+          {mark.abbrev}
+        </span>
+        <AccountDisc accountId={session.account_id} label={session.account_label} size={20} />
+        <span className="min-w-0 truncate text-[12px] text-ink">{session.account_label}</span>
+        <span className="min-w-0 shrink-0 truncate text-[11px] text-muted">
+          {session.model ?? <span className="text-faint">default model</span>}
+        </span>
+        <span className="ml-auto inline-flex shrink-0 items-center gap-1">
+          {badge ? (
+            <span
+              className={
+                "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium " +
+                chipToneClasses[badge.tone]
+              }
+            >
+              {badge.tone === "warning" || badge.tone === "danger" ? "!" : null}
+              {badge.text}
+            </span>
+          ) : (
+            <span
+              className={
+                "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium " +
+                chipToneClasses[chip.tone]
+              }
+            >
+              <chip.Icon width={11} height={11} />
+              {chip.label}
+            </span>
+          )}
+        </span>
+      </span>
+      <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted">
+        {badge && suffix ? (
+          <span
+            className={
+              "shrink-0 whitespace-nowrap font-medium " +
+              (badge.tone === "danger" ? "text-danger" : "text-warning")
+            }
+          >
+            {suffix}
+          </span>
+        ) : null}
+        <QuotaBar quota={session.quota} />
+        {tokens ? <span className="tabular-nums">{tokens}</span> : null}
+        <ChildBadges session={session} />
+        <GitBadge session={session} />
+        <span className="ml-auto inline-flex shrink-0 items-center gap-2">
+          <Sparkline
+            samples={samples}
+            width={64}
+            title={resources ? `cpu ${resources}` : "resources unavailable"}
+          />
+          {resources ? <span className="tabular-nums">{resources}</span> : null}
+        </span>
+        <span className="shrink-0 whitespace-nowrap tabular-nums text-faint">
+          {ageSummary(session.started_at_ms, session.last_activity_ms)}
+        </span>
+      </span>
     </button>
   );
 }

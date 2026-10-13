@@ -73,7 +73,7 @@ for (const theme of THEMES) {
       await page.goto("/");
       await expect(page.getByRole("tab", { name: "Sessions" })).toBeVisible();
       await page.getByRole("tab", { name: "Sessions" }).click();
-      await expect(page.getByText("handed_over").first()).toBeVisible();
+      await expect(page.getByText("Handed over").first()).toBeVisible();
       await page.screenshot({
         path: resolve(GALLERY, `01-rail/all-statuses-${vp.name}-${theme}.png`),
         fullPage: false,
@@ -96,7 +96,9 @@ for (const theme of THEMES) {
       await page.goto("/");
       await expect(page.getByRole("tab", { name: "Sessions" })).toBeVisible();
       await page.getByRole("tab", { name: "Sessions" }).click();
-      await page.getByText("Work Max").first().click();
+      // The row carries its account in the aria-label (initials disc on
+      // screen) — click by accessible name (AJ-E402).
+      await page.getByRole("button", { name: /Work Max/ }).first().click();
       await expect(page.getByText("Continue on another account")).toBeVisible();
       await page.screenshot({
         path: resolve(GALLERY, `05-session-panel/populated-${vp.name}-${theme}.png`),
@@ -166,8 +168,7 @@ for (const theme of THEMES) {
 }
 
 // Determinism self-test (Req.4): same fixture twice → byte-identical PNG.
-test("determinism — two captures are byte-identical", async ({ page }) => {
-  const capture = async (suffix: string) => {
+test("determinism — two captures are byte-identical", async ({ page }) => {  const capture = async (suffix: string) => {
     await page.addInitScript(
       ({ fixture, t0 }) => {
         (window as never as { __AIJ_FIXTURE__: unknown }).__AIJ_FIXTURE__ = fixture;
