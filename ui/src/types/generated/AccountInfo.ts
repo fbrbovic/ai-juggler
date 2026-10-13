@@ -9,9 +9,9 @@ export type AccountInfo = {
  */
 id: string, 
 /**
- * Harness id.
+ * Provider id (wire field `harness` aliased one version; AJ-E107).
  */
-harness: string, 
+provider: string, 
 /**
  * User label.
  */

@@ -222,7 +222,7 @@ existing session id — do not mint new ids that orphan transcript
 links. Trap: SQLite RENAME rewrites FK references automatically;
 verify `sessions→profiles` FK still cascades after both renames.
 
-### AJ-E107 Bridge and generated-types rename (commands + TS) | Status: TODO | Priority P1 | Effort M | Depends: AJ-E106
+### AJ-E107 Bridge and generated-types rename (commands + TS) | Status: DONE-EVIDENCED (zcode-primary, 2026-10-13) | Priority P1 | Effort M | Depends: AJ-E106
 **Goal**:
 Rename the app-command and generated-TS surface to Provider/Account/
 Instance/LaunchRecipe while keeping every IPC payload wire-compatible

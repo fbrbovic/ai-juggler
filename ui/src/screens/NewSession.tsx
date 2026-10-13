@@ -6,7 +6,7 @@ import {
   launchSession,
   pickDirectory,
   type AccountInfo,
-  type ProfileInfo,
+  type LaunchRecipeInfo,
   type ProjectInfo,
 } from "../lib/bridge";
 
@@ -29,14 +29,14 @@ export function NewSessionModal({
   onLaunched: (sessionId: string, title: string) => void;
 }) {
   const [directory, setDirectory] = useState<string | null>(initialDirectory);
-  const [profiles, setProfiles] = useState<ProfileInfo[] | null>(null);
+  const [profiles, setProfiles] = useState<LaunchRecipeInfo[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
 
   useEffect(() => {
     void import("../lib/bridge").then((bridge) =>
-      bridge.profilesList().then(setProfiles),
+      bridge.launchRecipesList().then(setProfiles),
     );
   }, []);
 
@@ -56,17 +56,17 @@ export function NewSessionModal({
     [projects],
   );
 
-  const launch = async (profile: ProfileInfo) => {
+  const launch = async (recipe: LaunchRecipeInfo) => {
     setBusy(true);
     setError(null);
     try {
-      const result = await launchSession(profile.id, directory);
+      const result = await launchSession(recipe.id, directory);
       if (!result) {
         setError("Preview mode — no backend connected.");
         setBusy(false);
         return;
       }
-      onLaunched(result.session_id, `${profile.account_label} · ${profile.name}`);
+      onLaunched(result.session_id, `${recipe.account_label} · ${recipe.name}`);
     } catch (cause) {
       setError(String(cause));
       setBusy(false);
@@ -167,15 +167,15 @@ export function NewSessionModal({
             Which account?
           </p>
           <div className="mt-2 flex flex-col gap-1.5">
-            {(profiles ?? []).map((profile) => {
-              const login = loginByAccount.get(profile.account_id) ?? "logged_out";
+            {(profiles ?? []).map((recipe) => {
+              const login = loginByAccount.get(recipe.account_id) ?? "logged_out";
               const ready = login === "logged_in";
               return (
                 <button
-                  key={profile.id}
+                  key={recipe.id}
                   type="button"
                   disabled={busy || !ready}
-                  onClick={() => void launch(profile)}
+                  onClick={() => void launch(recipe)}
                   className={
                     "flex items-center gap-2 rounded-xl border px-3 py-2.5 text-left text-xs transition-colors " +
                     (ready
@@ -184,12 +184,12 @@ export function NewSessionModal({
                   }
                 >
                   <IconTerminal width={13} height={13} />
-                  <span className="font-medium">{profile.account_label}</span>
+                  <span className="font-medium">{recipe.account_label}</span>
                   <span className="text-faint">·</span>
-                  <span className="text-muted">{profile.name}</span>
-                  {profile.model && (
+                  <span className="text-muted">{recipe.name}</span>
+                  {recipe.model && (
                     <span className="ml-auto font-mono text-[10px] text-faint">
-                      {profile.model}
+                      {recipe.model}
                     </span>
                   )}
                   {!ready && (
