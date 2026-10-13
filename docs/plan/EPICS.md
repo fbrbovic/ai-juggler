@@ -33,6 +33,49 @@ This is the execution companion to the [spec](../SPEC.md): the spec defines *wha
 
 ---
 
+## Execution phases (Stage-1 resequence per D-01/D-13; task detail in docs/tasks/)
+
+The canonical task breakdown is now the **E-catalog**
+(`docs/tasks/E1..E10`, 107 tasks, evidence-gated). The M-milestones
+below retain their IDs for tracking continuity; their *scope text* is
+re-sequenced around the settled thesis **Switch → See → Clean**, with
+Fleet integrated at launch (D-13), not deferred:
+
+- **Phase 0 — Foundation & truth** (= M0/M1 done + E8 evidence
+  machinery + E9 docs you are reading): engine, Claude adapter,
+  instance-centric UI, onboarding scan/import, handover v0 — plus the
+  evidence store, visual harness, and gates that make every later
+  claim auditable.
+- **Phase 1 — See** (E4): enriched Instance read model, indicator
+  grammar, the six-tab Right Inspector, honest fields, desktop
+  adapter contract + Focus Window.
+- **Phase 2 — Switch** (E2, runs concurrently with Phase 1 where
+  `Depends:` allows): Switch Graph, pack v2 + redaction policy,
+  per-pair fidelity matrix, execution pipeline with rollback, hybrid
+  door, switch-back resume+delta, validation programme (D-04).
+- **Phase 3 — Clean** (E5): spawn ledger, verified ownership,
+  Cleanup Centre, tiers per D-08, audit, crash recovery.
+- **Phase 4 — Smart onboarding generalised** (E3): cross-Provider
+  scan/inference/recommender, six flows, sign-in queue.
+- **Phase 5 — Quota/cost** (E6, research-gated by AJ-E909): two-clock
+  engine, forecast, cost ledger.
+- **Fleet at launch** (E7, D-13): pairing/transport/identity early;
+  remote Inspector/switch/cleanup under per-machine permissions;
+  security review is a beta-exit gate.
+- **Release engineering** (= M5): signed builds, updater, channels.
+- **Workflows & beta ops** (E10): derived workflows, safety nets,
+  dogfood programme, beta-exit evidence.
+
+**Slip rule:** when a phase is late, cut widening/demoted scope
+before cutting fixtures/validation. Demoted items (review-queue
+product, templates library, present mode) stay deferred with explicit
+revisit triggers. **Gate evidence** for every phase now includes the
+switch-budget proof (AJ-E807/E808 fidelity register), cleanup
+zero-false-kill proof, and the dogfood thresholds (AJ-E809).
+
+The per-task source of truth is `docs/tasks/TASK-CATALOG.md`; the
+tables below are the historical M-view, updated where scope moved.
+
 ## M0 — Foundation & CI *(epic)*
 
 Goal: a clean, enterprise-grade workspace where everything after it can be built and continuously validated.
