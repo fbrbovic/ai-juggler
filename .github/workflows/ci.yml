@@ -78,6 +78,9 @@ jobs:
       - name: Install
         working-directory: ui
         run: pnpm install --frozen-lockfile
+      - name: Component tests (AJ-E402 SessionRow fixtures)
+        working-directory: ui
+        run: pnpm test
       - name: Build (typecheck + bundle)
         working-directory: ui
         run: pnpm build

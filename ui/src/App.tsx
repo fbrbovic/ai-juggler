@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Button, Card, Chip, QuotaRing, StatCard } from "./components/primitives";
-import { WorkflowRail, type WorkTab } from "./components/WorkflowRail";
+import { Button, Card, Chip, QuotaBar, QuotaRing, StatCard } from "./components/primitives";
+import { SessionCard, WorkflowRail, type WorkTab } from "./components/WorkflowRail";
 import {
   IconFleet,
   IconJuggler,
@@ -15,6 +15,8 @@ import { ProjectPanel, SessionPanel, WorkEmpty } from "./screens/WorkPanels";
 import {
   accountsList,
   launchRecipesList,
+  onSessionsQuota,
+  onSessionsResources,
   onSessionsUpdated,
   onTerminalExit,
   projectsBackfill,
@@ -133,6 +135,39 @@ export default function App() {
     void refresh();
     return onSessionsUpdated(() => void refresh());
   }, [refresh]);
+
+  // AJ-E402/E401 read-model ticks: merge the coalesced 5 s resource and
+  // 30 s quota deltas into the rows by id (no full refetch per tick) —
+  // this is what drives the I-07 sparkline history and quota countdowns.
+  useEffect(() => {
+    const stopResources = onSessionsResources((deltas) => {
+      setSessions((current) =>
+        current.map((row) => {
+          const delta = deltas.find((d) => d.id === row.id);
+          return delta
+            ? {
+                ...row,
+                cpu_pct: delta.cpu_pct,
+                rss_bytes: delta.rss_bytes,
+                child_count: delta.child_count,
+              }
+            : row;
+        }),
+      );
+    });
+    const stopQuota = onSessionsQuota((deltas) => {
+      setSessions((current) =>
+        current.map((row) => {
+          const delta = deltas.find((d) => d.id === row.id);
+          return delta ? { ...row, quota: delta.quota } : row;
+        }),
+      );
+    });
+    return () => {
+      stopResources();
+      stopQuota();
+    };
+  }, []);
 
   // Login terminals end → mark ended (kept for scrollback until closed).
   useEffect(() => {
@@ -341,7 +376,7 @@ export default function App() {
             </div>
           ) : global === "overview" ? (
             <div className="h-full overflow-y-auto">
-              <Overview sessions={sessions} projects={projects} />
+              <Overview sessions={sessions} projects={projects} onSelectSession={selectSession} />
             </div>
           ) : global === "usage" ? (
             <ComingSoon screen="Usage" />
@@ -439,9 +474,11 @@ export default function App() {
 function Overview({
   sessions,
   projects,
+  onSelectSession,
 }: {
   sessions: InstanceInfo[];
   projects: ProjectInfo[];
+  onSelectSession: (id: string) => void;
 }) {
   const [stats, setStats] = useState<StatsInfo | null>(null);
   useEffect(() => {
@@ -486,7 +523,7 @@ function Overview({
           <div className="mb-4 flex items-center justify-between">
             <div>
               <h2 className="text-sm font-semibold">Live instances</h2>
-              <p className="text-xs text-muted">Select one in the rail to open its panel</p>
+              <p className="text-xs text-muted">Select one to open its panel</p>
             </div>
             <Chip tone="neutral" dot>
               {live.length} live
@@ -502,28 +539,47 @@ function Overview({
               </p>
             </div>
           ) : (
+            /* The card variant (AJ-E402 Req.4): identical I-01..I-11 to the
+               rail row — no number exists here the rail cannot explain. */
             <div className="flex flex-col divide-y divide-hairline/50">
               {live.map((s) => (
-                <div key={s.id} className="flex items-center gap-3 py-2.5 text-xs">
-                  <span className="dot-live size-1.5 rounded-full bg-live" />
-                  <span className="font-medium">{s.account_label}</span>
-                  <span className="text-faint">{s.kind}</span>
-                  <Chip tone="live">{s.status}</Chip>
-                </div>
+                <SessionCard key={s.id} session={s} onSelect={onSelectSession} />
               ))}
             </div>
           )}
         </Card>
 
-        <Card className="flex flex-col items-center justify-center gap-3 p-5">
+        <Card className="flex flex-col items-start justify-center gap-3 p-5">
           <h2 className="self-start text-sm font-semibold">Quota windows</h2>
-          <div className="flex items-center justify-around gap-4 pt-2">
-            <QuotaRing percent={0} label="5h" />
-            <QuotaRing percent={0} label="week" />
-          </div>
-          <p className="text-center text-[11px] text-faint">
-            Per-account usage tracking lands in M2 — rings stay honest until then
-          </p>
+          {/* Honest I-05 (AJ-E402 Req.3): the fabricated percent={0} rings
+              are gone — each live Account renders its measured quota, and
+              with no feed the exact `Quota: no data` empty state shows. */}
+          {live.some((s) => s.quota !== null) ? (
+            <div className="flex w-full flex-col gap-3 pt-1">
+              {live
+                .filter((s) => s.quota !== null)
+                .map((s) => (
+                  <div key={s.id} className="flex flex-col gap-1">
+                    <span className="text-[11px] text-muted">
+                      {s.account_label} · {s.provider}
+                    </span>
+                    <QuotaBar quota={s.quota} />
+                  </div>
+                ))}
+            </div>
+          ) : (
+            <div className="flex flex-col items-center gap-3 self-stretch py-2">
+              <div className="flex items-center justify-around gap-4">
+                <QuotaRing percent={null} label="5h" />
+                <QuotaRing percent={null} label="week" />
+              </div>
+              <p className="text-center text-[11px] text-faint">
+                {live.length === 0
+                  ? "No live instances — quota shows per account once one runs"
+                  : "Quota: no data — feeds land with the usage engine"}
+              </p>
+            </div>
+          )}
         </Card>
       </div>
     </div>

@@ -161,17 +161,20 @@ export function StatCard({
   );
 }
 
-/** Circular progress ring for quota windows. */
+/** Circular progress ring for quota windows. `percent: null` is the
+ * honest no-feed state — a dashed, empty ring that claims nothing
+ * (AJ-E402: fabricated `percent={0}` rings are gone). */
 export function QuotaRing({
   percent,
   size = 56,
   label,
 }: {
-  percent: number;
+  percent: number | null;
   size?: number;
   label?: string;
 }) {
-  const clamped = Math.max(0, Math.min(100, percent));
+  const hasData = percent !== null;
+  const clamped = hasData ? Math.max(0, Math.min(100, percent)) : 0;
   const stroke = 5;
   const radius = (size - stroke) / 2;
   const circumference = 2 * Math.PI * radius;
@@ -185,7 +188,7 @@ export function QuotaRing({
     <div className="flex flex-col items-center gap-1.5">
       <div
         className="rounded-full"
-        style={{ boxShadow: `0 0 20px -8px ${clamped > 0 ? color : "transparent"}` }}
+        style={{ boxShadow: `0 0 20px -8px ${hasData && clamped > 0 ? color : "transparent"}` }}
       >
         <svg width={size} height={size} className="-rotate-90">
           <circle
@@ -195,24 +198,132 @@ export function QuotaRing({
             fill="none"
             stroke="var(--color-hairline)"
             strokeWidth={stroke}
+            strokeDasharray={hasData ? undefined : "4 5"}
           />
-          <circle
-            cx={size / 2}
-            cy={size / 2}
-            r={radius}
-            fill="none"
-            stroke={color}
-            strokeWidth={stroke}
-            strokeLinecap="round"
-            strokeDasharray={circumference}
-            strokeDashoffset={circumference * (1 - clamped / 100)}
-            style={{
-              transition: "stroke-dashoffset 300ms var(--ease-out-soft)",
-            }}
-          />
+          {hasData && (
+            <circle
+              cx={size / 2}
+              cy={size / 2}
+              r={radius}
+              fill="none"
+              stroke={color}
+              strokeWidth={stroke}
+              strokeLinecap="round"
+              strokeDasharray={circumference}
+              strokeDashoffset={circumference * (1 - clamped / 100)}
+              style={{
+                transition: "stroke-dashoffset 300ms var(--ease-out-soft)",
+              }}
+            />
+          )}
         </svg>
       </div>
       {label && <span className="text-[11px] text-muted">{label}</span>}
     </div>
+  );
+}
+
+/** I-05 quota tier tag — always adjacent to the number (WCAG/NN-g:
+ * recognition over recall). `Meas`/`Comp`/`Est` per SPEC §6. */
+export function quotaTierTag(confidence: string): string {
+  if (confidence === "measured") return "Meas";
+  if (confidence === "computed") return "Comp";
+  return "Est";
+}
+
+/** I-05: the quota bar for a row/card — filled by `% left`, reset
+ * countdown when known, tier tag always adjacent, and the exact honest
+ * empty state: dashed track + `Quota: no data` (never a fabricated 0). */
+export function QuotaBar({
+  quota,
+  className = "",
+}: {
+  quota: { used_percentage: number; resets_at_ms: number | null; confidence: string } | null;
+  className?: string;
+}) {
+  if (!quota) {
+    return (
+      <span
+        className={`inline-flex min-w-0 items-center gap-1.5 ${className}`}
+        title="Quota: no data"
+      >
+        <span className="inline-block h-1.5 w-14 rounded-full border border-dashed border-faint/70" />
+        <span className="whitespace-nowrap text-[10px] text-faint">Quota: no data</span>
+      </span>
+    );
+  }
+  const left = Math.max(0, 100 - quota.used_percentage);
+  const tone =
+    left <= 10 ? "bg-danger" : left <= 30 ? "bg-warning" : "bg-accent";
+  const reset = quota.resets_at_ms !== null ? ` · resets ${formatCountdown(quota.resets_at_ms)}` : "";
+  return (
+    <span
+      className={`inline-flex min-w-0 items-center gap-1.5 ${className}`}
+      title={`Quota: ${Math.round(left)}% left${reset} · ${quota.confidence}`}
+    >
+      <span className="relative inline-block h-1.5 w-14 overflow-hidden rounded-full bg-surface-3">
+        <span
+          className={`absolute inset-y-0 left-0 rounded-full ${tone}`}
+          style={{ width: `${Math.max(2, quota.used_percentage)}%` }}
+        />
+      </span>
+      <span className="whitespace-nowrap text-[10px] tabular-nums text-muted">
+        {Math.round(left)}% left
+      </span>
+      <span className="shrink-0 rounded border border-hairline px-1 text-[9px] font-medium uppercase tracking-wide text-faint">
+        {quotaTierTag(quota.confidence)}
+      </span>
+    </span>
+  );
+}
+
+/** Compact reset countdown (`2h10m`, `45m`, `17:00` when <1h). */
+export function formatCountdown(resetsAtMs: number, nowMs: number = Date.now()): string {
+  const ms = resetsAtMs - nowMs;
+  if (ms <= 0) return "now";
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h${String(minutes % 60).padStart(1, "0")}m`;
+  return `${Math.floor(hours / 24)}d${hours % 24}h`;
+}
+
+/** I-07: trailing mini sparkline. `samples` is the honest measured
+ * history (oldest → newest); fewer than two samples renders the
+ * placeholder dash — never an invented flat line. */
+export function Sparkline({
+  samples,
+  width = 46,
+  height = 14,
+  title,
+}: {
+  samples: number[];
+  width?: number;
+  height?: number;
+  title?: string;
+}) {
+  if (samples.length < 2) {
+    return (
+      <span className="text-[10px] leading-none text-faint" title={title ?? "resources unavailable"}>
+        —
+      </span>
+    );
+  }
+  const max = Math.max(...samples, 1);
+  const step = width / (samples.length - 1);
+  const points = samples
+    .map((value, i) => `${(i * step).toFixed(1)},${(height - (value / max) * (height - 2) - 1).toFixed(1)}`)
+    .join(" ");
+  return (
+    <svg
+      width={width}
+      height={height}
+      className="shrink-0 text-accent-hi"
+      role="img"
+      aria-label={title ?? "resource history"}
+      focusable="false"
+    >
+      <polyline points={points} fill="none" stroke="currentColor" strokeWidth={1.25} strokeLinejoin="round" />
+    </svg>
   );
 }
