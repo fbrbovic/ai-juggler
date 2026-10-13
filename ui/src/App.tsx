@@ -1,12 +1,22 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, Card, Chip, QuotaBar, QuotaRing, StatCard } from "./components/primitives";
-import { SessionCard, WorkflowRail, type WorkTab } from "./components/WorkflowRail";
+import { SessionCard, WorkflowRail, type Freshness, type WorkTab } from "./components/WorkflowRail";
 import {
   IconFleet,
   IconJuggler,
   IconTerminal,
   IconUsage,
 } from "./components/icons";
+import { IndicatorLegend } from "./components/indicator";
+import {
+  DENSITY_ORDER,
+  isDensityShortcut as isDensityShortcutEvent,
+  nextDensity,
+  readDensity,
+  storeDensity,
+  type Density,
+} from "./lib/density";
+import { hasLiveBackend } from "./lib/bridge";
 import { ProfilesScreen } from "./screens/Profiles";
 import { OnboardingWizard } from "./screens/OnboardingWizard";
 import { NewSessionModal } from "./screens/NewSession";
@@ -60,14 +70,47 @@ type Selection =
 
 export default function App() {
   const [tab, setTab] = useState<WorkTab>("projects");
-  const [railCollapsed, setRailCollapsed] = useState(
-    () => localStorage.getItem("aij.rail.collapsed") === "1",
-  );
-  const toggleRail = useCallback(() => {
-    setRailCollapsed((was) => {
-      localStorage.setItem("aij.rail.collapsed", was ? "0" : "1");
-      return !was;
+  // Density (AJ-E403): persisted in `aij.density`; the legacy
+  // `aij.rail.collapsed` boolean migrates into `minimal` on first read.
+  const [density, setDensity] = useState<Density>(() => readDensity());
+  const cycleDensity = useCallback(() => {
+    setDensity((current) => {
+      const next = nextDensity(current);
+      storeDensity(next);
+      return next;
     });
+  }, []);
+  const setDensityAndStore = useCallback((next: Density) => {
+    setDensity(next);
+    storeDensity(next);
+  }, []);
+
+  // The stale-data tick (AJ-E403 Req.5): ONE shared 15 s timer for the
+  // whole app — staleness captions recompute against `now` without any
+  // per-value timers.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 15_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  // Freshness per Instance id: when each value class was last sampled.
+  // Seeded at list load and refreshed by the resource/quota ticks; the
+  // `__AIJ_SAMPLED_AT__` hook exists for the visual fixtures (stale-row
+  // captures) exactly like `__AIJ_FIXTURE__`.
+  const [freshness, setFreshness] = useState<Freshness>({});
+  const baselineFreshness = useCallback((ids: string[]): Freshness => {
+    const forced = (window as unknown as { __AIJ_SAMPLED_AT__?: Record<string, number> })
+      .__AIJ_SAMPLED_AT__;
+    const at = Date.now();
+    const map: Freshness = {};
+    for (const id of ids) {
+      map[id] = {
+        resources: forced?.[id] ?? at,
+        quota: forced?.[id] ?? at,
+      };
+    }
+    return map;
   }, []);
   const [selection, setSelection] = useState<Selection>({ kind: "none" });
   const [global, setGlobal] = useState<GlobalId | null>(null);
@@ -112,10 +155,19 @@ export default function App() {
       setSessions(sessionRows);
       setAccounts(accountRows);
       setProfiles(profileRows);
+      setFreshness((current) => {
+        // Keep known sample times; new rows get the load baseline.
+        const baseline = baselineFreshness(sessionRows.map((row) => row.id));
+        const next: Freshness = { ...baseline };
+        for (const [id, sampled] of Object.entries(current)) {
+          if (next[id]) next[id] = sampled;
+        }
+        return next;
+      });
     } catch {
       // preview mode may lack backend mocks for some calls — keep last data
     }
-  }, []);
+  }, [baselineFreshness]);
 
   // Golden path day one: surface the user's REAL project history from
   // imported transcripts (idempotent backend scan).
@@ -139,8 +191,10 @@ export default function App() {
   // AJ-E402/E401 read-model ticks: merge the coalesced 5 s resource and
   // 30 s quota deltas into the rows by id (no full refetch per tick) —
   // this is what drives the I-07 sparkline history and quota countdowns.
+  // Each delta also refreshes the sampled-at timestamp per id (stale rule).
   useEffect(() => {
     const stopResources = onSessionsResources((deltas) => {
+      const at = Date.now();
       setSessions((current) =>
         current.map((row) => {
           const delta = deltas.find((d) => d.id === row.id);
@@ -154,14 +208,29 @@ export default function App() {
             : row;
         }),
       );
+      setFreshness((current) => {
+        const next = { ...current };
+        for (const delta of deltas) {
+          if (next[delta.id]) next[delta.id] = { ...next[delta.id]!, resources: at };
+        }
+        return next;
+      });
     });
     const stopQuota = onSessionsQuota((deltas) => {
+      const at = Date.now();
       setSessions((current) =>
         current.map((row) => {
           const delta = deltas.find((d) => d.id === row.id);
           return delta ? { ...row, quota: delta.quota } : row;
         }),
       );
+      setFreshness((current) => {
+        const next = { ...current };
+        for (const delta of deltas) {
+          if (next[delta.id]) next[delta.id] = { ...next[delta.id]!, quota: at };
+        }
+        return next;
+      });
     });
     return () => {
       stopResources();
@@ -237,16 +306,23 @@ export default function App() {
     [projects, selectedSession],
   );
 
-  // ⌘B toggles the rail, ⌘N starts a new session.
+  // ⌘B legacy: toggles minimal↔comfortable (the old collapse, kept for
+  // muscle memory). ⌘N starts a new session. Density cycle: Ctrl+D
+  // everywhere; Cmd+D only inside the Tauri app — the web preview must
+  // not swallow the browser bookmark shortcut (AJ-E403 Req.4).
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "b") {
         event.preventDefault();
-        toggleRail();
+        setDensityAndStore(density === "minimal" ? "comfortable" : "minimal");
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
         setNewSession(true);
+      }
+      if (isDensityShortcutEvent(event, hasLiveBackend())) {
+        event.preventDefault();
+        cycleDensity();
       }
       if (
         (event.metaKey || event.ctrlKey) &&
@@ -259,7 +335,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [cycleDensity, density, setDensityAndStore]);
 
   const contextTitle =
     global !== null
@@ -281,8 +357,8 @@ export default function App() {
       <WorkflowRail
         tab={tab}
         onTab={setTab}
-        collapsed={railCollapsed}
-        onToggleCollapsed={toggleRail}
+        density={density}
+        onCycleDensity={cycleDensity}
         projects={projects}
         sessions={sessions}
         loginTerminals={loginTerminals}
@@ -292,32 +368,34 @@ export default function App() {
         }
         onSelectProject={selectProject}
         onNewSession={() => setNewSession(true)}
-        header={(collapsed) => (
+        freshness={freshness}
+        now={now}
+        header={(minimal) => (
           <div
             className={
               "flex h-14 shrink-0 items-center gap-2.5 overflow-hidden " +
-              (collapsed ? "justify-center px-0" : "px-4")
+              (minimal ? "justify-center px-0" : "px-4")
             }
           >
             <button
               type="button"
-              title={collapsed ? "Expand (⌘B)" : "Collapse (⌘B)"}
-              onClick={toggleRail}
+              title={minimal ? "Comfortable (⌘B)" : "Minimal (⌘B)"}
+              onClick={() => setDensityAndStore(density === "minimal" ? "comfortable" : "minimal")}
               className="shrink-0 rounded-md p-1 text-accent hover:bg-surface"
             >
               <span className="block drop-shadow-[0_0_10px_#7c7cf466]">
                 <IconJuggler width={22} height={22} />
               </span>
             </button>
-            {!collapsed && (
+            {!minimal && (
               <span className="whitespace-nowrap text-[15px] font-semibold tracking-tight">
                 AI Juggler
               </span>
             )}
           </div>
         )}
-        footer={(collapsed) =>
-          collapsed ? (
+        footer={(minimal) =>
+          minimal ? (
             <div className="flex justify-center py-2" title="this-mac · healthy">
               <span className="dot-live size-1.5 rounded-full bg-success" />
             </div>
@@ -326,6 +404,9 @@ export default function App() {
               <div className="flex items-center gap-2">
                 <span className="dot-live size-1.5 shrink-0 rounded-full bg-success" />
                 <span className="truncate text-[11px]">this-mac · healthy</span>
+                {/* The rail-footer `?` legend popover (AJ-E403 Req.6,
+                    surface 1 of 3 — identical content everywhere). */}
+                <LegendPopover />
               </div>
               <div className="truncate font-mono text-[10px] text-faint">
                 v{info?.version ?? "0.0.0"}
@@ -346,6 +427,31 @@ export default function App() {
           <Chip tone="accent">Claude Code</Chip>
 
           <div className="ml-auto flex items-center gap-1.5" data-tauri-drag-region={false}>
+            {/* Density segmented control (AJ-E403 Req.4). The inspector
+                and panels never change with density — only the rail. */}
+            <div
+              role="group"
+              aria-label="Rail density"
+              className="flex items-center rounded-lg border border-hairline bg-surface/60 p-0.5"
+            >
+              {DENSITY_ORDER.map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  aria-pressed={density === mode}
+                  onClick={() => setDensityAndStore(mode)}
+                  title={`${mode} rail${mode === "minimal" ? " (Ctrl+D cycles)" : ""}`}
+                  className={
+                    "rounded-md px-2 py-1 text-[10.5px] font-medium capitalize transition-colors outline-none focus-visible:ring-1 focus-visible:ring-accent/60 " +
+                    (density === mode
+                      ? "bg-accent-soft text-accent-hi"
+                      : "text-muted hover:bg-surface hover:text-ink")
+                  }
+                >
+                  {mode === "comfortable" ? "Comfort" : mode === "compact" ? "Compact" : "Minimal"}
+                </button>
+              ))}
+            </div>
             {GLOBAL_NAV.map((item) => (
               <button
                 key={item.id}
@@ -471,6 +577,29 @@ export default function App() {
   );
 }
 
+/** The `?` legend popover button + panel (AJ-E403 Req.6). */
+function LegendPopover() {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="relative ml-auto shrink-0">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-label="Indicator legend"
+        onClick={() => setOpen((value) => !value)}
+        className="flex size-4 items-center justify-center rounded-full border border-hairline text-[9px] font-bold text-muted outline-none transition-colors hover:bg-surface hover:text-ink focus-visible:ring-1 focus-visible:ring-accent/60"
+      >
+        ?
+      </button>
+      {open && (
+        <span className="absolute bottom-full left-0 z-40 mb-2 block w-64 rounded-xl border border-hairline bg-surface p-3 shadow-card">
+          <IndicatorLegend />
+        </span>
+      )}
+    </span>
+  );
+}
+
 function Overview({
   sessions,
   projects,
@@ -521,9 +650,13 @@ function Overview({
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <Card className="p-5 xl:col-span-2">
           <div className="mb-4 flex items-center justify-between">
-            <div>
-              <h2 className="text-sm font-semibold">Live instances</h2>
-              <p className="text-xs text-muted">Select one to open its panel</p>
+            <div className="flex items-start gap-2">
+              <div>
+                <h2 className="text-sm font-semibold">Live instances</h2>
+                <p className="text-xs text-muted">Select one to open its panel</p>
+              </div>
+              {/* Overview-header legend (AJ-E403 Req.6, surface 2 of 3). */}
+              <LegendPopover />
             </div>
             <Chip tone="neutral" dot>
               {live.length} live

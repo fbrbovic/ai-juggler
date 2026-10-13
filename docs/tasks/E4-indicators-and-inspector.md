@@ -60,7 +60,7 @@
 **Research basis**: pass2/04 §3 (lines 163-192), §7.1 wireframe (438-460); deep 01 B-11/B-14; `WorkflowRail.tsx:429` (label+dot today).
 **Handover note**: Provider glyphs (Claude/Codex/ZCode) do not exist in icons.tsx:22 (8 generic glyphs) — add marks, do not reuse status dots. Trap: do not sort or filter here; AJ-E404 owns ranking.
 
-### AJ-E403 Density modes, legend, and the stale-data rule | Status: TODO | Priority P1 | Effort M | Depends: AJ-E402
+### AJ-E403 Density modes, legend, and the stale-data rule | Status: DONE-EVIDENCED (zcode-primary, 2026-10-13) | Priority P1 | Effort M | Depends: AJ-E402
 **Goal**: Ship Comfortable/Compact/Minimal densities, the shared state/quota legend, and dimmed `stale - Nm` rendering for expired values.
 **User story**: As a developer monitoring while coding, I want a collapsed icon rail that still screams "needs you", so that supervision costs me no screen space.
 **Requirements**:
@@ -76,6 +76,12 @@
 **Evidence/validation proof**: Test command `cargo test --workspace` (backend unchanged) + UI test `density.test` asserting field presence per mode from a 3-row fixture; pass = all assertions green; evidence (test log) linked in PR; manual dogfood note in `docs/qa/` not required.
 **Visual testing**: Screenshots: 3 densities x (1440x900, 1024x768), plus Minimal tooltip open, plus one stale row; method: Playwright pixel-diff vs baseline tolerance 1% + manual contrast check on dimmed stale text (>= 4.5:1 against background, else keep text colour and add `stale` chip instead of dimming). Pass = baselines approved by reviewer, axe 0 critical.
 **Files to touch**: `ui/src/components/WorkflowRail.tsx:110,397`, `ui/src/App.tsx:62`, `ui/src/components/primitives.tsx`, `ui/src/styles.css`.
+*Implementation mapping (corrected in this task's PR per the claiming protocol)*:
+- Added `ui/src/lib/density.ts` (persistence + migration + keyboard predicate + stale threshold — pure, unit-tested) and `ui/src/components/density.test.tsx`.
+- `ui/src/components/indicator.tsx` gains the shared `IndicatorLegend`, the contrast-safe `StaleChip`, dual resource sampling (RAM solid + CPU outline — the legend never describes what is not drawn) and `isActiveStatus`.
+- Legend surfaces TODAY: rail-footer `?` popover, Overview screen header (the Inspector does not exist until AJ-E406 — the component is shared and drops in then), and the rail's All-clear empty state.
+- The "existing 15 s tick" did not exist; ONE shared 15 s interval in App drives all staleness recomputation (no per-value timers). Terminal rows hide resource slots entirely (a finished Instance is not "unavailable" — active-unsampled keeps the honest `—`); the minimal rail keeps ALL active statuses visible (waiting/stuck/quota-blocked included — the collapsed rail must still scream "needs you").
+- `⌘B` keeps its legacy minimal↔comfortable toggle; the cycle shortcut is Ctrl+D everywhere, Cmd+D only inside the Tauri app (web preview keeps the browser bookmark shortcut).
 **Research basis**: pass2/04 §4.1-4.2 (lines 198-241); `WorkflowRail.tsx:110` (60 px collapsed rail exists); SPEC.md:20 (20-session target drives Compact).
 **Handover note**: Trap: existing `aij.rail.collapsed` (App.tsx:62) is a boolean — migrate it into `aij.density=minimal` on first read, do not keep two competing keys.
 

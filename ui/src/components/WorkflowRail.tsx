@@ -1,15 +1,20 @@
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { IconProjects, IconSessions, IconTerminal } from "./icons";
 import type { InstanceInfo, ProjectInfo } from "../lib/bridge";
+import type { Density } from "../lib/density";
+import { REFRESH_INTERVALS, staleCaption } from "../lib/density";
 import {
   AccountDisc,
   ChildBadges,
   GitBadge,
+  IndicatorLegend,
+  StaleChip,
   attentionBadge,
   attentionSuffix,
   ariaSummary,
+  isActiveStatus,
   providerMark,
-  rememberCpuSample,
+  rememberResourceSample,
   stateChip,
   tokenSummary,
   ageSummary,
@@ -17,6 +22,9 @@ import {
   type StateChipTone,
 } from "./indicator";
 import { QuotaBar, Sparkline } from "./primitives";
+
+/** Freshness timestamps per Instance id (epoch ms) driving the stale rule. */
+export type Freshness = Record<string, { resources: number; quota: number }>;
 
 /** The three workflow tabs the whole navbar switches between. */
 export type WorkTab = "projects" | "instances" | "sessions";
@@ -50,8 +58,8 @@ function readWidth(): number {
 export function WorkflowRail({
   tab,
   onTab,
-  collapsed,
-  onToggleCollapsed,
+  density,
+  onCycleDensity,
   projects,
   sessions,
   loginTerminals,
@@ -61,11 +69,13 @@ export function WorkflowRail({
   onNewSession,
   header,
   footer,
+  freshness = {},
+  now = Date.now(),
 }: {
   tab: WorkTab;
   onTab: (tab: WorkTab) => void;
-  collapsed: boolean;
-  onToggleCollapsed: () => void;
+  density: Density;
+  onCycleDensity: () => void;
   projects: ProjectInfo[];
   sessions: InstanceInfo[];
   loginTerminals: { id: string; title: string; ended: boolean }[];
@@ -73,21 +83,24 @@ export function WorkflowRail({
   onSelectSession: (id: string) => void;
   onSelectProject: (id: string) => void;
   onNewSession: () => void;
-  header: (collapsed: boolean) => ReactNode;
-  footer: (collapsed: boolean) => ReactNode;
+  header: (minimal: boolean) => ReactNode;
+  footer: (minimal: boolean) => ReactNode;
+  freshness?: Freshness;
+  now?: number;
 }) {
+  const minimal = density === "minimal";
   const [width, setWidth] = useState<number>(readWidth);
   const [dragging, setDragging] = useState(false);
   const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
 
   const beginDrag = useCallback(
     (event: React.PointerEvent) => {
-      if (collapsed) return;
+      if (minimal) return;
       event.preventDefault();
       dragState.current = { startX: event.clientX, startWidth: width };
       setDragging(true);
     },
-    [collapsed, width],
+    [minimal, width],
   );
 
   useEffect(() => {
@@ -119,23 +132,23 @@ export function WorkflowRail({
 
   // Label threshold: below this width, tabs show icons only (with
   // tooltips) instead of squeezing text into clipping.
-  const showLabels = !collapsed && width >= 244;
+  const showLabels = !minimal && width >= 244;
 
   return (
     <aside
-      style={{ width: collapsed ? 60 : width }}
+      style={{ width: minimal ? 60 : width }}
       className={
         "relative flex h-full shrink-0 select-none flex-col border-r border-hairline bg-surface/30 backdrop-blur-xl transition-[width] duration-150 ease-out " +
         (dragging ? "" : "")
       }
     >
-      {header(collapsed)}
+      {header(minimal)}
 
       {/* Tab switcher — adapts: icon+label → icon-only as the rail narrows */}
       <nav
         className={
           "flex gap-1 px-2 pb-2 pt-0.5 " +
-          (collapsed ? "flex-col items-center" : "")
+          (minimal ? "flex-col items-center" : "")
         }
         role="tablist"
       >
@@ -147,12 +160,12 @@ export function WorkflowRail({
               type="button"
               role="tab"
               aria-selected={active}
-              title={collapsed || !showLabels ? item.label : undefined}
+              title={minimal || !showLabels ? item.label : undefined}
               onClick={() => onTab(item.id)}
               className={
                 "group/tab relative flex min-w-0 flex-1 items-center justify-center overflow-hidden rounded-lg text-[12px] font-medium outline-none transition-colors duration-100 " +
                 "focus-visible:ring-1 focus-visible:ring-accent/60 " +
-                (collapsed
+                (minimal
                   ? "size-9 "
                   : showLabels
                     ? "gap-1.5 px-2 py-[7px] "
@@ -175,38 +188,32 @@ export function WorkflowRail({
 
       {/* The live list for the active tab */}
       <div className="rail-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 pb-2">
-        {collapsed ? (
-          <div className="flex flex-col items-center gap-1 pt-1">
-            {sessions
-              .filter((s) => isLive(s.status))
-              .slice(0, 6)
-              .map((s) => (
-                <button
-                  key={s.id}
-                  type="button"
-                  title={s.account_label}
-                  onClick={() => onSelectSession(s.id)}
-                  className="flex size-8 items-center justify-center rounded-lg hover:bg-surface"
-                >
-                  <span
-                    className={
-                      "size-2 rounded-full " +
-                      (s.id === selectedId ? "bg-live" : "bg-live/50")
-                    }
-                  />
-                </button>
-              ))}
-          </div>
+        {minimal ? (
+          <MinimalInstanceColumn
+            sessions={sessions}
+            selectedId={selectedId}
+            onSelect={onSelectSession}
+          />
         ) : tab === "projects" ? (
           <ProjectList projects={projects} selectedId={selectedId} onSelect={onSelectProject} />
         ) : tab === "instances" ? (
-          <InstanceList sessions={sessions} selectedId={selectedId} onSelect={onSelectSession} />
+          <InstanceList
+            sessions={sessions}
+            selectedId={selectedId}
+            onSelect={onSelectSession}
+            density={density}
+            freshness={freshness}
+            now={now}
+          />
         ) : (
           <SessionList
             sessions={sessions}
             loginTerminals={loginTerminals}
             selectedId={selectedId}
             onSelect={onSelectSession}
+            density={density}
+            freshness={freshness}
+            now={now}
           />
         )}
       </div>
@@ -216,21 +223,21 @@ export function WorkflowRail({
         <button
           type="button"
           onClick={onNewSession}
-          title={collapsed ? "New session (⌘N)" : undefined}
+          title={minimal ? "New session (⌘N)" : undefined}
           className="flex w-full items-center justify-center gap-2 overflow-hidden rounded-lg border border-accent/30 bg-accent-soft px-3 py-[7px] text-[12px] font-medium text-accent-hi outline-none transition-colors hover:border-accent/50 hover:bg-accent/15 focus-visible:ring-1 focus-visible:ring-accent/60"
         >
           <IconTerminal width={14} height={14} />
-          {!collapsed && <span className="truncate">New session</span>}
+          {!minimal && <span className="truncate">New session</span>}
         </button>
       </div>
 
-      {footer(collapsed)}
+      {footer(minimal)}
 
       {/* Drag-resize handle: hairline that lights up on hover/drag */}
-      {!collapsed && (
+      {!minimal && (
         <div
           onPointerDown={beginDrag}
-          onDoubleClick={onToggleCollapsed}
+          onDoubleClick={onCycleDensity}
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize navigator"
@@ -312,10 +319,16 @@ function InstanceList({
   sessions,
   selectedId,
   onSelect,
+  density,
+  freshness,
+  now,
 }: {
   sessions: InstanceInfo[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  density: Density;
+  freshness: Freshness;
+  now: number;
 }) {
   const live = sessions.filter((s) => isLive(s.status));
   const rest = sessions.filter((s) => !isLive(s.status)).slice(0, 8);
@@ -323,17 +336,33 @@ function InstanceList({
     <div className="flex flex-col gap-2">
       <ListSection label="Live now">
         {live.length === 0 ? (
-          <p className="px-3 py-1 text-[11px] text-faint">Nothing running</p>
+          <AllClearExplainer />
         ) : (
           live.map((s) => (
-            <SessionRow key={s.id} session={s} selected={s.id === selectedId} onSelect={onSelect} />
+            <SessionRow
+              key={s.id}
+              session={s}
+              selected={s.id === selectedId}
+              onSelect={onSelect}
+              density={density === "minimal" ? "compact" : density}
+              freshness={freshness}
+              now={now}
+            />
           ))
         )}
       </ListSection>
       {rest.length > 0 && (
         <ListSection label="Recent">
           {rest.map((s) => (
-            <SessionRow key={s.id} session={s} selected={s.id === selectedId} onSelect={onSelect} />
+            <SessionRow
+              key={s.id}
+              session={s}
+              selected={s.id === selectedId}
+              onSelect={onSelect}
+              density={density === "minimal" ? "compact" : density}
+              freshness={freshness}
+              now={now}
+            />
           ))}
         </ListSection>
       )}
@@ -346,11 +375,17 @@ function SessionList({
   loginTerminals,
   selectedId,
   onSelect,
+  density,
+  freshness,
+  now,
 }: {
   sessions: InstanceInfo[];
   loginTerminals: { id: string; title: string; ended: boolean }[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  density: Density;
+  freshness: Freshness;
+  now: number;
 }) {
   return (
     <div className="flex flex-col gap-2">
@@ -391,7 +426,15 @@ function SessionList({
           </p>
         ) : (
           sessions.slice(0, 15).map((s) => (
-            <SessionRow key={s.id} session={s} selected={s.id === selectedId} onSelect={onSelect} />
+            <SessionRow
+              key={s.id}
+              session={s}
+              selected={s.id === selectedId}
+              onSelect={onSelect}
+              density={density === "minimal" ? "compact" : density}
+              freshness={freshness}
+              now={now}
+            />
           ))
         )}
       </ListSection>
@@ -421,31 +464,144 @@ const chipToneClasses: Record<StateChipTone, string> = {
 };
 
 /**
- * The indicator row (AJ-E402): I-01..I-11 in pass2/04 §3 render order —
- * provider mark, account disc, model chip, state chip, quota bar with
- * tier tag, tokens, children, git, attention, age, resource sparkline.
- * Absent data renders the exact honest copy (`Quota: no data`,
- * `default model`, `Unknown`, `—`), never fabricated numbers.
+ * The indicator row (AJ-E402/E403): I-01..I-11 in pass2/04 §3 render
+ * order — provider mark, account disc, model chip, state chip, quota bar
+ * with tier tag, tokens, children, git, attention, age, resource
+ * sparkline. Absent data renders the exact honest copy (`Quota: no
+ * data`, `default model`, `Unknown`, `—`), never fabricated numbers.
+ *
+ * Densities: Comfortable shows all I-01..I-11; Compact (~36 px, 2
+ * lines) shows I-01, I-02, I-04, I-05 bar-only, I-09, I-10 plus CPU/RAM
+ * as text. I-04 text and I-10 are NEVER hidden in either. Values older
+ * than 2× their refresh interval carry the `stale - Nm` chip (AJ-E403
+ * Req.5) — the value keeps its colour (contrast-safe), the caption
+ * carries the meaning.
  */
 export function SessionRow({
   session,
   selected,
   onSelect,
+  density = "comfortable",
+  freshness = {},
+  now = Date.now(),
 }: {
   session: InstanceInfo;
   selected: boolean;
   onSelect: (id: string) => void;
+  density?: "comfortable" | "compact";
+  freshness?: Freshness;
+  now?: number;
 }) {
   const mark = providerMark(session.provider);
   const badge = attentionBadge(session);
   const chip = stateChip(session.status);
   const suffix = attentionSuffix(session);
   const tokens = tokenSummary(session.tokens);
-  const samples = rememberCpuSample(session.id, session.cpu_pct);
+  const samples = rememberResourceSample(session.id, session.cpu_pct, session.rss_bytes);
   const resources =
     session.cpu_pct !== null && session.rss_bytes !== null
       ? `${Math.round(session.cpu_pct)}% · ${formatBytes(session.rss_bytes)}`
       : null;
+  const sampled = freshness[session.id];
+  const quotaStale =
+    session.quota !== null && sampled
+      ? staleCaption(sampled.quota, REFRESH_INTERVALS.quota, now)
+      : null;
+  const resourceStale =
+    resources !== null && sampled
+      ? staleCaption(sampled.resources, REFRESH_INTERVALS.resources, now)
+      : null;
+  // Terminal rows never show resource slots: a finished Instance is not
+  // "unavailable" — it is done. Active-but-unsampled keeps the honest `—`.
+  const showResources = isActiveStatus(session.status);
+
+  if (density === "compact") {
+    return (
+      <button
+        type="button"
+        onClick={() => onSelect(session.id)}
+        aria-label={ariaSummary(session)}
+        className={
+          "relative flex min-w-0 w-full flex-col gap-0.5 rounded-lg px-2.5 py-1.5 pl-3 text-left outline-none transition-colors " +
+          "focus-visible:ring-1 focus-visible:ring-accent/60 " +
+          (selected ? "bg-surface" : "hover:bg-surface/60")
+        }
+      >
+        {selected && (
+          <span className="absolute left-0.5 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full bg-accent" />
+        )}
+        {/* L1: I-01 I-02 … I-04/I-10 (text never hidden in Compact) */}
+        <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+          <span
+            className="inline-flex min-w-0 shrink items-center gap-1 text-[10.5px] font-medium text-ink"
+            title={session.provider}
+          >
+            <mark.Icon width={11} height={11} className="shrink-0 text-accent-hi" />
+            <span className="truncate">{mark.abbrev}</span>
+          </span>
+          <AccountDisc accountId={session.account_id} label={session.account_label} />
+          <span className="ml-auto inline-flex shrink-0 items-center gap-1">
+            {badge ? (
+              <span
+                className={
+                  "inline-flex items-center gap-1 rounded-full border px-1.5 py-px text-[10px] font-medium " +
+                  chipToneClasses[badge.tone]
+                }
+              >
+                {badge.tone === "warning" || badge.tone === "danger" ? "!" : null}
+                {badge.text}
+              </span>
+            ) : (
+              <span
+                className={
+                  "inline-flex items-center gap-1 rounded-full border px-1.5 py-px text-[10px] font-medium " +
+                  chipToneClasses[chip.tone]
+                }
+              >
+                <chip.Icon width={10} height={10} />
+                {chip.label}
+              </span>
+            )}
+          </span>
+        </span>
+        {/* L2: I-05 bar-only + I-09 + CPU/RAM text (sparkline → text) */}
+        <span className="flex min-w-0 items-center gap-1.5 overflow-hidden text-[10px] text-muted">
+          <span
+            className="relative inline-block h-1.5 w-12 shrink-0 overflow-hidden rounded-full bg-surface-3"
+            title={session.quota ? `${Math.round(100 - session.quota.used_percentage)}% left · ${session.quota.confidence}` : "Quota: no data"}
+          >
+            {session.quota ? (
+              <span
+                className={
+                  "absolute inset-y-0 left-0 rounded-full " +
+                  (100 - session.quota.used_percentage <= 10
+                    ? "bg-danger"
+                    : 100 - session.quota.used_percentage <= 30
+                      ? "bg-warning"
+                      : "bg-accent")
+                }
+                style={{ width: `${Math.max(2, session.quota.used_percentage)}%` }}
+              />
+            ) : (
+              <span className="absolute inset-0 rounded-full border border-dashed border-faint/70" />
+            )}
+          </span>
+          <StaleChip caption={quotaStale} />
+          <GitBadge session={session} />
+          {showResources && (
+            <span className="ml-auto inline-flex min-w-0 shrink items-center gap-1">
+              {resources ? (
+                <span className="min-w-0 truncate tabular-nums">{resources}</span>
+              ) : (
+                <span className="text-faint" title="resources unavailable">—</span>
+              )}
+              <StaleChip caption={resourceStale} />
+            </span>
+          )}
+        </span>
+      </button>
+    );
+  }
 
   return (
     <button
@@ -518,20 +674,26 @@ export function SessionRow({
           {ageSummary(session.started_at_ms, session.last_activity_ms)}
         </span>
       </span>
-      {/* I-05 */}
-      <QuotaBar quota={session.quota} />
+      {/* I-05 (+ stale chip when the sample expired) */}
+      <span className="flex min-w-0 items-center gap-1.5">
+        <QuotaBar quota={session.quota} />
+        <StaleChip caption={quotaStale} />
+      </span>
       {/* I-06 I-08 I-07 — right-hand resource text yields before anything
           clips. */}
       <span className="flex min-w-0 items-center gap-1.5 overflow-hidden text-[10px] text-muted">
         {tokens ? <span className="shrink-0 tabular-nums">{tokens}</span> : null}
         <ChildBadges session={session} />
-        <span className="ml-auto inline-flex min-w-0 shrink items-center gap-1.5">
-          <Sparkline
-            samples={samples}
-            title={resources ? `cpu ${resources}` : "resources unavailable"}
-          />
-          {resources ? <span className="min-w-0 truncate tabular-nums">{resources}</span> : null}
-        </span>
+        {showResources && (
+          <span className="ml-auto inline-flex min-w-0 shrink items-center gap-1.5">
+            <Sparkline
+              series={samples}
+              title={resources ? `ram/cpu ${resources}` : "resources unavailable"}
+            />
+            {resources ? <span className="min-w-0 truncate tabular-nums">{resources}</span> : null}
+            <StaleChip caption={resourceStale} />
+          </span>
+        )}
       </span>
       {session.kind === "desktop" && (
         <span className="self-start text-[9px] font-medium uppercase tracking-wide text-accent-hi">
@@ -539,6 +701,117 @@ export function SessionRow({
         </span>
       )}
     </button>
+  );
+}
+
+/**
+ * Minimal density (AJ-E403 Req.2): the 36 px icon column — avatar disc +
+ * state glyph + `!` badge per Instance. The full I-01..I-11 text rides
+ * in the tooltip (CSS hover panel) and the `aria-label` (Req.3).
+ */
+export function MinimalInstanceColumn({
+  sessions,
+  selectedId,
+  onSelect,
+}: {
+  sessions: InstanceInfo[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  // Active rows only — waiting/stuck/quota-blocked instances are the
+  // ones that must scream `!` in the collapsed rail (user story).
+  const active = sessions.filter((s) => isActiveStatus(s.status));
+  const needsYou = active.filter((s) => s.needs_attention !== null).length;
+  return (
+    <div className="flex flex-col items-center gap-1 pt-1">
+      {active.map((s) => {
+        const chip = stateChip(s.status);
+        const badge = attentionBadge(s);
+        return (
+          <button
+            key={s.id}
+            type="button"
+            onClick={() => onSelect(s.id)}
+            aria-label={ariaSummary(s)}
+            title={ariaSummary(s)}
+            className={
+              "group relative flex size-9 items-center justify-center rounded-lg outline-none transition-colors focus-visible:ring-1 focus-visible:ring-accent/60 " +
+              (s.id === selectedId ? "bg-surface" : "hover:bg-surface")
+            }
+          >
+            <AccountDisc accountId={s.account_id} label={s.account_label} size={22} />
+            <chip.Icon
+              width={10}
+              height={10}
+              className={"absolute bottom-0 right-0 rounded-full bg-surface p-px " + minimalGlyphTone(chip.tone)}
+            />
+            {badge ? (
+              <span
+                className={
+                  "absolute right-0 top-0 flex size-3.5 items-center justify-center rounded-full text-[8px] font-bold " +
+                  (badge.tone === "danger"
+                    ? "bg-danger text-white"
+                    : "bg-warning text-black")
+                }
+                aria-hidden="true"
+              >
+                !
+              </span>
+            ) : null}
+            {/* Hover/focus tooltip: the full I-01..I-11 field text for THIS
+                instance (Req.3) — never a bare disc. */}
+            <span className="pointer-events-none absolute left-full top-0 z-30 ml-2 hidden w-56 rounded-lg border border-hairline bg-surface p-2.5 text-left shadow-card group-hover:block group-focus-visible:block">
+              <span className="flex items-center gap-1.5">
+                <span className="truncate text-[11.5px] font-medium text-ink">
+                  {s.account_label}
+                </span>
+                <AccountDisc accountId={s.account_id} label={s.account_label} size={16} />
+              </span>
+              <span className="mt-1 block text-[10px] leading-relaxed text-muted">
+                {ariaSummary(s)}
+              </span>
+            </span>
+          </button>
+        );
+      })}
+      {needsYou > 0 && (
+        <span
+          className="mt-1 rounded-full border border-warning/40 bg-warning-soft px-1.5 py-0.5 text-[9px] font-bold text-warning"
+          title={`${needsYou} instance${needsYou === 1 ? "" : "s"} need you`}
+        >
+          ! {needsYou}
+        </span>
+      )}
+      {active.length === 0 && (
+        <span className="px-1 py-2 text-center text-[9px] leading-relaxed text-faint">
+          All clear
+        </span>
+      )}
+    </div>
+  );
+}
+
+function minimalGlyphTone(tone: StateChipTone): string {
+  switch (tone) {
+    case "live": return "text-live";
+    case "success": return "text-success";
+    case "warning": return "text-warning";
+    case "danger": return "text-danger";
+    case "accent": return "text-accent-hi";
+    default: return "text-muted";
+  }
+}
+
+/** The empty-Inbox "All clear" explainer — carries the shared legend. */
+function AllClearExplainer() {
+  return (
+    <div className="flex flex-col gap-2 px-2 py-2">
+      <p className="text-[11px] font-medium text-success">All clear — nothing needs you</p>
+      <p className="text-[10px] leading-relaxed text-faint">
+        Live instances appear here with their full indicator row. The legend below explains every state, the quota bar and the sparkline.
+      </p>
+      <IndicatorLegend compact />
+    </div>
   );
 }
 
@@ -554,7 +827,7 @@ export function SessionCard({ session, onSelect }: { session: InstanceInfo; onSe
   const chip = stateChip(session.status);
   const suffix = attentionSuffix(session);
   const tokens = tokenSummary(session.tokens);
-  const samples = rememberCpuSample(session.id, session.cpu_pct);
+  const samples = rememberResourceSample(session.id, session.cpu_pct, session.rss_bytes);
   const resources =
     session.cpu_pct !== null && session.rss_bytes !== null
       ? `${Math.round(session.cpu_pct)}% · ${formatBytes(session.rss_bytes)}`
@@ -617,9 +890,9 @@ export function SessionCard({ session, onSelect }: { session: InstanceInfo; onSe
         <GitBadge session={session} />
         <span className="ml-auto inline-flex shrink-0 items-center gap-2">
           <Sparkline
-            samples={samples}
+            series={samples}
             width={64}
-            title={resources ? `cpu ${resources}` : "resources unavailable"}
+            title={resources ? `ram/cpu ${resources}` : "resources unavailable"}
           />
           {resources ? <span className="tabular-nums">{resources}</span> : null}
         </span>

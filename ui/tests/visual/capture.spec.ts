@@ -40,16 +40,14 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "05-session-panel", "16-onboarding-detect"]) {
+  for (const screen of ["01-rail", "01-rail-density", "05-session-panel", "16-onboarding-detect"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
-  // Density modes and several UI states do not exist yet — recorded, not hidden.
+  // Loading/error states do not exist yet — recorded, not hidden.
   for (const screen of ["01-rail", "05-session-panel", "16-onboarding-detect"]) {
-    noteNotCaptured(screen, "density=Comfortable/Compact", "pending AJ-E403 (density modes not yet implemented)");
-    noteNotCaptured(screen, "loading (skeleton)", "pending AJ-E401 (state emission not yet implemented)");
-    noteNotCaptured(screen, "error (banner + retained data)", "pending AJ-E401 (error states not yet implemented)");
-    noteNotCaptured(screen, "stale (stale - Nm)", "pending AJ-E403 (stale-data rule not yet implemented)");
+    noteNotCaptured(screen, "loading (skeleton)", "pending AJ-E405+ (state emission not yet implemented)");
+    noteNotCaptured(screen, "error (banner + retained data)", "pending AJ-E405+ (error states not yet implemented)");
   }
 });
 
@@ -166,6 +164,94 @@ for (const theme of THEMES) {
     });
   }
 }
+
+// AJ-E403 density captures: 3 densities × (1440x900, 1024x768), the
+// Minimal hover tooltip, and one stale row (freshness forced old via the
+// __AIJ_SAMPLED_AT__ fixture hook).
+const DENSITY_VIEWPORTS = [
+  { name: "1440x900", width: 1440, height: 900 },
+  { name: "1024x768", width: 1024, height: 768 },
+] as const;
+const DENSITIES = ["comfortable", "compact", "minimal"] as const;
+
+for (const density of DENSITIES) {
+  for (const vp of DENSITY_VIEWPORTS) {
+    test(`rail density ${density} — ${vp.name}`, async ({ page }) => {
+      await page.addInitScript(
+        ({ fixture, t0, mode }) => {
+          (window as never as { __AIJ_FIXTURE__: unknown }).__AIJ_FIXTURE__ = fixture;
+          localStorage.setItem("aij.theme", "dark");
+          localStorage.setItem("aij.density", mode);
+          localStorage.setItem("aij.onboarding.dismissed", "1");
+          sessionStorage.setItem("aij.ready.skipped", "1");
+          Date.now = () => t0;
+        },
+        { fixture: allStatuses, t0: T0, mode: density },
+      );
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await expect(page.getByRole("tab", { name: "Sessions" })).toBeVisible();
+      await page.getByRole("tab", { name: "Sessions" }).click();
+      if (density === "minimal") {
+        await expect(page.getByTitle(/Work Max/).first()).toBeVisible();
+      } else {
+        await expect(page.getByText("Handed over").first()).toBeVisible();
+      }
+      await page.screenshot({
+        path: resolve(GALLERY, `01-rail-density/${density}-${vp.name}.png`),
+      });
+    });
+  }
+}
+
+test("rail minimal — hover tooltip open", async ({ page }) => {
+  await page.addInitScript(
+    ({ fixture, t0 }) => {
+      (window as never as { __AIJ_FIXTURE__: unknown }).__AIJ_FIXTURE__ = fixture;
+      localStorage.setItem("aij.theme", "dark");
+      localStorage.setItem("aij.density", "minimal");
+      localStorage.setItem("aij.onboarding.dismissed", "1");
+      sessionStorage.setItem("aij.ready.skipped", "1");
+      Date.now = () => t0;
+    },
+    { fixture: allStatuses, t0: T0 },
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+  await expect(page.getByRole("tab", { name: "Sessions" })).toBeVisible();
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  const first = page.locator("aside button[title]").first();
+  await first.hover();
+  await page.waitForTimeout(150);
+  await page.screenshot({ path: resolve(GALLERY, "01-rail-density/minimal-tooltip-1440x900.png") });
+});
+
+test("rail — stale row renders stale - Nm", async ({ page }) => {
+  await page.addInitScript(
+    ({ fixture, t0 }) => {
+      (window as never as { __AIJ_FIXTURE__: unknown }).__AIJ_FIXTURE__ = fixture;
+      // The running instance's samples are 3 minutes old — past 2× the
+      // 5 s resource and 30 s quota intervals → `stale - 3m`.
+      (window as never as { __AIJ_SAMPLED_AT__: unknown }).__AIJ_SAMPLED_AT__ = {
+        "sess-2": t0 - 3 * 60_000,
+      };
+      localStorage.setItem("aij.theme", "dark");
+      localStorage.setItem("aij.onboarding.dismissed", "1");
+      sessionStorage.setItem("aij.ready.skipped", "1");
+      Date.now = () => t0;
+    },
+    { fixture: allStatuses, t0: T0 },
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+  await expect(page.getByRole("tab", { name: "Sessions" })).toBeVisible();
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  await expect(page.getByText("stale - 3m").first()).toBeVisible();
+  await page.screenshot({ path: resolve(GALLERY, "01-rail-density/stale-row-1440x900.png") });
+});
 
 // Determinism self-test (Req.4): same fixture twice → byte-identical PNG.
 test("determinism — two captures are byte-identical", async ({ page }) => {  const capture = async (suffix: string) => {
