@@ -152,6 +152,18 @@ body {
   border: 1px solid hsl(var(--acct-hue, 255) 55% 60% / 0.45);
   color: hsl(var(--acct-hue, 255) 75% 74%);
 }
+/*
+ * I-10 attention count badge (AJ-E404): amber is semantic, the TEXT is
+ * achromatic per theme so contrast clears 4.5:1 in both (D-16).
+ */
+.attn-badge {
+  background: var(--color-warning);
+  color: #141414;
+}
+[data-theme="light"] .attn-badge {
+  color: #ffffff;
+}
+
 [data-theme="light"] .acct-disc {
   background: hsl(var(--acct-hue, 255) 55% 42% / 0.12);
   border: 1px solid hsl(var(--acct-hue, 255) 50% 38% / 0.4);
