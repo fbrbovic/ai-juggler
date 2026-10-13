@@ -16,6 +16,7 @@ reviewer zcode-primary. Component tests also run in CI (ui job).
 | Visual regression | `pnpm --dir ui visual:capture` | all captures green; determinism byte-identical | 44/44 passed (41 captures at 5 viewports × 2 themes incl. 1440x900 + 390x844, 2 axe, 1 overflow); gallery regenerated with the new row; fixtures cover running+quota, needs-you, quota-blocked, active no-data rows | PASS | 2026-10-13 | zcode-primary |
 | Screen-reader pass | component test (aria-label) | every number reachable as text | row `aria-label` = full field summary (`Claude provider, Work Max, opus, Running, quota 58% left, computed, 19.1k tok, cpu 4%, ram 121 KB, 2 children, branch feat/read-model, …`); degrades honestly (`default model`, `Quota: no data`) | PASS | 2026-10-13 | zcode-primary |
 | Full gates | `just verify` + `pnpm --dir ui build` | green | verify green (fmt/clippy/tests/doc/evidence/terminology); UI typecheck+bundle green | PASS | 2026-10-13 | zcode-primary |
+| CI round-trip (recorded failure → fix) | PR checks run 1 → run 2 | all 5 jobs green on final run | run 1: verify failed on Linux — the AJ-E401 collector test asserted `child_count == 0` for `sh -c sleep`, but Linux dash forks a child there (the read model counted honestly); fixed by spawning `/bin/sleep` directly (never has children, deterministic on every platform). Run 2: verify/ui/build-macos/build-linux/build-windows all pass | PASS | 2026-10-13 | zcode-primary |
 
 ## Notes for the next agent
 
