@@ -35,6 +35,19 @@ fn version_stub(dir: &Path, name: &str, output: &str) -> PathBuf {
     path
 }
 
+/// Discover with one bounded retry: on loaded CI runners, executing a
+/// freshly written script can transiently fail (ETXTBSY-class). The
+/// assertion contract is unchanged — the retried report must pass.
+/// Flake fix recorded per AJ-E806 (quarantine-or-fix rule); expiry n/a.
+fn discover_with_retry(adapter: &ClaudeCodeAdapter) -> DiscoveryReport {
+    let first = adapter.discover();
+    if first.is_installed() {
+        return first;
+    }
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    adapter.discover()
+}
+
 #[cfg(unix)]
 fn make_executable(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
@@ -50,7 +63,7 @@ fn make_executable(_path: &Path) {
 fn discover_verified_version_from_fixture() {
     let dir = tempfile::tempdir().unwrap();
     let stub = version_stub(dir.path(), "claude", "2.1.296 (Claude Code)");
-    let report: DiscoveryReport = ClaudeCodeAdapter::with_bin(&stub).discover();
+    let report: DiscoveryReport = discover_with_retry(&ClaudeCodeAdapter::with_bin(&stub));
     assert!(report.is_installed());
     assert_eq!(
         report.install,
@@ -70,7 +83,7 @@ fn discover_verified_version_from_fixture() {
 fn discover_drift_warns_without_failing() {
     let dir = tempfile::tempdir().unwrap();
     let stub = version_stub(dir.path(), "claude", "2.1.301 (Claude Code)");
-    let report = ClaudeCodeAdapter::with_bin(&stub).discover();
+    let report = discover_with_retry(&ClaudeCodeAdapter::with_bin(&stub));
     assert!(report.is_installed(), "drift must not fail discovery");
     assert_eq!(report.verification, VerificationStatus::Unverified);
     assert!(
