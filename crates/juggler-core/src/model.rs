@@ -65,9 +65,12 @@ id_newtype! {
     AccountId
 }
 id_newtype! {
-    /// Identifies a launch profile (account + settings overlay).
+    /// Identifies a Launch settings recipe (per-Account overlay used at
+    /// launch). ADR-0008/D-10: "Profile" is demoted; alias retained.
     ProfileId
 }
+/// ADR-0008 vocabulary: canonical name for the launch-settings id.
+pub type LaunchRecipeId = ProfileId;
 id_newtype! {
     /// Identifies a supervised session, as tracked by AI Juggler.
     SessionId
@@ -184,21 +187,24 @@ pub struct SettingsOverlay {
     pub env: BTreeMap<String, String>,
 }
 
-/// A launchable configuration: account plus a settings overlay
-/// (`docs/SPEC.md` §3).
+/// Launch settings: a per-Account overlay applied when an Instance
+/// starts (`docs/SPEC.md` §3; ADR-0008 D-10 — "Profile" demoted).
 #[derive(Clone, PartialEq, Debug)]
-pub struct Profile {
+pub struct LaunchRecipe {
     /// Stable identifier.
-    pub id: ProfileId,
-    /// Human name for the profile (e.g. `Opus pairing`).
+    pub id: LaunchRecipeId,
+    /// Human label for this settings set (e.g. `Opus pairing`).
     pub name: String,
-    /// The account this profile launches under.
+    /// The Account this recipe starts under.
     pub account: AccountId,
-    /// Settings layered over the account defaults.
+    /// Settings layered over the Account defaults.
     pub settings_overlay: SettingsOverlay,
     /// Working directory used when the user does not pick one.
     pub default_cwd: Option<PathBuf>,
 }
+
+/// ADR-0008: old name kept one minor version as a pure alias.
+pub type Profile = LaunchRecipe;
 
 /// Lifecycle state of a supervised session.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

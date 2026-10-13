@@ -13,9 +13,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use juggler_core::model::{
-    Account, AccountId, Confidence, HarnessId, MachineId, PlanTier, Profile, ProfileId,
-    QuotaWindow, SessionId, SessionRecord, SessionStatus, SettingsOverlay, Timestamp, TokenCounts,
-    TranscriptRef, UsageSnapshot,
+    Account, AccountId, Confidence, HarnessId, LaunchRecipe, LaunchRecipeId, MachineId, PlanTier,
+    Profile, ProfileId, QuotaWindow, SessionId, SessionRecord, SessionStatus, SettingsOverlay,
+    Timestamp, TokenCounts, TranscriptRef, UsageSnapshot,
 };
 use juggler_core::storage::Storage;
 use juggler_core::{CoreError, fs};
@@ -520,4 +520,27 @@ fn v4_fixture_rows_roundtrip_as_instance_records() {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     assert_eq!(version, 4, "no migration fired");
+}
+
+#[test]
+fn launch_recipe_alias_roundtrip_pre_rename_values() {
+    // AJ-E105 evidence: values written through the old `Profile` alias
+    // read identically through canonical `LaunchRecipe` — zero drift.
+    let storage = Storage::open_in_memory().unwrap();
+    let (account, _) = seed_chain(&storage);
+    let written = LaunchRecipe {
+        id: LaunchRecipeId::new("rec-1"),
+        name: "Main".into(),
+        account: account.id.clone(),
+        settings_overlay: SettingsOverlay {
+            model: Some("opus".into()),
+            env: BTreeMap::new(),
+        },
+        default_cwd: None,
+    };
+    storage.profiles().insert(&written).unwrap();
+    let read: LaunchRecipe = storage.profiles().get(&ProfileId::new("rec-1")).unwrap();
+    assert_eq!(read, written);
+    let as_alias: Profile = read;
+    assert_eq!(as_alias.name, "Main");
 }

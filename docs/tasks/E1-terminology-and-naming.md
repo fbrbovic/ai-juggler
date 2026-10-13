@@ -90,7 +90,7 @@
 **Research basis**: ADR-0007 decision 1 (Instance first-class, Session inside); pass2/01 §4.1 Instance row + conflict #4; pass2/00 §3 (`SessionInfo.ts:3` collapse = load-bearing bug).
 **Handover note**: If AJ-E105 has not landed, keep the `profile` field name and add only the accessor — do not invent a half-renamed `launch_settings` column. Trap: transcripts' `native_id` belongs to the conversation, not the Instance; moving it breaks handover lookup.
 
-### AJ-E105 Profile demotion — Launch settings (UI) and LaunchRecipe (domain) | Status: TODO | Priority P0 | Effort M | Depends: AJ-E104
+### AJ-E105 Profile demotion — Launch settings (UI) and LaunchRecipe (domain) | Status: DONE-EVIDENCED (zcode-primary, 2026-10-13) | Priority P0 | Effort M | Depends: AJ-E104
 **Goal**:
 Demote `Profile` from a rail noun to per-Account "Launch settings"
 inside the launch sheet, and rename the domain type to `LaunchRecipe`
