@@ -90,7 +90,11 @@ ALTER TABLE instances RENAME COLUMN profile_id TO launch_recipe_id;
 ALTER TABLE profiles RENAME TO launch_recipes;
 ";
 
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5];
+/// Schema version 6 (AJ-E405): the structured attention reason rides on
+/// the Instance row — additive, nullable, default unchanged.
+const V6: &str = "ALTER TABLE instances ADD COLUMN attention_json TEXT;";
+
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6];
 
 /// An opened AI Juggler database with typed repositories.
 #[derive(Debug)]

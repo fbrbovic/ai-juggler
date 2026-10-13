@@ -136,6 +136,7 @@ fn arb_session(profile: ProfileId) -> impl Strategy<Value = SessionRecord> {
                     path: PathBuf::from(path),
                     native_id: native,
                 }),
+                attention: None,
             },
         )
 }
@@ -268,6 +269,7 @@ fn deleting_account_cascades() {
         started_at: Timestamp::from_millis(1),
         last_activity: None,
         usage: UsageSnapshot::default(),
+        attention: None,
         transcript_ref: None,
     };
     storage.sessions().insert(&session).unwrap();
@@ -409,6 +411,7 @@ fn session_list_without_filter_returns_all() {
         started_at: Timestamp::from_millis(7),
         last_activity: Some(Timestamp::from_millis(9)),
         usage: UsageSnapshot::default(),
+        attention: None,
         transcript_ref: None,
     };
     storage.sessions().insert(&session).unwrap();
@@ -467,6 +470,7 @@ fn sessions_carry_instance_kind_and_project_link() {
         started_at: Timestamp::from_millis(1),
         last_activity: None,
         usage: UsageSnapshot::default(),
+        attention: None,
         transcript_ref: None,
     };
     storage.sessions().insert(&session).unwrap();
@@ -524,7 +528,10 @@ fn v4_database_upgrades_in_place_to_v5_with_identical_values() {
         .raw_conn()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 5, "v4 → v5 exactly once, on open");
+    assert_eq!(
+        version, 6,
+        "v4 → current (v6, AJ-E405 attention) exactly once, on open"
+    );
 
     let account = storage.accounts().get(&AccountId::new("acc-1")).unwrap();
     assert_eq!(account.harness.as_str(), "claude-code");
@@ -535,6 +542,7 @@ fn v4_database_upgrades_in_place_to_v5_with_identical_values() {
     assert_eq!(recipe.name, "Main");
 
     let record = storage.sessions().get(&SessionId::new("sess-1")).unwrap();
+    assert_eq!(record.attention, None, "v4 rows upgrade without attention");
     assert_eq!(
         record.conversation.as_ref().map(|c| c.as_str()),
         Some("native-1")
@@ -542,14 +550,14 @@ fn v4_database_upgrades_in_place_to_v5_with_identical_values() {
     assert_eq!(record.kind, InstanceKind::Terminal);
     assert_eq!(record.status, SessionStatus::Running);
 
-    // Reopening a v5 DB does not re-migrate or corrupt.
+    // Reopening a current-DB does not re-migrate or corrupt.
     drop(storage);
     let storage = Storage::open(&file).unwrap();
     let version: i64 = storage
         .raw_conn()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 5);
+    assert_eq!(version, 6);
     assert!(storage.sessions().get(&SessionId::new("sess-1")).is_ok());
 }
 

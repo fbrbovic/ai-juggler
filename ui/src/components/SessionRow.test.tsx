@@ -32,6 +32,7 @@ function mk(overrides: Partial<InstanceInfo> = {}): InstanceInfo {
     git_branch: "feat/read-model",
     git_dirty_count: null,
     needs_attention: null,
+    attention: null,
     started_at_ms: NOW - 42 * 60_000,
     last_activity_ms: NOW - 10_000,
     machine_id: "this-mac",
@@ -210,5 +211,46 @@ describe("AJ-E402 card/row parity and screen-reader access", () => {
   it("renders the generic Tool mark for an unknown provider", () => {
     const text = rowText(mk({ provider: "some-new-harness" }));
     expect(text).toContain("Tool");
+  });
+});
+
+describe("AJ-E405 structured reasons + live announcements", () => {
+  it("the badge tooltip and aria-label carry the measured rule inputs verbatim", () => {
+    const session = mk({
+      status: "waiting_user",
+      needs_attention: "waiting_user",
+      attention: {
+        rule: "waiting_prompt",
+        inputs: ["prompt alive", "no output 4m"],
+        since_ms: NOW - 4 * 60_000,
+      },
+    });
+    const { container } = render(
+      <SessionRow session={session} selected={false} onSelect={() => {}} />,
+    );
+    const badge = container.querySelector("[title='waiting_prompt · prompt alive · no output 4m']");
+    expect(badge).not.toBeNull();
+    const label = container.querySelector("button")!.getAttribute("aria-label") ?? "";
+    expect(label).toContain("waiting_prompt · prompt alive · no output 4m");
+  });
+
+  it("the polite live region announces attention transitions (WCAG 4.1.3)", async () => {
+    const { AttentionAnnouncer } = await import("./indicator");
+    const healthy = mk({ id: "a1" });
+    const { rerender } = render(<AttentionAnnouncer sessions={[healthy]} />);
+    const waiting = mk({
+      id: "a1",
+      status: "waiting_user",
+      needs_attention: "waiting_user",
+      attention: { rule: "waiting_prompt", inputs: ["prompt alive"], since_ms: NOW },
+    });
+    rerender(<AttentionAnnouncer sessions={[waiting]} />);
+    const region = document.querySelector('[data-testid="attention-announcer"]')!;
+    expect(region.getAttribute("aria-live")).toBe("polite");
+    expect(region.textContent).toContain("Work Max needs you — waiting_prompt");
+    rerender(<AttentionAnnouncer sessions={[healthy]} />);
+    expect(document.querySelector('[data-testid="attention-announcer"]')!.textContent).toContain(
+      "recovered",
+    );
   });
 });

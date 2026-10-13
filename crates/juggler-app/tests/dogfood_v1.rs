@@ -138,6 +138,7 @@ fn two_accounts_parallel_same_project_mechanics() {
                     &state.storage.lock().unwrap(),
                     event.clone(),
                     stopped_by_user,
+                    None,
                 );
                 if let juggler_supervisor::LifecycleEvent::Exited { session, .. } = event
                     && session.as_str() == result.session_id

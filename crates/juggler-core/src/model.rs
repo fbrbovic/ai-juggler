@@ -331,6 +331,21 @@ pub struct UsageSnapshot {
     pub confidence: Confidence,
 }
 
+/// Why an Instance needs its user (AJ-E405, SPEC §5.1 heuristics): the
+/// rule that tripped, the measured inputs that fed it, and when the
+/// condition began. The UI renders this verbatim — it never re-derives
+/// the reason from the status alone.
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub struct AttentionReason {
+    /// Rule id: `stuck_no_output` | `waiting_prompt` | `quota_exit`.
+    pub rule: String,
+    /// Human-readable measured inputs (`no output 6.2m`, `cpu 0.3%`).
+    pub inputs: Vec<String>,
+    /// When the condition began, epoch milliseconds.
+    #[serde(default)]
+    pub since_ms: i64,
+}
+
 /// Points at a harness-native transcript on disk (owned by the harness, read
 /// only by AI Juggler). The owning harness is implied by the profile's
 /// account.
@@ -441,6 +456,9 @@ pub struct InstanceRecord {
     pub usage: UsageSnapshot,
     /// Where the native transcript lives, once discovered.
     pub transcript_ref: Option<TranscriptRef>,
+    /// Why this Instance needs its user (AJ-E405 heuristics); `None`
+    /// while healthy. (Stored as its own JSON blob — see storage v6.)
+    pub attention: Option<AttentionReason>,
 }
 
 /// ADR-0008: old name kept one minor version as a pure alias.

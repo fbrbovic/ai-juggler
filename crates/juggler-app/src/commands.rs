@@ -147,6 +147,21 @@ pub struct TokenCountsInfo {
     pub reasoning: u64,
 }
 
+/// AJ-E405: the structured attention reason carried on the row — the
+/// UI renders it verbatim (rule + measured inputs + since); it never
+/// re-derives the reason from the status alone.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct AttentionInfo {
+    /// Rule id: `stuck_no_output` | `waiting_prompt` | `quota_exit`.
+    pub rule: String,
+    /// Human-readable measured inputs (`no output 6m`, `cpu 0.3%`).
+    pub inputs: Vec<String>,
+    /// When the condition began, epoch milliseconds.
+    #[ts(type = "number")]
+    pub since_ms: i64,
+}
+
 /// I-10: why an Instance needs its user (`null` when it does not).
 /// Derived from the lifecycle status here; AJ-E405 replaces the
 /// derivation with structured heuristic reasons.
@@ -249,6 +264,9 @@ pub struct InstanceInfo {
     pub git_dirty_count: Option<u64>,
     /// I-10: why this Instance needs its user; `null` when it does not.
     pub needs_attention: Option<NeedsAttention>,
+    /// AJ-E405: the structured reason (rule + measured inputs + since)
+    /// behind `needs_attention`; `null` when healthy or pre-E405 rows.
+    pub attention: Option<AttentionInfo>,
     /// Start time, epoch milliseconds.
     #[ts(type = "number")]
     pub started_at_ms: i64,
@@ -851,6 +869,7 @@ pub fn launch_profile(
             started_at: Timestamp::now(),
             last_activity: None,
             usage: juggler_core::model::UsageSnapshot::default(),
+            attention: None,
             transcript_ref: None,
         })?;
     };
@@ -934,18 +953,27 @@ pub fn apply_lifecycle_event(
     storage: &Storage,
     event: LifecycleEvent,
     stopped_by_user: bool,
+    quota_blocked: Option<&juggler_core::model::AttentionReason>,
 ) -> Option<SessionRecord> {
     let session_id = match &event {
         LifecycleEvent::Started { session, .. } | LifecycleEvent::Exited { session, .. } => session,
     };
     let mut record = storage.sessions().get(session_id).ok()?;
     match event {
-        LifecycleEvent::Started { .. } => record.status = SessionStatus::Running,
+        LifecycleEvent::Started { .. } => {
+            record.status = SessionStatus::Running;
+            record.attention = None;
+        }
         LifecycleEvent::Exited { kind, .. } => {
             record.status = if stopped_by_user {
                 // The stop ladder (PTY exits surface kills as plain
                 // non-zero codes) — user intent, not a failure.
                 SessionStatus::Stopped
+            } else if let Some(reason) = quota_blocked {
+                // AJ-E405: non-zero exit with a rate-limit signature —
+                // QuotaBlocked (immediate, no debounce) with the reason.
+                record.attention = Some(reason.clone());
+                SessionStatus::QuotaBlocked
             } else {
                 match kind {
                     kind if kind.is_success() => SessionStatus::Finished,
@@ -953,11 +981,122 @@ pub fn apply_lifecycle_event(
                     juggler_supervisor::ExitKind::Code(_) => SessionStatus::Failed,
                 }
             };
+            if record.status != SessionStatus::QuotaBlocked {
+                record.attention = None;
+            }
         }
     }
     record.last_activity = Some(Timestamp::now());
     storage.sessions().update(&record).ok()?;
     Some(record)
+}
+
+/// Records one heuristic transition (status + structured reason) and
+/// returns the updated record. No action ever follows (SPEC §7).
+pub fn apply_attention_transition(
+    storage: &Storage,
+    session: &SessionId,
+    transition: &juggler_supervisor::AttentionTransition,
+) -> Option<SessionRecord> {
+    let mut record = storage.sessions().get(session).ok()?;
+    record.status = transition.status;
+    record.attention = Some(transition.reason.clone());
+    storage.sessions().update(&record).ok()?;
+    Some(record)
+}
+
+/// Clears attention and returns the record to `Running` — the recovery
+/// path (output resumed; AJ-E405 Req.5).
+pub fn apply_attention_recovery(storage: &Storage, session: &SessionId) -> Option<SessionRecord> {
+    let mut record = storage.sessions().get(session).ok()?;
+    if !matches!(
+        record.status,
+        SessionStatus::Stuck | SessionStatus::WaitingUser | SessionStatus::QuotaBlocked
+    ) {
+        return None;
+    }
+    record.status = SessionStatus::Running;
+    record.attention = None;
+    record.last_activity = Some(Timestamp::now());
+    storage.sessions().update(&record).ok()?;
+    Some(record)
+}
+
+/// One 15 s heuristic cycle (AJ-E405): evaluates every active Instance
+/// against the supervisor's measured inputs and records + emits any
+/// confirmed transitions. Purely passive — no action follows.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on failure.
+pub fn heuristic_tick(app: &tauri::AppHandle, state: &Arc<AppState>) -> AppResult<()> {
+    let engine = &state.heuristics;
+    let live = live_stats_of(state);
+    let mut changed = false;
+    {
+        let storage = state.storage.lock().map_err(|_| AppError::StatePoisoned)?;
+        for record in storage.sessions().list(None)? {
+            if !is_active(record.status) {
+                engine.forget(&record.id);
+                continue;
+            }
+            let now = Timestamp::now().millis();
+            let transcript_mtime_ms = record.transcript_ref.as_ref().and_then(|tr| {
+                std::fs::metadata(&tr.path)
+                    .and_then(|meta| meta.modified())
+                    .ok()
+                    .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|dur| i64::try_from(dur.as_millis()).unwrap_or_default())
+            });
+            let tail = state
+                .supervisor
+                .output_tail(&record.id, 2048)
+                .unwrap_or_default();
+            let inputs = juggler_supervisor::HeuristicInputs {
+                last_output_ms: state.supervisor.last_output_ms(&record.id),
+                cpu_pct: live
+                    .get(&record.id.to_string())
+                    .and_then(|stats| stats.cpu_pct),
+                transcript_mtime_ms,
+                prompt_alive: juggler_supervisor::prompt_alive(&tail),
+                now_ms: now,
+            };
+            if let Some(transition) = engine.evaluate(&record.id, &inputs) {
+                apply_attention_transition(&storage, &record.id, &transition);
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        emit_sessions(app, state)?;
+    }
+    Ok(())
+}
+
+/// Event-driven recovery drain (Req.5, <300 ms): every session with
+/// fresh output that currently sits in a heuristic state returns to
+/// `Running` and the UI is told immediately.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on failure.
+pub fn attention_recovery_drain(app: &tauri::AppHandle, state: &Arc<AppState>) -> AppResult<()> {
+    let mut changed = false;
+    for session in state.supervisor.drain_activity() {
+        if let Some(running) = state.heuristics.recover(&session) {
+            debug_assert_eq!(running, SessionStatus::Running);
+            {
+                let storage = state.storage.lock().map_err(|_| AppError::StatePoisoned)?;
+                if apply_attention_recovery(&storage, &session).is_some() {
+                    changed = true;
+                }
+            }
+        }
+    }
+    if changed {
+        emit_sessions(app, state)?;
+    }
+    Ok(())
 }
 
 /// Emits the refreshed session list to the UI.
@@ -1321,6 +1460,11 @@ fn session_infos(storage: &Storage, live: &LiveStatsMap) -> AppResult<Vec<Instan
                 // with the E4 signals work. Null = unavailable, not 0.
                 git_dirty_count: None,
                 needs_attention: needs_attention_of(record.status),
+                attention: record.attention.as_ref().map(|reason| AttentionInfo {
+                    rule: reason.rule.clone(),
+                    inputs: reason.inputs.clone(),
+                    since_ms: reason.since_ms,
+                }),
                 started_at_ms: record.started_at.millis(),
                 last_activity_ms: record.last_activity.as_ref().map(|t| t.millis()),
                 machine_id: record.machine.to_string(),
@@ -1555,6 +1699,7 @@ pub fn session_handover_impl(
             started_at: Timestamp::now(),
             last_activity: None,
             usage: juggler_core::model::UsageSnapshot::default(),
+            attention: None,
             transcript_ref: Some(juggler_core::model::TranscriptRef {
                 path: dest,
                 native_id: None,
@@ -1736,6 +1881,7 @@ mod tests {
             started_at: Timestamp::from_millis(1_700_000_000_000),
             last_activity: Some(Timestamp::from_millis(1_700_000_060_000)),
             usage: UsageSnapshot::default(),
+            attention: None,
             transcript_ref: None,
         }
     }

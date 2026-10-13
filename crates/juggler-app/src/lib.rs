@@ -54,29 +54,10 @@ pub fn run() {
         std::process::exit(1);
     }));
 
-    // Lifecycle forwarder: supervisor events → storage status transitions.
-    // The UI refreshes sessions from command results and `session://updated`.
-    {
-        let state = Arc::clone(&app_state);
-        std::thread::spawn(move || {
-            while let Some(event) = state
-                .supervisor
-                .recv_timeout(std::time::Duration::from_millis(500))
-            {
-                let stopped_by_user = state.supervisor.was_stopped(event.session());
-                if let Ok(storage) = state.storage.lock() {
-                    drop(commands::apply_lifecycle_event(
-                        &storage,
-                        event,
-                        stopped_by_user,
-                    ));
-                }
-            }
-        });
-    }
+    spawn_lifecycle_forwarder(Arc::clone(&app_state));
 
-    // Cloned before `manage` takes ownership: the read-model tick threads
-    // (below, in `setup`) share the same state as the command handlers.
+    let attention_state = Arc::clone(&app_state);
+    let heuristic_tick_state = Arc::clone(&app_state);
     let resource_tick_state = Arc::clone(&app_state);
     let quota_tick_state = Arc::clone(&app_state);
 
@@ -126,7 +107,13 @@ pub fn run() {
         ])
         .setup(|app| {
             let _ = app.emit(EVENT_APP_READY, commands::AppInfo::current());
-            spawn_read_model_ticks(app.handle().clone(), resource_tick_state, quota_tick_state);
+            spawn_read_model_ticks(
+                app.handle().clone(),
+                resource_tick_state,
+                quota_tick_state,
+                attention_state,
+                heuristic_tick_state,
+            );
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -145,7 +132,31 @@ fn spawn_read_model_ticks(
     app: tauri::AppHandle,
     resource_state: Arc<state::AppState>,
     quota_state: Arc<state::AppState>,
+    attention_state: Arc<state::AppState>,
+    heuristic_state: Arc<state::AppState>,
 ) {
+    // Event-driven recovery (AJ-E405 Req.5): drain fresh-output signals
+    // at 200 ms — well inside the 300 ms budget.
+    {
+        let attention_app = app.clone();
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                let _ = commands::attention_recovery_drain(&attention_app, &attention_state);
+            }
+        });
+    }
+    // The 15 s heuristic cycle (SPEC §5.1): debounced Stuck/WaitingUser
+    // evaluation; quota exits classify immediately at the forwarder.
+    {
+        let heuristic_app = app.clone();
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(15));
+                let _ = commands::heuristic_tick(&heuristic_app, &heuristic_state);
+            }
+        });
+    }
     let quota_app = app.clone();
     std::thread::spawn(move || {
         loop {
@@ -159,4 +170,59 @@ fn spawn_read_model_ticks(
             let _ = commands::emit_quota(&quota_app, &quota_state);
         }
     });
+}
+
+/// The lifecycle forwarder: supervisor events → storage status
+/// transitions, with AJ-E405 exit classification (rate-limit signature →
+/// [`SessionStatus::QuotaBlocked`]) applied before the status mapping runs.
+fn spawn_lifecycle_forwarder(state: Arc<state::AppState>) {
+    std::thread::spawn(move || {
+        while let Some(event) = state
+            .supervisor
+            .recv_timeout(std::time::Duration::from_millis(500))
+        {
+            let stopped_by_user = state.supervisor.was_stopped(event.session());
+            // AJ-E405: classify non-zero exits against the captured
+            // output tail BEFORE the status mapping runs — a rate-limit
+            // signature is QuotaBlocked (immediate), not a crash.
+            let quota_session = event.session().clone();
+            let quota_blocked = match &event {
+                juggler_supervisor::LifecycleEvent::Exited { kind, session, .. } => {
+                    if stopped_by_user || kind.is_success() {
+                        None
+                    } else if let juggler_supervisor::ExitKind::Code(code) = kind {
+                        let tail = state
+                            .supervisor
+                            .output_tail(session, 4096)
+                            .unwrap_or_default();
+                        state
+                            .heuristics
+                            .classify_exit(*code, &tail, now_millis(), None)
+                    } else {
+                        None
+                    }
+                }
+                juggler_supervisor::LifecycleEvent::Started { .. } => None,
+            };
+            if let Ok(storage) = state.storage.lock() {
+                drop(commands::apply_lifecycle_event(
+                    &storage,
+                    event,
+                    stopped_by_user,
+                    quota_blocked.as_ref().map(|transition| &transition.reason),
+                ));
+                // A quota exit ends the process — forget debounce.
+                if quota_blocked.is_some() {
+                    state.heuristics.forget(&quota_session);
+                }
+            }
+        }
+    });
+}
+
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|dur| i64::try_from(dur.as_millis()).unwrap_or_default())
+        .unwrap_or_default()
 }

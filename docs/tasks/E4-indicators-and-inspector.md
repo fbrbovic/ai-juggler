@@ -111,7 +111,7 @@
 **Research basis**: pass2/04 §4.3 (lines 243-264); deep 02 WR-02/WR-05 (silent caps); full review UX.3 (snooze/mute); `model.rs:398` (`machine` field).
 **Handover note**: Trap: Inbox becomes a filter preset (`Needs me` chip), not a destination tab — do not build a separate Inbox page. Burn rate for req 2 comes from AJ-E409 signals; until then use quota % left alone and label the sort `Quota risk (quota only)` in the menu.
 
-### AJ-E405 Emit Stuck, WaitingUser, and QuotaBlocked (needs-attention upstream) | Status: TODO | Priority P0 | Effort L | Depends: AJ-E401
+### AJ-E405 Emit Stuck, WaitingUser, and QuotaBlocked (needs-attention upstream) | Status: DONE-EVIDENCED (zcode-primary, 2026-10-13) | Priority P0 | Effort L | Depends: AJ-E401
 **Goal**: Wire the supervisor/adapter heuristics so `SessionStatus::Stuck|WaitingUser|QuotaBlocked` are actually emitted with reason + waiting duration — the states I-04/I-10 render.
 **User story**: As Persona A, I want a hung agent flagged `Stuck?` with the evidence (`no output 6m - CPU 0.3%`), so that I trust the badge and act instead of polling terminals.
 **Requirements**:
@@ -128,6 +128,11 @@
 **Evidence/validation proof**: Command `cargo test --workspace stuck waiting quota` (name filters per repo convention) on committed fake-harness scripts; pass = precision/recall >= 90% computed in the test report and stored under `docs/qa/e4-attention-fixtures.md`; live dogfood: run the hang fixture, screenshot I-10 appearing <= 15 s after threshold; both artifacts linked in PR.
 **Visual testing**: Screenshots 1440x900: row in each of WaitingUser (with `wait 4m`), Stuck? (dashed border), QuotaBlocked (reset countdown); tooltip open showing rule inputs; comparison Playwright diff tolerance 1% vs AJ-E402 baseline rows; a11y: live-region announcement text asserted in DOM, badge text not icon-only. Pass = reviewer confirms reason text matches the fixture's known cause.
 **Files to touch**: `crates/juggler-supervisor/src/supervisor.rs:474,557`, `crates/juggler-supervisor/src/lifecycle.rs`, `crates/juggler-core/src/model.rs:188-258,407-411`, `crates/juggler-app/src/commands.rs:782,817`, `crates/juggler-adapters/src/fake.rs`, `ui/src/lib/bridge.ts:325`.
+*Implementation mapping (corrected in this task's PR per the claiming protocol)*:
+- The engine lives in `crates/juggler-supervisor/src/heuristics.rs` (new): pure over injected inputs/clocks; `lifecycle.rs` needed NO change (the app applies transitions directly — the forwarder classifies before mapping). `fake.rs` untouched; the fixture modes landed in the `fake-harness` BINARY (`--wait-prompt`, `--quota-exit`).
+- Storage: schema v6 adds `instances.attention_json` (additive, nullable); `InstanceRecord.attention: Option<AttentionReason>`. Wire: `InstanceInfo.attention` (rule + measured inputs + since) — the UI badge tooltip and `aria-label` render it verbatim and never re-derive it.
+- Corpus + live dogfood: `crates/juggler-app/tests/attention_corpus.rs` (100% precision/recall; `docs/qa/e4-attention-fixtures.md`). Debounce note: Req.4's 30 s law supersedes "≤15 s after threshold" — the emission lands at the confirmation evaluation (app worst case + one 15 s tick); recorded in the evidence doc.
+- Thresholds persist in `heuristics.json` (app data dir) with SPEC §5.1 defaults; the Settings SCREEN UI lands with its own task and writes the same file (recorded here so it is not read as a miss).
 **Research basis**: pass2/04 §3 I-10 + §6 Stuck row (lines 184, 418); SPEC.md:220-221, §5.1 heuristics (docs/SPEC.md sed 220-234); EPICS.md:79 (M2-5 >= 90%); full review F2.5 ("modelled but never emitted", model.rs:188-207).
 **Handover note**: This is the upstream gap every E4 rendering task assumes. If heuristics cannot reach 90% on a fixture class, ship the emission with that class labelled `Stuck?` only and record the shortfall — never silently widen thresholds to pass.
 

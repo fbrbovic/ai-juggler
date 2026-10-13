@@ -35,6 +35,11 @@ for (const theme of ["dark", "light"] as const) {
     await page.getByRole("tab", { name: "Sessions" }).click();
     await expect(page.getByText("Handed over").first()).toBeVisible();
 
+    // AJ-E405: the badge tooltip carries the structured reason (rule +
+    // measured inputs) — asserted in the DOM (native titles are not
+    // screenshot-able).
+    await expect(page.locator('[title*="waiting_prompt"]').first()).toBeVisible();
+    await expect(page.locator('[title*="stuck_no_output"]').first()).toBeVisible();
     const results = await new AxeBuilder({ page })
       .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
       .analyze();

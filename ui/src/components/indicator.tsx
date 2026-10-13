@@ -115,6 +115,18 @@ export function tokenSummary(
   return `${formatTokens(tokens.input + tokens.output)} tok`;
 }
 
+/**
+ * AJ-E405: the structured reason as tooltip/announcement text —
+ * `stuck_no_output · no output 6m · cpu 0.3% · transcript stale 6m`.
+ * The UI renders the measured inputs verbatim; it never re-derives
+ * them from the status.
+ */
+export function attentionTooltip(session: InstanceInfo): string | undefined {
+  const reason = session.attention;
+  if (!reason) return undefined;
+  return [reason.rule, ...reason.inputs].join(" · ");
+}
+
 // --- I-10 / I-11 time formatting ---------------------------------------------
 
 /** Compact duration: `10s`, `4m`, `2h05m`, `1d3h`. */
@@ -269,6 +281,8 @@ export function ariaSummary(session: InstanceInfo, nowMs: number = Date.now()): 
   parts.push(ageSummary(session.started_at_ms, session.last_activity_ms, nowMs));
   const suffix = attentionSuffix(session, nowMs);
   if (badge && suffix) parts.push(suffix);
+  const reason = attentionTooltip(session);
+  if (reason) parts.push(reason);
   return parts.join(", ");
 }
 
@@ -438,4 +452,42 @@ function legendTone(tone: StateChipTone): string {
  */
 export function isActiveStatus(status: string): boolean {
   return status === "starting" || status === "running" || status === "waiting_user" || status === "stuck" || status === "quota_blocked";
+}
+
+// --- WCAG 4.1.3: attention changes announced politely (AJ-E405) ---------
+
+import { useEffect, useRef, useState } from "react";
+
+/**
+ * Announces attention transitions on a polite live region — state
+ * changes are never conveyed by colour alone. The message is the badge
+ * text plus the rule (`Needs you — waiting_prompt`).
+ */
+export function AttentionAnnouncer({ sessions }: { sessions: InstanceInfo[] }) {
+  const [message, setMessage] = useState("");
+  const previous = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const current = new Set(sessions.filter((row) => row.attention !== null).map((row) => row.id));
+    const labelOf = (id: string) =>
+      sessions.find((row) => row.id === id)?.account_label ?? "Instance";
+    const fresh = [...current].filter((id) => !previous.current.has(id));
+    const recovered = [...previous.current].filter((id) => !current.has(id));
+    if (fresh.length > 0) {
+      const parts = fresh.map((id) => {
+        const row = sessions.find((entry) => entry.id === id);
+        return `${labelOf(id)} needs you — ${row?.attention?.rule ?? row?.needs_attention ?? "attention"}`;
+      });
+      setMessage(parts.join(". "));
+    } else if (recovered.length > 0) {
+      setMessage(recovered.map((id) => `${labelOf(id)} recovered`).join(". "));
+    }
+    previous.current = current;
+  }, [sessions]);
+
+  return (
+    <div aria-live="polite" className="sr-only" data-testid="attention-announcer">
+      {message}
+    </div>
+  );
 }

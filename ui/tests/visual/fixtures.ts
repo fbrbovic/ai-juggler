@@ -58,6 +58,19 @@ const mk = (n: number, status: InstanceInfo["status"], label: string): InstanceI
     git_branch: work ? "feat/read-model" : null,
     git_dirty_count: null,
     needs_attention: attention,
+    attention:
+      attention === null
+        ? null
+        : {
+            rule: attention === "waiting_user" ? "waiting_prompt" : attention === "stuck" ? "stuck_no_output" : "quota_exit",
+            inputs:
+              attention === "waiting_user"
+                ? ["prompt alive", `no output ${n}m`]
+                : attention === "stuck"
+                  ? [`no output ${n}m`, "cpu 0.3%", `transcript stale ${n}m`]
+                  : ["exit code 1", "rate-limit signature in output"],
+            since_ms: T0 - n * 3_500_000,
+          },
     started_at_ms: T0 - n * 3_600_000,
     last_activity_ms: T0 - n * 3_500_000,
     machine_id: "this-mac",

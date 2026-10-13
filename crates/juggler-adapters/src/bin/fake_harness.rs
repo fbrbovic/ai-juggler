@@ -8,7 +8,8 @@
 //! fake-harness --version
 //! fake-harness run --dir DIR [--session-id ID | --resume ID] [--turns N]
 //!               [--delay-ms MS] [--stall-secs S] [--burn-cpus SECS]
-//!               [--exit CODE] [--prompt TEXT]
+//!               [--exit CODE] [--prompt TEXT] [--wait-prompt TEXT]
+//!               [--quota-exit]
 //! ```
 //!
 //! Sessions are JSONL files under `--dir`: a `session_meta` line, turn pairs
@@ -52,6 +53,12 @@ struct RunOptions {
     burn_cpus_secs: u64,
     exit_code: u8,
     prompt: String,
+    /// Print a permission prompt and block until stdin closes (the
+    /// wait-permission fixture, AJ-E405).
+    wait_prompt: Option<String>,
+    /// Print a rate-limit signature and exit non-zero (the quota-exit
+    /// fixture, AJ-E405).
+    quota_exit: bool,
 }
 
 fn parse_options(args: &[String]) -> Result<RunOptions, String> {
@@ -65,6 +72,8 @@ fn parse_options(args: &[String]) -> Result<RunOptions, String> {
         burn_cpus_secs: 0,
         exit_code: 0,
         prompt: String::new(),
+        wait_prompt: None,
+        quota_exit: false,
     };
     let mut i = 0;
     while i < args.len() {
@@ -74,19 +83,55 @@ fn parse_options(args: &[String]) -> Result<RunOptions, String> {
                 .cloned()
                 .ok_or_else(|| format!("missing value for {arg}"))
         };
-        match arg.as_str() {
-            "--dir" => opts.dir = PathBuf::from(value()?),
-            "--session-id" => opts.session_id = Some(value()?),
-            "--resume" => opts.resume = Some(value()?),
-            "--turns" => opts.turns = parse_num(&value()?)?,
-            "--delay-ms" => opts.delay_ms = parse_num(&value()?)?,
-            "--stall-secs" => opts.stall_secs = parse_num(&value()?)?,
-            "--burn-cpus-secs" => opts.burn_cpus_secs = parse_num(&value()?)?,
-            "--exit" => opts.exit_code = parse_num(&value()?)?,
-            "--prompt" => opts.prompt = value()?,
+        let takes_value = match arg.as_str() {
+            "--dir" => {
+                opts.dir = PathBuf::from(value()?);
+                true
+            }
+            "--session-id" => {
+                opts.session_id = Some(value()?);
+                true
+            }
+            "--resume" => {
+                opts.resume = Some(value()?);
+                true
+            }
+            "--turns" => {
+                opts.turns = parse_num(&value()?)?;
+                true
+            }
+            "--delay-ms" => {
+                opts.delay_ms = parse_num(&value()?)?;
+                true
+            }
+            "--stall-secs" => {
+                opts.stall_secs = parse_num(&value()?)?;
+                true
+            }
+            "--burn-cpus-secs" => {
+                opts.burn_cpus_secs = parse_num(&value()?)?;
+                true
+            }
+            "--exit" => {
+                opts.exit_code = parse_num(&value()?)?;
+                true
+            }
+            "--prompt" => {
+                opts.prompt = value()?;
+                true
+            }
+            "--wait-prompt" => {
+                opts.wait_prompt = Some(value().unwrap_or_else(|_| "yes".into()));
+                true
+            }
+            // Boolean flags (AJ-E405 fixtures) advance by one.
+            "--quota-exit" => {
+                opts.quota_exit = true;
+                false
+            }
             other => return Err(format!("unknown option {other}")),
-        }
-        i += 2;
+        };
+        i += if takes_value { 2 } else { 1 };
     }
     Ok(opts)
 }
@@ -168,6 +213,20 @@ fn run(args: &[String]) -> ExitCode {
 
     if opts.stall_secs > 0 {
         thread::sleep(Duration::from_secs(opts.stall_secs));
+    }
+    if let Some(prompt) = &opts.wait_prompt {
+        // The wait-permission fixture: an ALIVE, unanswered prompt. The
+        // harness blocks (no stdin contract — supervised runs are
+        // headless); the test's stop ladder reaps it.
+        println!("Do you want to {prompt}? (y/n)");
+        thread::sleep(Duration::from_secs(600));
+    }
+    if opts.quota_exit {
+        // The quota-exit fixture: a rate-limit signature, then a
+        // non-zero exit (the AJ-E405 classifier's target).
+        eprintln!("Error: usage limit reached. Your 5-hour window resets shortly.");
+        let _ = std::io::stderr().flush();
+        return ExitCode::FAILURE;
     }
     if opts.burn_cpus_secs > 0 {
         let deadline = Instant::now() + Duration::from_secs(opts.burn_cpus_secs);

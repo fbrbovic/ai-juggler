@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use juggler_adapter::LaunchSpec;
-use juggler_core::model::SessionId;
+use juggler_core::model::{SessionId, Timestamp};
 
 use crate::error::SupervisorError;
 use crate::journal::Journal;
@@ -110,10 +110,20 @@ impl LiveStatsCollector {
     }
 }
 
+/// Caller-supplied handle extras (PTY writer + pre-created output
+/// tracking atomic) — keeps `register` under the argument budget.
+struct ChildExtras {
+    pty: Option<Arc<Mutex<PtyHandle>>>,
+    last_output_ms: Arc<std::sync::atomic::AtomicI64>,
+}
+
 struct ChildHandle {
     pid: u32,
     ring: Arc<Mutex<OutputRing>>,
     finished: Arc<AtomicBool>,
+    /// Last output arrival (epoch ms, 0 = none) — feeds the Stuck rule
+    /// and event-driven recovery (AJ-E405).
+    last_output_ms: Arc<std::sync::atomic::AtomicI64>,
     force_kill: Arc<dyn Fn() + Send + Sync>,
     /// Live PTY master for interactive sessions: keyboard input and
     /// resize. `None` for piped (headless) sessions.
@@ -140,17 +150,24 @@ pub struct Supervisor {
     user_stopped: Mutex<Vec<SessionId>>,
     events_tx: std::sync::mpsc::Sender<LifecycleEvent>,
     events_rx: Mutex<std::sync::mpsc::Receiver<LifecycleEvent>>,
+    /// Sessions with fresh output since the last drain (throttled per
+    /// session) — the recovery signal (AJ-E405 Req.5, <300 ms).
+    activity_tx: std::sync::mpsc::SyncSender<SessionId>,
+    activity_rx: Mutex<std::sync::mpsc::Receiver<SessionId>>,
 }
 
 impl Default for Supervisor {
     fn default() -> Self {
         let (events_tx, events_rx) = std::sync::mpsc::channel();
+        let (activity_tx, activity_rx) = std::sync::mpsc::sync_channel(256);
         Self {
             journal: None,
             children: Mutex::new(HashMap::new()),
             user_stopped: Mutex::new(Vec::new()),
             events_tx,
             events_rx: Mutex::new(events_rx),
+            activity_tx,
+            activity_rx: Mutex::new(activity_rx),
         }
     }
 }
@@ -216,21 +233,51 @@ impl Supervisor {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child = command.spawn().map_err(|e| SupervisorError::Spawn {
+        let child = command.spawn().map_err(|e| SupervisorError::Spawn {
             program: spec.program.clone(),
             message: e.to_string(),
         })?;
         let pid = child.id();
         let ring = Arc::new(Mutex::new(OutputRing::new(DEFAULT_RING_CAPACITY)));
-        spawn_reader(child.stdout.take(), Arc::clone(&ring));
-        spawn_reader(child.stderr.take(), Arc::clone(&ring));
-
         let child = Arc::new(Mutex::new(child));
         let finished = Arc::new(AtomicBool::new(false));
         let kill_child = Arc::clone(&child);
         let force_kill: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
             let _ = kill_child.lock().map(|mut c| c.kill());
         });
+        // Register before readers start so output tracking exists from
+        // the first chunk (AJ-E405).
+        let last_output = self.register(
+            session.clone(),
+            pid,
+            Arc::clone(&ring),
+            Arc::clone(&finished),
+            force_kill,
+            ChildExtras {
+                pty: None,
+                last_output_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            },
+        );
+        let (out_atomic, err_atomic) = (Arc::clone(&last_output), last_output);
+        let (out_tx, err_tx) = (
+            std::sync::mpsc::SyncSender::clone(&self.activity_tx),
+            std::sync::mpsc::SyncSender::clone(&self.activity_tx),
+        );
+        let (out_session, err_session) = (session.clone(), session.clone());
+        spawn_reader(
+            child_lock(&child).stdout.take(),
+            Arc::clone(&ring),
+            out_atomic,
+            out_session,
+            out_tx,
+        );
+        spawn_reader(
+            child_lock(&child).stderr.take(),
+            ring,
+            err_atomic,
+            err_session,
+            err_tx,
+        );
 
         let session_for_thread = session.clone();
         let journal = self.journal.clone();
@@ -252,7 +299,6 @@ impl Supervisor {
             }
         });
 
-        self.register(session.clone(), pid, ring, finished, force_kill, None);
         Ok(SpawnedProcess {
             session: session.clone(),
             pid,
@@ -301,8 +347,17 @@ impl Supervisor {
         };
         let killer = std::sync::Mutex::new(child.clone_killer());
         let ring = Arc::new(Mutex::new(OutputRing::new(DEFAULT_RING_CAPACITY)));
+        // Output tracking exists from chunk 1 without pre-registering the
+        // handle: the atomic is independent of the children map.
+        let last_output = Arc::new(std::sync::atomic::AtomicI64::new(0));
         if let Ok(reader) = pair.master.try_clone_reader() {
-            spawn_reader(Some(reader), Arc::clone(&ring));
+            spawn_reader(
+                Some(reader),
+                Arc::clone(&ring),
+                Arc::clone(&last_output),
+                session.clone(),
+                std::sync::mpsc::SyncSender::clone(&self.activity_tx),
+            );
         }
         drop(pair.slave);
         let master = pair.master;
@@ -340,7 +395,17 @@ impl Supervisor {
             }
         });
 
-        self.register(session.clone(), pid, ring, finished, force_kill, pty);
+        self.register(
+            session.clone(),
+            pid,
+            ring,
+            finished,
+            force_kill,
+            ChildExtras {
+                pty,
+                last_output_ms: last_output,
+            },
+        );
         Ok(SpawnedProcess {
             session: session.clone(),
             pid,
@@ -348,6 +413,9 @@ impl Supervisor {
     }
 
     #[allow(clippy::needless_pass_by_value)] // Arc handles are moved intentionally
+    /// Registers a child handle; `parts.pty` and `parts.last_output_ms`
+    /// come from the caller because the PTY path starts its reader before
+    /// the handle exists (output tracking from chunk 1).
     fn register(
         &self,
         session: SessionId,
@@ -355,18 +423,21 @@ impl Supervisor {
         ring: Arc<Mutex<OutputRing>>,
         finished: Arc<AtomicBool>,
         force_kill: Arc<dyn Fn() + Send + Sync>,
-        pty: Option<Arc<Mutex<PtyHandle>>>,
-    ) {
+        parts: ChildExtras,
+    ) -> Arc<std::sync::atomic::AtomicI64> {
+        let last_output_ms = parts.last_output_ms;
         let handle = Arc::new(ChildHandle {
             pid,
             ring,
             finished,
+            last_output_ms: Arc::clone(&last_output_ms),
             force_kill,
-            pty,
+            pty: parts.pty,
         });
         if let Ok(mut children) = self.children.lock() {
             children.insert(session, handle);
         }
+        last_output_ms
     }
 
     /// Stops a session: SIGTERM (unix), waits `grace`, then force-kills.
@@ -435,6 +506,40 @@ impl Supervisor {
             .cloned()
             .ok_or_else(|| SupervisorError::UnknownSession(session.clone()))?;
         Ok(descendants_of(handle.pid))
+    }
+
+    /// When output last arrived for the session (epoch ms); `None` when
+    /// unknown/never. Feeds the Stuck rule (AJ-E405).
+    #[must_use]
+    pub fn last_output_ms(&self, session: &SessionId) -> Option<i64> {
+        let children = self.children.lock().ok()?;
+        let handle = children.get(session)?;
+        let at = handle.last_output_ms.load(Ordering::Relaxed);
+        (at > 0).then_some(at)
+    }
+
+    /// The last `max_bytes` of captured output (for prompt and
+    /// rate-limit signature detection; never the whole ring).
+    #[must_use]
+    pub fn output_tail(&self, session: &SessionId, max_bytes: usize) -> Option<String> {
+        let output = self.output(session).ok()?;
+        let start = output.len().saturating_sub(max_bytes);
+        Some(String::from_utf8_lossy(&output[start..]).into_owned())
+    }
+
+    /// Drains sessions with fresh output since the last call — the
+    /// event-driven recovery signal (<300 ms, Req.5).
+    pub fn drain_activity(&self) -> Vec<SessionId> {
+        let Ok(receiver) = self.activity_rx.lock() else {
+            return Vec::new();
+        };
+        let mut drained = Vec::new();
+        while let Ok(session) = receiver.try_recv() {
+            if drained.last() != Some(&session) {
+                drained.push(session);
+            }
+        }
+        drained
     }
 
     /// Batched live stats for every supervised session, read from ONE
@@ -617,23 +722,53 @@ impl Supervisor {
     }
 }
 
-fn spawn_reader(reader: Option<impl std::io::Read + Send + 'static>, ring: Arc<Mutex<OutputRing>>) {
+fn spawn_reader(
+    reader: Option<impl std::io::Read + Send + 'static>,
+    ring: Arc<Mutex<OutputRing>>,
+    last_output_ms: Arc<std::sync::atomic::AtomicI64>,
+    session: SessionId,
+    activity: std::sync::mpsc::SyncSender<SessionId>,
+) {
     let Some(mut reader) = reader else {
         return;
     };
     std::thread::spawn(move || {
         let mut chunk = [0_u8; 4096];
+        let mut last_notify = 0_i64;
         loop {
             match reader.read(&mut chunk) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
+                    let now = Timestamp::now().millis();
+                    last_output_ms.store(now, Ordering::Relaxed);
                     if let Ok(mut ring) = ring.lock() {
                         ring.push(&chunk[..n]);
+                    }
+                    // Throttle activity signals to ~1/250 ms per session —
+                    // recovery latency stays <300 ms without spam.
+                    if now - last_notify >= 250 {
+                        last_notify = now;
+                        if activity.send(session.clone()).is_err() {
+                            break; // receiver gone
+                        }
                     }
                 }
             }
         }
     });
+}
+
+/// Helper: lock a mutex-wrapped child without unwrap (clippy: no unwrap
+/// in production paths).
+fn child_lock(
+    child: &Arc<Mutex<std::process::Child>>,
+) -> std::sync::MutexGuard<'_, std::process::Child> {
+    // A poisoned child mutex means the wait thread panicked; treat as
+    // no-op by leaking a dummy is impossible — fall back to blocking
+    // lock, mapping poison to an empty guard via unwrap_or_else.
+    child
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn emit_exit(
