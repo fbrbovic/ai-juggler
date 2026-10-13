@@ -1,6 +1,6 @@
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { IconProjects, IconSessions, IconTerminal } from "./icons";
-import type { ProjectInfo, SessionInfo } from "../lib/bridge";
+import type { InstanceInfo, ProjectInfo } from "../lib/bridge";
 
 /** The three workflow tabs the whole navbar switches between. */
 export type WorkTab = "projects" | "instances" | "sessions";
@@ -51,7 +51,7 @@ export function WorkflowRail({
   collapsed: boolean;
   onToggleCollapsed: () => void;
   projects: ProjectInfo[];
-  sessions: SessionInfo[];
+  sessions: InstanceInfo[];
   loginTerminals: { id: string; title: string; ended: boolean }[];
   selectedId: string | null;
   onSelectSession: (id: string) => void;
@@ -297,7 +297,7 @@ function InstanceList({
   selectedId,
   onSelect,
 }: {
-  sessions: SessionInfo[];
+  sessions: InstanceInfo[];
   selectedId: string | null;
   onSelect: (id: string) => void;
 }) {
@@ -331,7 +331,7 @@ function SessionList({
   selectedId,
   onSelect,
 }: {
-  sessions: SessionInfo[];
+  sessions: InstanceInfo[];
   loginTerminals: { id: string; title: string; ended: boolean }[];
   selectedId: string | null;
   onSelect: (id: string) => void;
@@ -399,7 +399,7 @@ function SessionRow({
   selected,
   onSelect,
 }: {
-  session: SessionInfo;
+  session: InstanceInfo;
   selected: boolean;
   onSelect: (id: string) => void;
 }) {

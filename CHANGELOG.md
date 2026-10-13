@@ -431,3 +431,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rewritten (proven by an in-place v4-file upgrade test with real
   values); downgrade still fails `SchemaTooNew`. Repositories query
   only the new names.
+
+### E1 Phase B5 (AJ-E107) — bridge + generated-types rename
+
+- DTOs: `ProviderInfo` / `LaunchRecipeInfo` / `InstanceInfo` canonical
+  (`HarnessInfo`/`ProfileInfo`/`SessionInfo` deprecated aliases one
+  version; `#[serde(alias = "harness")]` keeps old payloads
+  deserialising). Wire fields: `provider`, `launch_recipe_id`,
+  `conversation_id`.
+- Tauri commands gain canonical names (`providers_list`,
+  `launch_recipes_list`, `instances_list`) with legacy names registered
+  as one-version aliases; arguments/returns unchanged.
+- ts-rs regenerated (never hand-edited beyond the generated re-export
+  alias files); bridge exposes canonical functions with `@deprecated`
+  legacy aliases; all UI call sites on canonical names; gallery green
+  end-to-end with the new wire fields.

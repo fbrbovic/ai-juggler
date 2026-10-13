@@ -6,21 +6,21 @@ import type { FixtureSet } from "../../src/lib/bridge";
  * read-model carries them, and honest-empty variants.
  */
 const baseAccounts = [
-  { id: "claude-work", harness: "claude-code", label: "Work Max", plan: "max-20x", login_state: "logged_in" },
-  { id: "claude-personal", harness: "claude-code", label: "Personal", plan: null, login_state: "logged_in" },
+  { id: "claude-work", provider: "claude-code", label: "Work Max", plan: "max-20x", login_state: "logged_in" },
+  { id: "claude-personal", provider: "claude-code", label: "Personal", plan: null, login_state: "logged_in" },
 ];
 
 const baseProfiles = [
-  { id: "p-1", name: "Main", account_id: "claude-work", account_label: "Work Max", harness: "claude-code", model: "opus", default_cwd: null },
-  { id: "p-2", name: "Main", account_id: "claude-personal", account_label: "Personal", harness: "claude-code", model: null, default_cwd: null },
+  { id: "p-1", name: "Main", account_id: "claude-work", account_label: "Work Max", provider: "claude-code", model: "opus", default_cwd: null },
+  { id: "p-2", name: "Main", account_id: "claude-personal", account_label: "Personal", provider: "claude-code", model: null, default_cwd: null },
 ];
 
 // One session per SessionStatus (model.rs:188 + Stopped).
 const T0 = 1_728_800_000_000; // pinned clock base (deterministic)
 const mk = (n: number, status: string, label: string) => ({
   id: `sess-${n}`,
-  profile_id: n % 2 ? "p-1" : "p-2",
-  harness: "claude-code",
+  launch_recipe_id: n % 2 ? "p-1" : "p-2",
+  provider: "claude-code",
   label,
   status,
   started_at_ms: T0 - n * 3_600_000,
@@ -59,8 +59,8 @@ export const honestEmpty: FixtureSet = {
 
 export const readyHome: FixtureSet = {
   accounts: [
-    { id: "a1", harness: "claude-code", label: "Work Max", plan: "max-20x", login_state: "logged_out" },
-    { id: "a2", harness: "claude-code", label: "Personal", plan: null, login_state: "logged_in" },
+    { id: "a1", provider: "claude-code", label: "Work Max", plan: "max-20x", login_state: "logged_out" },
+    { id: "a2", provider: "claude-code", label: "Personal", plan: null, login_state: "logged_in" },
   ],
   profiles: [],
   sessions: [],

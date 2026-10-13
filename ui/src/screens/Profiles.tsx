@@ -13,9 +13,9 @@ import {
   launchSession,
   loginOpenWeb,
   terminalSpawnLogin,
-  profilesList,
+  launchRecipesList,
   type AccountInfo,
-  type ProfileInfo,
+  type LaunchRecipeInfo,
 } from "../lib/bridge";
 
 /**
@@ -31,7 +31,7 @@ export function ProfilesScreen({
   openTerminal: (id: string, title: string) => void;
 }) {
   const [accounts, setAccounts] = useState<AccountInfo[] | null>(null);
-  const [profiles, setProfiles] = useState<ProfileInfo[] | null>(null);
+  const [profiles, setProfiles] = useState<LaunchRecipeInfo[] | null>(null);
   const [addAccount, setAddAccount] = useState(false);
   const [newProfileFor, setNewProfileFor] = useState<AccountInfo | null>(null);
   const [loginFor, setLoginFor] = useState<AccountInfo | null>(null);
@@ -41,7 +41,7 @@ export function ProfilesScreen({
     try {
       const [accountRows, profileRows] = await Promise.all([
         accountsList(),
-        profilesList(),
+        launchRecipesList(),
       ]);
       setAccounts(accountRows);
       setProfiles(profileRows);
@@ -54,10 +54,10 @@ export function ProfilesScreen({
     void refresh();
   }, [refresh]);
 
-  const launch = async (profile: ProfileInfo) => {
+  const launch = async (recipe: LaunchRecipeInfo) => {
     setError(null);
     try {
-      const result = await launchSession(profile.id, null);
+      const result = await launchSession(recipe.id, null);
       if (!result) {
         setError("Preview mode: no backend connected — nothing launched.");
         return;
@@ -65,7 +65,7 @@ export function ProfilesScreen({
       // Interactive sessions stream straight into the terminal dock.
       openTerminal(
         result.session_id,
-        `${profile.account_label} · ${profile.name}`,
+        `${recipe.account_label} · ${recipe.name}`,
       );
     } catch (cause) {
       setError(String(cause));
@@ -106,7 +106,7 @@ export function ProfilesScreen({
             <AccountCard
               key={account.id}
               account={account}
-              profiles={profiles.filter((profile) => profile.account_id === account.id)}
+              profiles={profiles.filter((recipe) => recipe.account_id === account.id)}
               onLaunch={launch}
               onDeleteProfile={async (id) => {
                 await deleteProfile(id);
@@ -181,8 +181,8 @@ function AccountCard({
   onLoginRechecked,
 }: {
   account: AccountInfo;
-  profiles: ProfileInfo[];
-  onLaunch: (profile: ProfileInfo) => void;
+  profiles: LaunchRecipeInfo[];
+  onLaunch: (recipe: LaunchRecipeInfo) => void;
   onDeleteProfile: (id: string) => Promise<void>;
   onNewProfile: () => void;
   onLogin: () => void;
@@ -195,13 +195,13 @@ function AccountCard({
   return (
     <Card className="overflow-hidden">
       <div className="flex flex-wrap items-center gap-2.5 border-b border-hairline px-5 py-3.5">
-        <HarnessGlyph harness={account.harness} />
+        <HarnessGlyph provider={account.provider} />
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className="truncate text-sm font-semibold">{account.label}</span>
             {account.plan && <Chip tone="accent">{account.plan}</Chip>}
           </div>
-          <span className="font-mono text-[11px] text-faint">{account.harness}</span>
+          <span className="font-mono text-[11px] text-faint">{account.provider}</span>
         </div>
         <div className="ml-auto flex items-center gap-2">
           <Chip tone={loginTone} dot breathing={!loggedIn}>
@@ -250,17 +250,17 @@ function AccountCard({
             No launch settings yet — the default applies when you start.
           </div>
         ) : (
-          profiles.map((profile) => (
-            <div key={profile.id} className="group flex items-center gap-3 px-5 py-2.5">
-              <span className="text-sm">{profile.name === "Main" ? "Default" : profile.name}</span>
-              {profile.model ? (
-                <Chip tone="neutral">{profile.model}</Chip>
+          profiles.map((recipe) => (
+            <div key={recipe.id} className="group flex items-center gap-3 px-5 py-2.5">
+              <span className="text-sm">{recipe.name === "Main" ? "Default" : recipe.name}</span>
+              {recipe.model ? (
+                <Chip tone="neutral">{recipe.model}</Chip>
               ) : (
                 <Chip tone="neutral">default model</Chip>
               )}
-              {profile.default_cwd && (
+              {recipe.default_cwd && (
                 <span className="truncate font-mono text-[11px] text-faint">
-                  {profile.default_cwd}
+                  {recipe.default_cwd}
                 </span>
               )}
               <div className="ml-auto flex items-center gap-1 opacity-60 transition-opacity group-hover:opacity-100">
@@ -268,13 +268,13 @@ function AccountCard({
                   size="sm"
                   variant="ghost"
                   title="Delete launch settings"
-                  onClick={() => void onDeleteProfile(profile.id)}
+                  onClick={() => void onDeleteProfile(recipe.id)}
                 >
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round">
                     <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
                   </svg>
                 </Button>
-                <Button size="sm" variant="primary" onClick={() => onLaunch(profile)}>
+                <Button size="sm" variant="primary" onClick={() => onLaunch(recipe)}>
                   <IconTerminal width={13} height={13} />
                   Launch
                 </Button>
@@ -289,12 +289,12 @@ function AccountCard({
   );
 }
 
-function HarnessGlyph({ harness }: { harness: string }) {
+function HarnessGlyph({ provider }: { provider: string }) {
   // Claude Code mark: an abstract spark; per-harness glyphs grow with M2.
   return (
     <span
       className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-accent/20 bg-accent-soft text-accent-hi"
-      title={harness}
+      title={provider}
     >
       <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
         <path d="M12 2.6c.5 3.9 2.4 6.6 6.9 8-4.5 1.4-6.4 4.1-6.9 8-.5-3.9-2.4-6.6-6.9-8 4.5-1.4 6.4-4.1 6.9-8Z" />
@@ -411,7 +411,7 @@ function LoginModal({
             <IconTerminal width={14} height={14} />
             {starting ? "Opening…" : preview ? "Sign in (preview)" : "Sign in inside AI Juggler"}
           </Button>
-          <Button size="sm" variant="secondary" onClick={() => void loginOpenWeb(account.harness)}>
+          <Button size="sm" variant="secondary" onClick={() => void loginOpenWeb(account.provider)}>
             Open claude.ai
           </Button>
           <Button

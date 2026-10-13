@@ -56,15 +56,18 @@ pub fn app_info() -> AppInfo {
     AppInfo::current()
 }
 
-/// A harness the app can manage.
+/// A Provider the app can manage (ADR-0008; AJ-E107).
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "../../../ui/src/types/generated/")]
-pub struct HarnessInfo {
-    /// Harness id, e.g. `claude-code`.
+pub struct ProviderInfo {
+    /// Provider id, e.g. `claude-code`.
     pub id: String,
     /// Display name.
     pub name: String,
 }
+
+/// Deprecated alias (one version). AJ-E107.
+pub type HarnessInfo = ProviderInfo;
 
 /// An account row for the UI.
 #[derive(Debug, Clone, Serialize, TS)]
@@ -72,8 +75,9 @@ pub struct HarnessInfo {
 pub struct AccountInfo {
     /// Account id.
     pub id: String,
-    /// Harness id.
-    pub harness: String,
+    /// Provider id (wire field `harness` aliased one version; AJ-E107).
+    #[serde(alias = "harness")]
+    pub provider: String,
     /// User label.
     pub label: String,
     /// Plan tier, if set.
@@ -82,36 +86,41 @@ pub struct AccountInfo {
     pub login_state: String,
 }
 
-/// A profile row for the UI.
+/// A Launch settings row for the UI (AJ-E107).
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "../../../ui/src/types/generated/")]
-pub struct ProfileInfo {
+pub struct LaunchRecipeInfo {
     /// Profile id.
     pub id: String,
     /// Human name.
     pub name: String,
     /// Owning account id.
     pub account_id: String,
-    /// Owning account label (denormalized for the list).
+    /// Owning Account label (denormalized for the list).
     pub account_label: String,
-    /// Harness id.
-    pub harness: String,
+    /// Provider id (wire field `harness` aliased one version; AJ-E107).
+    #[serde(alias = "harness")]
+    pub provider: String,
     /// Preferred model from the overlay, if any.
     pub model: Option<String>,
     /// Default working directory, if any.
     pub default_cwd: Option<String>,
 }
 
-/// An instance/session row for the UI (instance + session feeds).
+/// Deprecated alias (one version). AJ-E107.
+pub type ProfileInfo = LaunchRecipeInfo;
+
+/// An Instance row for the UI (the conversation lives inside; AJ-E107).
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "../../../ui/src/types/generated/")]
-pub struct SessionInfo {
-    /// Session id.
+pub struct InstanceInfo {
+    /// Instance id.
     pub id: String,
-    /// Profile id it runs under.
-    pub profile_id: String,
-    /// Harness id.
-    pub harness: String,
+    /// Launch settings id it runs under.
+    pub launch_recipe_id: String,
+    /// Provider id (wire field `harness` aliased one version).
+    #[serde(alias = "harness")]
+    pub provider: String,
     /// Account label for display.
     pub label: String,
     /// Lifecycle status string (storage vocabulary).
@@ -127,6 +136,9 @@ pub struct SessionInfo {
     /// (AJ-E104: Instance row → conversation inside; None while Starting).
     pub conversation_id: Option<String>,
 }
+
+/// Deprecated alias (one version). AJ-E107.
+pub type SessionInfo = InstanceInfo;
 
 /// A tracked project for the UI — the juggling anchor (ADR-0007).
 #[derive(Debug, Clone, Serialize, TS)]
@@ -229,15 +241,16 @@ pub struct ImportResult {
 // ---------------------------------------------------------------------------
 // commands
 
-/// Lists the harnesses this build can manage.
-#[tauri::command]
+/// Lists the Providers this build can manage (canonical name; the
+/// legacy `harnesses_list` alias is registered in the handler).
+#[tauri::command(rename = "providers_list")]
 #[must_use]
 ///
 /// # Errors
 ///
 /// Returns the typed [`AppError`] message on failure.
-pub fn harnesses_list() -> Vec<HarnessInfo> {
-    vec![HarnessInfo {
+pub fn harnesses_list() -> Vec<ProviderInfo> {
+    vec![ProviderInfo {
         id: juggler_adapters::CLAUDE_CODE_ID.to_string(),
         name: "Claude Code".to_string(),
     }]
@@ -548,13 +561,14 @@ pub fn login_open_web(
         })
 }
 
-/// Lists profiles.
-#[tauri::command]
+/// Lists Launch settings (canonical name `launch_recipes_list`;
+/// legacy alias registered in the handler).
+#[tauri::command(rename = "launch_recipes_list")]
 ///
 /// # Errors
 ///
 /// Returns the typed [`AppError`] message on failure.
-pub fn profiles_list(state: tauri::State<'_, Arc<AppState>>) -> AppResult<Vec<ProfileInfo>> {
+pub fn profiles_list(state: tauri::State<'_, Arc<AppState>>) -> AppResult<Vec<LaunchRecipeInfo>> {
     let storage = lock_storage(&state)?;
     profile_infos(&storage)
 }
@@ -614,7 +628,7 @@ pub fn create_profile(
         name: profile.name,
         account_id: profile.account.to_string(),
         account_label: account.label,
-        harness: account.harness.to_string(),
+        provider: account.harness.to_string(),
         model: profile.settings_overlay.model,
         default_cwd,
     })
@@ -716,13 +730,14 @@ pub fn launch_profile(
     })
 }
 
-/// Lists sessions (board feed), newest first.
-#[tauri::command]
+/// Lists Instances (board feed), newest first (canonical name
+/// `instances_list`; legacy alias registered in the handler).
+#[tauri::command(rename = "instances_list")]
 ///
 /// # Errors
 ///
 /// Returns the typed [`AppError`] message on failure.
-pub fn sessions_list(state: tauri::State<'_, Arc<AppState>>) -> AppResult<Vec<SessionInfo>> {
+pub fn sessions_list(state: tauri::State<'_, Arc<AppState>>) -> AppResult<Vec<InstanceInfo>> {
     let storage = lock_storage(&state)?;
     session_infos(&storage)
 }
@@ -844,7 +859,7 @@ fn account_info_of(account: &Account) -> AccountInfo {
     AccountInfo {
         login_state: login_state_name(login_state_of(account)).to_string(),
         id: account.id.to_string(),
-        harness: account.harness.to_string(),
+        provider: account.harness.to_string(),
         label: account.label.clone(),
         plan: account.plan.as_ref().map(ToString::to_string),
     }
@@ -898,7 +913,7 @@ fn profile_infos(storage: &Storage) -> AppResult<Vec<ProfileInfo>> {
                 name: profile.name.clone(),
                 account_id: profile.account.to_string(),
                 account_label: label.clone(),
-                harness: harness.clone(),
+                provider: harness.clone(),
                 model: profile.settings_overlay.model,
                 default_cwd: profile
                     .default_cwd
@@ -911,7 +926,7 @@ fn profile_infos(storage: &Storage) -> AppResult<Vec<ProfileInfo>> {
 }
 
 /// Session rows with denormalized labels/harnesses.
-fn session_infos(storage: &Storage) -> AppResult<Vec<SessionInfo>> {
+fn session_infos(storage: &Storage) -> AppResult<Vec<InstanceInfo>> {
     let accounts: std::collections::BTreeMap<String, String> = storage
         .accounts()
         .list()?
@@ -949,8 +964,8 @@ fn session_infos(storage: &Storage) -> AppResult<Vec<SessionInfo>> {
             SessionInfo {
                 label: account_labels.get(&account_id).cloned().unwrap_or_default(),
                 id: record.id.to_string(),
-                profile_id: record.profile.to_string(),
-                harness,
+                launch_recipe_id: record.profile.to_string(),
+                provider: harness,
                 status: record.status.as_str().to_string(),
                 started_at_ms: record.started_at.millis(),
                 kind: record.kind.as_str().to_string(),
@@ -1314,4 +1329,48 @@ mod tests {
         assert_eq!(info.name, "AI Juggler");
         assert!(!info.version.is_empty());
     }
+}
+
+/// One-version IPC aliases (AJ-E107 Req.2): legacy command names keep
+/// deserialising while UI call sites migrate to the canonical names.
+pub mod legacy_aliases {
+    use super::{
+        AppResult, InstanceInfo, LaunchRecipeInfo, ProviderInfo, harnesses_list, profiles_list,
+        sessions_list,
+    };
+    use crate::state::AppState;
+    use std::sync::Arc;
+
+    /// Legacy alias of `providers_list`.
+    #[tauri::command]
+    #[must_use]
+    pub fn harnesses_list_alias() -> Vec<ProviderInfo> {
+        harnesses_list()
+    }
+
+    /// Legacy alias of `launch_recipes_list`.
+    #[tauri::command]
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`AppError`] message on failure.
+    pub fn profiles_list_alias(
+        state: tauri::State<'_, Arc<AppState>>,
+    ) -> AppResult<Vec<LaunchRecipeInfo>> {
+        profiles_list(state)
+    }
+
+    /// Legacy alias of `instances_list`.
+    #[tauri::command]
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`AppError`] message on failure.
+    pub fn sessions_list_alias(
+        state: tauri::State<'_, Arc<AppState>>,
+    ) -> AppResult<Vec<InstanceInfo>> {
+        sessions_list(state)
+    }
+
+    // Silence unused-import when only aliases reference these.
 }

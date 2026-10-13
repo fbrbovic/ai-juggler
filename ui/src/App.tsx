@@ -14,23 +14,23 @@ import { ReadyHome } from "./screens/ReadyHome";
 import { ProjectPanel, SessionPanel, WorkEmpty } from "./screens/WorkPanels";
 import {
   accountsList,
-  profilesList,
+  launchRecipesList,
   onSessionsUpdated,
   onTerminalExit,
   projectsBackfill,
   projectsList,
-  sessionsList,
+  instancesList,
   sessionHandover,
   onFolderDropped,
   launchSession,
-  type ProfileInfo,
+  type LaunchRecipeInfo,
   dashboardStats,
   fetchAppInfo,
   onAppReady,
   type AccountInfo,
   type AppInfo,
   type ProjectInfo,
-  type SessionInfo,
+  type InstanceInfo,
   type StatsInfo,
 } from "./lib/bridge";
 
@@ -71,9 +71,9 @@ export default function App() {
   const [global, setGlobal] = useState<GlobalId | null>(null);
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
-  const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const [sessions, setSessions] = useState<InstanceInfo[]>([]);
   const [accounts, setAccounts] = useState<AccountInfo[]>([]);
-  const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
+  const [profiles, setProfiles] = useState<LaunchRecipeInfo[]>([]);
   const [readySkipped, setReadySkipped] = useState(
     () => sessionStorage.getItem("aij.ready.skipped") === "1",
   );
@@ -102,9 +102,9 @@ export default function App() {
     try {
       const [projectRows, sessionRows, accountRows, profileRows] = await Promise.all([
         projectsList(),
-        sessionsList(),
+        instancesList(),
         accountsList(),
-        profilesList(),
+        launchRecipesList(),
       ]);
       setProjects(projectRows);
       setSessions(sessionRows);
@@ -353,8 +353,8 @@ export default function App() {
               sessions={sessions}
               accounts={accounts}
               onOpenSession={selectSession}
-              onLaunch={async (profile, project) => {
-                const result = await launchSession(profile.id, project.root);
+              onLaunch={async (recipe, project) => {
+                const result = await launchSession(recipe.id, project.root);
                 if (result) {
                   void refresh();
                   selectSession(result.session_id);
@@ -440,7 +440,7 @@ function Overview({
   sessions,
   projects,
 }: {
-  sessions: SessionInfo[];
+  sessions: InstanceInfo[];
   projects: ProjectInfo[];
 }) {
   const [stats, setStats] = useState<StatsInfo | null>(null);

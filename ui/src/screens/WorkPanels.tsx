@@ -4,11 +4,11 @@ import { TerminalView } from "../components/TerminalView";
 import { IconJuggler, IconProjects, IconTerminal } from "../components/icons";
 import {
   launchSession,
-  profilesList,
+  launchRecipesList,
   type AccountInfo,
-  type ProfileInfo,
+  type LaunchRecipeInfo,
   type ProjectInfo,
-  type SessionInfo,
+  type InstanceInfo,
 } from "../lib/bridge";
 
 const isLive = (status: string) => status === "running" || status === "starting";
@@ -51,10 +51,10 @@ export function SessionPanel({
   onStopped,
   onHandover,
 }: {
-  session: SessionInfo | null;
+  session: InstanceInfo | null;
   project: ProjectInfo | null;
   loginTerminal?: { id: string; title: string; ended: boolean } | null;
-  profiles: ProfileInfo[];
+  profiles: LaunchRecipeInfo[];
   accounts: AccountInfo[];
   onOpenProject: (id: string) => void;
   onStopped: () => void;
@@ -143,18 +143,18 @@ export function SessionPanel({
           </p>
           <div className="flex flex-wrap gap-1.5">
             {profiles
-              .filter((profile) => profile.id !== session.profile_id)
+              .filter((recipe) => recipe.id !== session.launch_recipe_id)
               .slice(0, 6)
-              .map((profile) => {
+              .map((recipe) => {
                 const ready =
-                  accounts.find((a) => a.id === profile.account_id)?.login_state ===
+                  accounts.find((a) => a.id === recipe.account_id)?.login_state ===
                   "logged_in";
                 return (
                   <button
-                    key={profile.id}
+                    key={recipe.id}
                     type="button"
                     disabled={!ready}
-                    onClick={() => onHandover(session.id, profile.id)}
+                    onClick={() => onHandover(session.id, recipe.id)}
                     title={
                       ready
                         ? "Moves this session's context to this account and resumes it"
@@ -167,19 +167,19 @@ export function SessionPanel({
                         : "border-hairline/50 text-faint")
                     }
                   >
-                    {profile.account_label}
+                    {recipe.account_label}
                     {!ready && " · sign in first"}
                   </button>
                 );
               })}
-            {profiles.filter((p) => p.id !== session.profile_id).length === 0 && (
+            {profiles.filter((p) => p.id !== session.launch_recipe_id).length === 0 && (
               <p className="text-[11px] text-faint">
                 Add another account to juggle between them.
               </p>
             )}
           </div>
           <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[11px] text-faint">
-            <span>provider: <span className="text-muted">{session.harness}</span></span>
+            <span>provider: <span className="text-muted">{session.provider}</span></span>
             <span>age: <span className="text-muted">{since(session.started_at_ms)}</span></span>
             <span className="ml-auto">context moves with the session — transcript copied, then resumed</span>
           </div>
@@ -201,14 +201,14 @@ export function ProjectPanel({
   onLaunch,
 }: {
   project: ProjectInfo;
-  sessions: SessionInfo[];
+  sessions: InstanceInfo[];
   accounts: AccountInfo[];
   onOpenSession: (id: string) => void;
-  onLaunch: (profile: ProfileInfo, project: ProjectInfo) => void;
+  onLaunch: (recipe: LaunchRecipeInfo, project: ProjectInfo) => void;
 }) {
-  const [profiles, setProfiles] = useState<ProfileInfo[] | null>(null);
+  const [profiles, setProfiles] = useState<LaunchRecipeInfo[] | null>(null);
   if (profiles === null) {
-    void profilesList().then(setProfiles);
+    void launchRecipesList().then(setProfiles);
   }
   const history = sessions.filter((s) => s.project_id === project.id);
 
@@ -255,16 +255,16 @@ export function ProjectPanel({
             Launch with another account
           </p>
           <div className="flex flex-col gap-1.5">
-            {(profiles ?? []).slice(0, 5).map((profile) => {
+            {(profiles ?? []).slice(0, 5).map((recipe) => {
               const ready =
-                accounts.find((a) => a.id === profile.account_id)?.login_state === "logged_in";
+                accounts.find((a) => a.id === recipe.account_id)?.login_state === "logged_in";
               return (
                 <button
-                  key={profile.id}
+                  key={recipe.id}
                   type="button"
                   disabled={!ready}
                   title={ready ? undefined : "Needs sign-in first (Ready home)"}
-                  onClick={() => onLaunch(profile, project)}
+                  onClick={() => onLaunch(recipe, project)}
                   className={
                     "flex items-center gap-2 rounded-lg border px-3 py-2 text-left text-xs transition-colors " +
                     (ready
@@ -273,11 +273,11 @@ export function ProjectPanel({
                   }
                 >
                   <IconTerminal width={13} height={13} />
-                  <span className="font-medium">{profile.account_label}</span>
+                  <span className="font-medium">{recipe.account_label}</span>
                   <span className="text-faint">·</span>
-                  <span className="text-muted">{profile.name}</span>
-                  {profile.model && (
-                    <span className="ml-auto font-mono text-[10px] text-faint">{profile.model}</span>
+                  <span className="text-muted">{recipe.name}</span>
+                  {recipe.model && (
+                    <span className="ml-auto font-mono text-[10px] text-faint">{recipe.model}</span>
                   )}
                   {!ready && <Chip tone="neutral">sign in first</Chip>}
                 </button>
@@ -359,25 +359,25 @@ export function NewSessionModal({
   onClose: () => void;
   onLaunched: (sessionId: string, title: string) => void;
 }) {
-  const [profiles, setProfiles] = useState<ProfileInfo[] | null>(null);
+  const [profiles, setProfiles] = useState<LaunchRecipeInfo[] | null>(null);
   const [directory, setDirectory] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   if (profiles === null) {
-    void profilesList().then(setProfiles);
+    void launchRecipesList().then(setProfiles);
   }
 
-  const launch = async (profile: ProfileInfo) => {
+  const launch = async (recipe: LaunchRecipeInfo) => {
     setBusy(true);
     setError(null);
     try {
-      const result = await launchSession(profile.id, directory.trim() || null);
+      const result = await launchSession(recipe.id, directory.trim() || null);
       if (!result) {
         setError("Preview mode — no backend connected.");
         setBusy(false);
         return;
       }
-      onLaunched(result.session_id, `${profile.account_label} · ${profile.name}`);
+      onLaunched(result.session_id, `${recipe.account_label} · ${recipe.name}`);
     } catch (cause) {
       setError(String(cause));
       setBusy(false);
@@ -407,20 +407,20 @@ export function NewSessionModal({
         </label>
 
         <div className="mt-4 flex max-h-64 flex-col gap-1.5 overflow-y-auto">
-          {(profiles ?? []).map((profile) => (
+          {(profiles ?? []).map((recipe) => (
             <button
-              key={profile.id}
+              key={recipe.id}
               type="button"
               disabled={busy}
-              onClick={() => void launch(profile)}
+              onClick={() => void launch(recipe)}
               className="flex items-center gap-2 rounded-lg border border-hairline px-3 py-2.5 text-left text-xs transition-colors hover:border-accent/40 hover:bg-surface disabled:opacity-50"
             >
               <IconTerminal width={13} height={13} />
-              <span className="font-medium">{profile.account_label}</span>
+              <span className="font-medium">{recipe.account_label}</span>
               <span className="text-faint">·</span>
-              <span className="text-muted">{profile.name}</span>
-              {profile.model && (
-                <span className="ml-auto font-mono text-[10px] text-faint">{profile.model}</span>
+              <span className="text-muted">{recipe.name}</span>
+              {recipe.model && (
+                <span className="ml-auto font-mono text-[10px] text-faint">{recipe.model}</span>
               )}
             </button>
           ))}

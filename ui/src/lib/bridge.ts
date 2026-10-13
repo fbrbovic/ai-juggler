@@ -1,22 +1,15 @@
-/**
- * Typed bridge to the Rust backend. Types are generated from the Rust
- * definitions (ts-rs export) — never hand-written on this side.
- *
- * In a plain browser (vite dev outside Tauri) every call degrades to
- * design-preview mock data so screens can be reviewed without a backend.
- */
 import { invoke } from "@tauri-apps/api/core";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { AppInfo } from "../types/generated/AppInfo";
 import type { AccountInfo } from "../types/generated/AccountInfo";
 import type { DiscoveredInfo } from "../types/generated/DiscoveredInfo";
 import type { ImportResult } from "../types/generated/ImportResult";
+import type { InstanceInfo } from "../types/generated/InstanceInfo";
+import type { LaunchRecipeInfo } from "../types/generated/LaunchRecipeInfo";
 import type { LaunchResult } from "../types/generated/LaunchResult";
 import type { ProjectInfo } from "../types/generated/ProjectInfo";
-import type { ProfileInfo } from "../types/generated/ProfileInfo";
-import type { SessionInfo } from "../types/generated/SessionInfo";
-import type { HarnessInfo } from "../types/generated/HarnessInfo";
+import type { ProviderInfo } from "../types/generated/ProviderInfo";
 import type { StatsInfo } from "../types/generated/StatsInfo";
 import type { TerminalInfo } from "../types/generated/TerminalInfo";
 
@@ -25,14 +18,19 @@ export type {
   AccountInfo,
   DiscoveredInfo,
   ImportResult,
+  InstanceInfo,
+  LaunchRecipeInfo,
   LaunchResult,
-  ProfileInfo,
   ProjectInfo,
-  SessionInfo,
-  HarnessInfo,
+  ProviderInfo,
   StatsInfo,
   TerminalInfo,
 };
+
+// Deprecated one-version aliases (AJ-E107).
+export type { ProviderInfo as HarnessInfo } from "../types/generated/ProviderInfo";
+export type { LaunchRecipeInfo as ProfileInfo } from "../types/generated/LaunchRecipeInfo";
+export type { InstanceInfo as SessionInfo } from "../types/generated/InstanceInfo";
 
 /** Event names mirrored from juggler_app constants (single source: Rust). */
 export const EVENTS = {
@@ -54,8 +52,8 @@ export function hasLiveBackend(): boolean {
 
 export interface FixtureSet {
   accounts: AccountInfo[];
-  profiles: ProfileInfo[];
-  sessions: SessionInfo[];
+  profiles: LaunchRecipeInfo[];
+  sessions: InstanceInfo[];
   projects: ProjectInfo[];
   stats: StatsInfo;
 }
@@ -69,24 +67,24 @@ declare global {
 const seeded = (typeof window !== "undefined" && window.__AIJ_FIXTURE__) || {};
 
 const MOCK_ACCOUNTS: AccountInfo[] = [
-  { id: "claude-work", harness: "claude-code", label: "Work Max", plan: Some("max-20x"), login_state: "logged_in" },
-  { id: "claude-personal", harness: "claude-code", label: "Personal", plan: None(), login_state: "logged_out" },
+  { id: "claude-work", provider: "claude-code", label: "Work Max", plan: Some("max-20x"), login_state: "logged_in" },
+  { id: "claude-personal", provider: "claude-code", label: "Personal", plan: None(), login_state: "logged_out" },
 ];
 
-const MOCK_PROFILES: ProfileInfo[] = [
-  { id: "p-1", name: "Deep work", account_id: "claude-work", account_label: "Work Max", harness: "claude-code", model: Some("opus"), default_cwd: None() },
-  { id: "p-2", name: "Quick fixes", account_id: "claude-work", account_label: "Work Max", harness: "claude-code", model: Some("sonnet"), default_cwd: None() },
-  { id: "p-3", name: "Weekend build", account_id: "claude-personal", account_label: "Personal", harness: "claude-code", model: None(), default_cwd: None() },
+const MOCK_PROFILES: LaunchRecipeInfo[] = [
+  { id: "p-1", name: "Deep work", account_id: "claude-work", account_label: "Work Max", provider: "claude-code", model: Some("opus"), default_cwd: None() },
+  { id: "p-2", name: "Quick fixes", account_id: "claude-work", account_label: "Work Max", provider: "claude-code", model: Some("sonnet"), default_cwd: None() },
+  { id: "p-3", name: "Weekend build", account_id: "claude-personal", account_label: "Personal", provider: "claude-code", model: None(), default_cwd: None() },
 ];
 
 const MOCK_STATS: StatsInfo =
   seeded.stats ?? { accounts: 2, profiles: 3, active_sessions: 0 };
 
-const MOCK_SESSIONS: SessionInfo[] = seeded.sessions ?? [
+const MOCK_SESSIONS: InstanceInfo[] = seeded.sessions ?? [
   {
     id: "sess-live-1",
-    profile_id: "p-1",
-    harness: "claude-code",
+    launch_recipe_id: "p-1",
+    provider: "claude-code",
     label: "Work Max",
     status: "running",
     started_at_ms: Date.now() - 1_200_000,
@@ -96,8 +94,8 @@ const MOCK_SESSIONS: SessionInfo[] = seeded.sessions ?? [
   },
   {
     id: "sess-done-1",
-    profile_id: "p-3",
-    harness: "claude-code",
+    launch_recipe_id: "p-3",
+    provider: "claude-code",
     label: "Personal",
     status: "finished",
     started_at_ms: Date.now() - 86_400_000,
@@ -107,8 +105,8 @@ const MOCK_SESSIONS: SessionInfo[] = seeded.sessions ?? [
   },
   {
     id: "sess-done-2",
-    profile_id: "p-2",
-    harness: "claude-code",
+    launch_recipe_id: "p-2",
+    provider: "claude-code",
     label: "Work Max",
     status: "finished",
     started_at_ms: Date.now() - 43_200_000,
@@ -162,12 +160,15 @@ export async function fetchAppInfo(): Promise<AppInfo | null> {
   }
 }
 
-export async function harnessesList(): Promise<HarnessInfo[]> {
+export async function providersList(): Promise<ProviderInfo[]> {
   if (!hasBackend) {
     return [{ id: "claude-code", name: "Claude Code" }];
   }
-  return invoke<HarnessInfo[]>("harnesses_list");
+  return invoke<ProviderInfo[]>("providers_list");
 }
+
+/** @deprecated legacy alias (AJ-E107) — use providersList. */
+export const harnessesList = providersList;
 
 export async function accountsList(): Promise<AccountInfo[]> {
   if (!hasBackend) {
@@ -184,7 +185,7 @@ export async function createAccount(
   if (!hasBackend) {
     return {
       id: `claude-${label.toLowerCase().replace(/\s+/g, "-")}`,
-      harness,
+      provider: harness,
       label,
       plan,
       login_state: "logged_out",
@@ -242,7 +243,7 @@ export async function accountImport(
     return {
       account: {
         id: `claude-${label.toLowerCase().replace(/\s+/g, "-")}`,
-        harness,
+        provider: harness,
         label,
         plan,
         login_state: "logged_out",
@@ -277,20 +278,23 @@ export async function accountLoginState(accountId: string): Promise<string> {
   return invoke<string>("account_login_state", { accountId });
 }
 
-export async function profilesList(): Promise<ProfileInfo[]> {
+export async function launchRecipesList(): Promise<LaunchRecipeInfo[]> {
   if (!hasBackend) {
-    return seeded.profiles ?? MOCK_PROFILES;
+    return MOCK_PROFILES;
   }
-  return invoke<ProfileInfo[]>("profiles_list");
+  return invoke<LaunchRecipeInfo[]>("launch_recipes_list");
 }
+
+/** @deprecated legacy alias (AJ-E107) — use launchRecipesList. */
+export const profilesList = launchRecipesList;
 
 export async function createProfile(
   accountId: string,
   name: string,
   model: string | null,
   defaultCwd: string | null,
-): Promise<ProfileInfo> {
-  return invoke<ProfileInfo>("profile_create", {
+): Promise<LaunchRecipeInfo> {
+  return invoke<LaunchRecipeInfo>("profile_create", {
     accountId,
     name,
     model,
@@ -323,12 +327,15 @@ export async function projectsList(): Promise<ProjectInfo[]> {
   return invoke<ProjectInfo[]>("projects_list");
 }
 
-export async function sessionsList(): Promise<SessionInfo[]> {
+export async function instancesList(): Promise<InstanceInfo[]> {
   if (!hasBackend) {
     return MOCK_SESSIONS;
   }
-  return invoke<SessionInfo[]>("sessions_list");
+  return invoke<InstanceInfo[]>("instances_list");
 }
+
+/** @deprecated legacy alias (AJ-E107) — use instancesList. */
+export const sessionsList = instancesList;
 
 export async function stopSession(sessionId: string): Promise<void> {
   if (!hasBackend) {
@@ -345,14 +352,14 @@ export async function dashboardStats(): Promise<StatsInfo> {
 }
 
 export function onSessionsUpdated(
-  handler: (sessions: SessionInfo[]) => void,
+  handler: (sessions: InstanceInfo[]) => void,
 ): () => void {
   if (!hasBackend) {
     return () => {};
   }
   let unlisten: (() => void) | null = null;
   let disposed = false;
-  listen<SessionInfo[]>(EVENTS.sessionsUpdated, (event) => handler(event.payload))
+  listen<InstanceInfo[]>(EVENTS.sessionsUpdated, (event) => handler(event.payload))
     .then((stop) => {
       if (disposed) {
         stop();
