@@ -1700,10 +1700,14 @@ mod tests {
     }
 
     /// A sacrificial git cwd: `<tmp>/.git/HEAD` with a branch ref. Never a
-    /// real repository — fixtures only (workspace safety rule).
+    /// real repository — fixtures only (workspace safety rule). Every call
+    /// gets a unique directory: tests run in parallel and a shared path
+    /// would let one test's `fs::write` truncate while another reads.
     fn git_cwd(branch: &str) -> std::path::PathBuf {
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
-            "aij-e401-{}-{}",
+            "aij-e401-{}-{}-{n}",
             std::process::id(),
             branch.replace('/', "-")
         ));
