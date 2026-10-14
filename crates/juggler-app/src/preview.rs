@@ -69,24 +69,6 @@ impl CaptureSource for UnsupportedSource {
     }
 }
 
-/// The PARKED macOS source (AJ-E415 binding note): the real
-/// `ScreenshotSource` below links and type-checks, but the binding
-/// requires one `unsafe { sc_initialize_core_graphics() }` call at
-/// process start to avoid a first-capture SIGSEGV (reproduced in
-/// `docs/qa/evidence/AJ-E415/real-capture-crash.log`) — and the
-/// workspace law `unsafe_code = "forbid"` (a settled decision) bars
-/// writing it. Until the maintainer records that decision (or the
-/// binding ships a safe init), the shipped app reports this honest
-/// parked state instead of ever crashing.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct ParkedSource;
-
-impl CaptureSource for ParkedSource {
-    fn capture(&self, _identity: &WindowIdentity) -> Result<Vec<u8>, CaptureError> {
-        Err(CaptureError::Unsupported)
-    }
-}
-
 /// A plain-data window row the matcher works on (the macOS source maps
 /// the SC snapshot into these; tests construct them directly).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -328,11 +310,22 @@ mod macos {
 
     impl CaptureSource for ScreenshotSource {
         fn capture(&self, identity: &WindowIdentity) -> Result<Vec<u8>, CaptureError> {
+            // D-17 (2026-10-13): the audited init shim — one call per
+            // process, without which the first capture SIGSEGVs (the
+            // parked state's crash evidence). Idempotent via `Once`.
+            juggler_scap_init::initialize();
             let content = SCShareableContent::get().map_err(|_| CaptureError::PermissionDenied)?;
             let snapshot = content
                 .snapshot()
                 .ok_or_else(|| CaptureError::Failed("no content snapshot".into()))?;
             let rows = snapshot_rows(&snapshot);
+            // macOS 15+ TCC filtering: WITHOUT the Screen Recording
+            // grant the API succeeds but returns an EMPTY window list
+            // for the whole desktop — impossible on a real session,
+            // so it maps to the honest denial, never "window gone".
+            if rows.is_empty() {
+                return Err(CaptureError::PermissionDenied);
+            }
             let row = super::match_window(&rows, identity)?;
             // Re-find the live SCWindow handle (filters need live
             // pointers, not snapshot data).

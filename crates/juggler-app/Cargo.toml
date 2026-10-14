@@ -38,3 +38,5 @@ tempfile = "3.27.0"
 # (state machine, pause/teardown) is platform-independent and tested
 # everywhere against a scripted capture source.
 screencapturekit = { version = "11.0.0", features = ["macos_14_0"] }
+# D-17: the audited init shim (one unsafe call, isolated crate).
+juggler-scap-init = { path = "../juggler-scap-init" }

@@ -7,6 +7,9 @@ members = [
     "crates/juggler-core",
     "crates/juggler-handover",
     "crates/juggler-link",
+    # D-17 carve-out: the ONLY crate not inheriting the workspace lint
+    # baseline (one audited unsafe call — see its Cargo.toml/lib.rs).
+    "crates/juggler-scap-init",
     "crates/juggler-supervisor",
 ]
 

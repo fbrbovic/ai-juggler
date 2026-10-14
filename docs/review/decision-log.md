@@ -180,8 +180,32 @@
   Appearance section. Wireframe convention recorded in
   `docs/wireframes/README.md`.
 
+### D-17 Screen capture permitted — vendored, audited init shim — SETTLED (2026-10-13)
+
+- Decision: the maintainer granted screen capture ("Yes I am giving
+  you permission for screen capture", 2026-10-13), unblocking
+  AJ-E415's real capture path. The `screencapturekit` binding requires
+  one `unsafe { sc_initialize_core_graphics() }` call at first use to
+  avoid a first-capture SIGSEGV (reproduced and logged at
+  `docs/qa/evidence/AJ-E415/real-capture-crash.log`); the workspace
+  law `unsafe_code = "forbid"` stays ABSOLUTE for every existing
+  crate. The carve-out is a NEW, isolated crate
+  (`crates/juggler-scap-init`) that deliberately does NOT inherit the
+  workspace lint baseline (`[lints] workspace = true` omitted) and
+  contains exactly ONE `unsafe` block calling the binding's own
+  public FFI export behind a `Once` — audited line-by-line in this
+  decision, documented in the crate root, and load-bearing for
+  nothing else.
+- Consequences: `ParkedSource` is deleted; macOS previews use the
+  real `ScreenshotSource` (init via the shim); Screen Recording
+  permission denials still surface honestly as the `denied` phase;
+  non-macOS stays `unsupported`. Screen Recording TCC prompts are
+  expected on first use (the `NSScreenCaptureUsageDescription`
+  Info.plist key shipped with the parked subset). Any future `unsafe`
+  request requires its own recorded decision.
+
 ## Unresolved (in discussion order)
 
 - None. D-01..D-15 were marked Final on maintainer instruction
-  (2026-10-13); D-16 was settled by maintainer instruction the same
-  day and follows the same law.
+  (2026-10-13); D-16 and D-17 were settled by maintainer instruction
+  on 2026-10-13 and follow the same law.

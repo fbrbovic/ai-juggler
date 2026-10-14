@@ -1,14 +1,15 @@
-# Evidence manifest — AJ-E415 (Desktop live preview) — PARTIAL, real capture BLOCKED
+# Evidence manifest — AJ-E415 (Desktop live preview) — COMPLETE (D-17 unblock)
 
 Task: `docs/tasks/E4-indicators-and-inspector.md` AJ-E415.
-Branch: `stage2/e4-preview`. Local runs (macOS arm64, CLT-only) 2026-10-14,
-reviewer zcode-primary.
+Branch: `stage2/e415-unblock` (safe subset: `stage2/e4-preview`).
+Local runs (macOS arm64, CLT-only) 2026-10-13/14, reviewer zcode-primary.
 
-**Status: the safe subset is DONE and green; the REAL ScreenCaptureKit
-capture is BLOCKED by a binding gap versus a settled law (details in
-the BLOCKED row). The shipped app never crashes and never fakes a
-frame — the preview renders an honest parked state until the
-maintainer records the decision that unblocks it.**
+**Status: UNBLOCKED and COMPLETE. The maintainer granted screen
+capture (2026-10-13, recorded as decision D-17); the vendored audited
+init shim shipped, the real `ScreenshotSource` drives live frames
+(evidence below), and `ParkedSource` is deleted. The parked-era rows
+below remain as history; the BLOCKED row is superseded by the
+D-17 rows that follow it.**
 
 | Claim | Command | Threshold | Observed | Verdict | Date | Reviewer |
 |---|---|---|---|---|---|---|
@@ -55,3 +56,24 @@ One of:
 - The harness seam `__AIJ_PREVIEW_PHASE__` pins preview phases in
   captures; the mock frame is a deterministic generated PNG committed
   in `bridge.ts`.
+
+
+---
+
+## D-17 unblock (2026-10-13) — the real capture, live
+
+| Claim | Command | Threshold | Observed | Verdict | Date | Reviewer |
+|---|---|---|---|---|---|---|
+| D-17 recorded + audited shim | decision-log D-17 + `crates/juggler-scap-init/` | ONE audited unsafe call; workspace law untouched elsewhere | D-17 in `docs/review/decision-log.md` (quotes the maintainer grant); the shim crate deliberately does NOT inherit `[lints] workspace = true` (the only such crate, commented at both Cargo.tomls) and contains exactly one `unsafe` block calling the binding's OWN public export `sc_initialize_core_graphics()` behind a `Once`, with the SAFETY audit in the source; every other crate keeps `unsafe_code = "forbid"` | PASS | 2026-10-13 | zcode-primary |
+| Real capture runs (no crash) | `cargo test -p juggler-app --test preview_real -- --ignored --nocapture` → `real-capture-live.log` | the API chain runs end to end | **LIVE frames**: `LIVE frame: 17596 bytes PNG in 1.46s` (second run `17584 bytes`; cold-start run `14.5s` first frame), steady 2 s polling 3–4 frames at **1.7–2.3% CPU** (<5% budget); a real captured frame is committed: `sample-frame.png` (PNG 1280×505 RGBA — the TextEdit probe window). The original SIGSEGV had TWO causes, both fixed: (1) the missing init — solved by D-17's shim; (2) the CLT-only machine's empty `libswift_Concurrency.dylib` stub shadowing the OS runtime — `ensure_swift_runtime.sh` now orders rpaths `/usr/lib/swift` FIRST so the dyld-shared-cache runtime supplies the real `_swift_task_*` symbols (probe-verified: `dlopen` + `swift_task_create` resolve from the cache; the stub stays a link-time satisfier only) | PASS | 2026-10-13 | zcode-primary |
+| Deterministic fixture | the test itself | a real window exists for the capture | `launch_probe_window()` writes a probe doc, opens it in TextEdit (permission-free `pgrep` wait + settle — a System Events poll would need Accessibility), captures with the REAL TextEdit pid + title, and cleans up (quits TextEdit only when the test started it; otherwise closes just its document) | PASS | 2026-10-13 | zcode-primary |
+| Ungranted machines stay honest | code path (new) | denial renders guidance, never a wrong frame | macOS 15+ TCC filtering makes `SCShareableContent` succeed but return an EMPTY desktop window list without the Screen Recording grant — now mapped to `PermissionDenied` (the denied phase + panel guidance), never `WindowGone`; non-macOS keeps `Unsupported` with copy `Live preview is not supported on this platform` (UI test updated) | PASS | 2026-10-13 | zcode-primary |
+| Parked code deleted | `grep -r parked crates/ ui/src` | no parked surface remains | `ParkedSource` deleted; `commands.rs` wires `ScreenshotSource`; the only remaining "parked" strings are historical comments/this manifest | PASS | 2026-10-13 | zcode-primary |
+| Gates after the unblock | `just verify` + `pnpm --dir ui build`/`test` + `visual:capture` | all green; visual byte-stable | verify green (incl. 8/8 preview units, workspace builds with the new crate on all platforms — the shim is `#![cfg(target_os = "macos")]`, empty elsewhere); UI build green; 150/150 component; **107/107 visual byte-stable** (the unsupported phase is not a captured state) | PASS | 2026-10-13 | zcode-primary |
+
+### Supersedes
+
+- The parked-era BLOCKED row above (the crash log stays for history).
+- The "Performance budget PARTIAL" row: live CPU measured at
+  **1.7–2.3%** during polling — the <5% budget is met with the real
+  capture.
