@@ -2,7 +2,7 @@
 > Settled basis: D-01 (Clean is trust proof; zero false kills is success metric), D-08 (notify-only default, Clean-safe opt-in **per Account**, verified-owned only, every kill audit-logged; ADR-0010 required), D-13 (fleet-shaped from day one), D-15 (this file is implementation-ready task spec only; product code starts under separate approval). Canonical demand: `docs/expected-worfklow.md:15,17-18`. Design source: `docs/review/pass2/05-process-trees-zombies-and-cleanup.md` (§§2-14). Do NOT re-litigate D-08 tiers as per-Provider: pass2 §10 says per-Provider, decision-log D-08 overrides to per-Account; per-Provider MAY be a UI grouping, storage key SHALL be `account_id`.
 > Sequencing: ledger+PGID+identity (E501-E503) before any tree-kill; read-only Centre (E506) before ladder; tiers last. No one-click kill. UI vocabulary Provider/Account/Instance/Helper/Orphan; never label T2/T3 "zombie" (pass2 §2).
 
-### AJ-E501 Persistent spawn ledger with intent-before-spawn | Status: TODO | Priority P0 | Effort L | Depends: none
+### AJ-E501 Persistent spawn ledger with intent-before-spawn | Status: DONE-EVIDENCED (evidence: docs/qa/evidence/AJ-E501/manifest.md) | Priority P0 | Effort L | Depends: none
 
 **Goal**: Replace root-only journal memory with a queryable `process_ledger` surviving root exit, app exit, and reboot, so orphan detection is possible at all.
 
@@ -31,6 +31,14 @@
 **Research basis**: pass2/05 §5 (lines 192-227), §3 journal gap (`journal.rs:34-48` roots only); decision-log D-13:131-137.
 
 **Handover note**: Trap: do not extend the JSONL journal into a query store — ledger is SQLite, journal stays crash log. Trap: `started_at` is OS process start time, NOT wall-clock spawn time (E503 depends on it).
+
+*Implementation mapping (corrected in this task's PR per the claiming protocol)*:
+- Schema v12: `process_ledger` (all pass2 §5 columns + the 3 indexes) in juggler-core storage; `ProcessLedgerRepo` behind its OWN WAL connection + mutex (spawn threads write without the app storage lock); exited rows prune at startup (7 days; running never).
+- Seam: `LedgerStore` trait (`boot_id/intent/spawned/upsert_helpers/mark_exited/candidates/prune`) in supervisor `tree.rs`; SQL lives only in core (`CoreLedgerStore` bridges).
+- Intent-first: `spawn`/`spawn_desktop` take a `SpawnContext` (provider/account/project/machine/role) and write the `starting` row BEFORE the fork; PID + OS start time patch after; every ledger error sets `ledger_degraded` (banner copy exact, rendered on Overview via `StatsInfo.ledger_degraded`) — spawns never fail for ledger reasons.
+- Helpers: `LiveStatsCollector::tick` → `ledger_upserts` (one batched transaction per 2 s per Instance, update-first so no duplicates; peaks refreshed).
+- Machine identity: `local_machine_id()` (generated once in app_settings; no new `"this-mac"` literals); `boot_id` = OS boot time (sysinfo) on every row/exit patch.
+- Evidence: `docs/qa/evidence/AJ-E501/` — root+3-helpers fixture (0 missing, exit patch `signal:15`, reopen persistence), sqlite dump excerpt, log; gallery `_gallery/17-ledger/` banner captures both themes.
 
 ### AJ-E502 Process-group ownership at spawn (Unix PGID, Windows seam) | Status: TODO | Priority P0 | Effort M | Depends: AJ-E501
 

@@ -65,7 +65,17 @@ pub fn spawn_login_terminal_impl(
         .ok_or_else(|| AppError::UnknownHarness(account.harness.as_str().to_string()))?;
     let spec = adapter.login_spec(&account.state_dir)?;
     let id = SessionId::new(format!("login-{}", unique_suffix()));
-    state.supervisor.spawn(&id, &spec)?;
+    state.supervisor.spawn(
+        &id,
+        &spec,
+        &juggler_supervisor::tree::SpawnContext {
+            provider: account.harness.to_string(),
+            account_id: Some(account.id.to_string()),
+            project_id: None,
+            machine: crate::commands::local_machine_id(state),
+            role: juggler_core::storage::ROLE_LOGIN,
+        },
+    )?;
     attach_forwarder(app, state, &id);
     Ok(TerminalInfo {
         id: id.as_str().to_string(),

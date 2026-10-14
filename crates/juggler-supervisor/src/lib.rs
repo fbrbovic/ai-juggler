@@ -18,6 +18,7 @@ pub mod lifecycle;
 pub mod orphans;
 pub mod ring;
 pub mod supervisor;
+pub mod tree;
 
 pub use error::SupervisorError;
 pub use heuristics::{

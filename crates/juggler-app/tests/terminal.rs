@@ -24,6 +24,16 @@ use juggler_app::terminal;
 use juggler_core::model::SessionId;
 use juggler_supervisor::Supervisor;
 
+fn ctx() -> juggler_supervisor::tree::SpawnContext {
+    juggler_supervisor::tree::SpawnContext {
+        provider: "fake-harness".into(),
+        account_id: Some("acc-fake".into()),
+        project_id: Some("proj-fake".into()),
+        machine: juggler_core::model::MachineId::new("machine-test"),
+        role: "root",
+    }
+}
+
 #[test]
 fn terminal_cores_roundtrip_input_snapshot_and_stop() {
     let work = tempfile::tempdir().unwrap();
@@ -39,7 +49,7 @@ fn terminal_cores_roundtrip_input_snapshot_and_stop() {
         cwd: work.path().to_path_buf(),
         needs_pty: true,
     };
-    state.supervisor.spawn(&id, &spec).unwrap();
+    state.supervisor.spawn(&id, &spec, &ctx()).unwrap();
     let id_str = id.as_str().to_string();
 
     // Keyboard input flows (cat echoes it back).
@@ -118,7 +128,7 @@ fn login_terminal_spawn_uses_the_account_scoped_env() {
         "login terminal is scoped to the isolated dir"
     );
     let id = SessionId::new("s-login");
-    state.supervisor.spawn(&id, &spec).unwrap();
+    state.supervisor.spawn(&id, &spec, &ctx()).unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while std::time::Instant::now() < deadline && !state.supervisor.is_finished(&id) {
         std::thread::sleep(Duration::from_millis(50));

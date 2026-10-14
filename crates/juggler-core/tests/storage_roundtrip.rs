@@ -543,8 +543,8 @@ fn v4_database_upgrades_in_place_to_v5_with_identical_values() {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     assert_eq!(
-        version, 11,
-        "v4 → current (v11, AJ-E415 preview opt-in) exactly once, on open"
+        version, 12,
+        "v4 → current (v12, AJ-E501 process ledger) exactly once, on open"
     );
 
     let account = storage.accounts().get(&AccountId::new("acc-1")).unwrap();
@@ -571,7 +571,7 @@ fn v4_database_upgrades_in_place_to_v5_with_identical_values() {
         .raw_conn()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 11);
+    assert_eq!(version, 12);
     assert!(storage.sessions().get(&SessionId::new("sess-1")).is_ok());
 }
 
@@ -807,4 +807,139 @@ fn account_preview_opt_in_roundtrip_and_default_off() {
     account.preview_opt_in = false;
     storage.accounts().update(&account).unwrap();
     assert!(!storage.accounts().get(&account_id).unwrap().preview_opt_in);
+}
+
+/// AJ-E501 (schema v12): the process ledger lifecycle — Intent row
+/// BEFORE spawn (no PID), spawn patch (pid/pgid/start), batched helper
+/// upserts (no duplicates, peaks refreshed), exit patch, candidate
+/// query, and the 7-day prune that never touches running rows.
+#[test]
+fn process_ledger_lifecycle_roundtrip() {
+    use juggler_core::storage::{LedgerRow, ProcessLedgerRepo, STATE_EXITED, STATE_RUNNING};
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("ledger.sqlite");
+    let repo = ProcessLedgerRepo::open(&db).unwrap();
+
+    let root = LedgerRow {
+        pid: None,
+        pgid: None,
+        started_at: None,
+        exe_path: "/bin/sh".into(),
+        cmdline_hash: "hash-1".into(),
+        cmdline_trunc: "sh -c claude".into(),
+        boot_id: "boot-42".into(),
+        session_id: "sess-ledger".into(),
+        instance_id: None,
+        provider: "claude-code".into(),
+        account_id: Some("acc-1".into()),
+        project_id: Some("proj-1".into()),
+        machine_id: "machine-stable".into(),
+        root_pid: None,
+        parent_pid: None,
+        depth: 0,
+        role: juggler_core::storage::ROLE_ROOT.into(),
+        state: String::new(),
+        listens_on: None,
+        cwd: "/tmp/x".into(),
+        peak_rss: None,
+        peak_cpu: None,
+        exit_kind: None,
+        reaped_by_us: None,
+        first_seen: 1_000,
+        last_seen: 1_000,
+    };
+
+    // 1. Intent BEFORE spawn: state=starting, no pid.
+    repo.intent(&root).unwrap();
+    let rows = repo.rows_for_session("sess-ledger").unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].state, juggler_core::storage::STATE_STARTING);
+    assert_eq!(rows[0].pid, None, "intent rows carry no pid");
+
+    // 2. Spawn patch: pid + pgid + OS start time; state → running.
+    repo.spawned("sess-ledger", 4242, Some(4242), Some(123_456), 1_050)
+        .unwrap();
+    let rows = repo.rows_for_session("sess-ledger").unwrap();
+    assert_eq!(rows[0].pid, Some(4242));
+    assert_eq!(
+        rows[0].started_at,
+        Some(123_456),
+        "OS start time, not wall clock"
+    );
+    assert_eq!(rows[0].state, STATE_RUNNING);
+
+    // 3. Helper upserts batched; repeats refresh, never duplicate.
+    let helper = |pid: u32, rss: Option<i64>| LedgerRow {
+        pid: Some(pid),
+        pgid: Some(4242),
+        started_at: Some(123_456),
+        exe_path: "node".into(),
+        cmdline_hash: format!("hash-{pid}"),
+        cmdline_trunc: "node vite".into(),
+        boot_id: "boot-42".into(),
+        session_id: "sess-ledger".into(),
+        instance_id: None,
+        provider: "claude-code".into(),
+        account_id: Some("acc-1".into()),
+        project_id: Some("proj-1".into()),
+        machine_id: "machine-stable".into(),
+        root_pid: Some(4242),
+        parent_pid: Some(4242),
+        depth: 1,
+        role: String::new(),
+        state: String::new(),
+        listens_on: None,
+        cwd: "/tmp/x".into(),
+        peak_rss: rss,
+        peak_cpu: None,
+        exit_kind: None,
+        reaped_by_us: None,
+        first_seen: 2_000,
+        last_seen: 2_000,
+    };
+    repo.upsert_helpers(
+        "sess-ledger",
+        &[helper(5001, Some(1_000)), helper(5002, None)],
+    )
+    .unwrap();
+    repo.upsert_helpers("sess-ledger", &[helper(5001, Some(2_000))])
+        .unwrap();
+    let rows = repo.rows_for_session("sess-ledger").unwrap();
+    assert_eq!(rows.len(), 3, "root + two helpers, no duplicates");
+    let h1 = rows.iter().find(|r| r.pid == Some(5001)).unwrap();
+    assert_eq!(h1.role, juggler_core::storage::ROLE_HELPER);
+    assert_eq!(h1.peak_rss, Some(2_000), "peaks take the max");
+    assert_eq!(h1.depth, 1);
+
+    // 4. Exit patch (reaped root) + candidates exclude it.
+    repo.mark_exited(4242, "boot-42", "code:0", true, 3_000)
+        .unwrap();
+    let candidates = repo.candidates("machine-stable").unwrap();
+    assert!(candidates.iter().all(|r| r.pid != Some(4242)));
+    let exited = repo
+        .rows_for_session("sess-ledger")
+        .unwrap()
+        .into_iter()
+        .find(|r| r.pid == Some(4242))
+        .unwrap();
+    assert_eq!(exited.state, STATE_EXITED);
+    assert_eq!(exited.exit_kind.as_deref(), Some("code:0"));
+    assert_eq!(exited.reaped_by_us, Some(true));
+
+    // 5. Prune: exited-before-cutoff gone; running helpers untouched.
+    let removed = repo.prune(3_500).unwrap();
+    assert!(removed >= 1, "the exited root is older than the cutoff");
+    let rows = repo.rows_for_session("sess-ledger").unwrap();
+    assert!(rows.iter().all(|r| r.pid != Some(4242)));
+    assert!(
+        rows.iter()
+            .any(|r| r.pid == Some(5001) && r.state == STATE_RUNNING)
+    );
+
+    // 6. Persistence: reopen the same file — everything survives
+    // (root exit, app exit, reboot are all just "reopen later").
+    drop(repo);
+    let repo = ProcessLedgerRepo::open(&db).unwrap();
+    assert_eq!(repo.rows_for_session("sess-ledger").unwrap().len(), 2);
 }

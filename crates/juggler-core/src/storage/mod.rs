@@ -11,6 +11,7 @@ mod accounts;
 mod profiles;
 mod sessions;
 
+mod process_ledger;
 mod projects;
 mod settings;
 
@@ -19,6 +20,10 @@ use std::path::Path;
 use rusqlite::Connection;
 
 pub use accounts::AccountsRepo;
+pub use process_ledger::{
+    LedgerRow, ProcessLedgerRepo, ROLE_HELPER, ROLE_LOGIN, ROLE_ROOT, STATE_EXITED, STATE_RUNNING,
+    STATE_STARTING,
+};
 pub use profiles::ProfilesRepo;
 pub use projects::ProjectsRepo;
 pub use sessions::SessionsRepo;
@@ -127,7 +132,45 @@ CREATE TABLE app_settings (
 /// only by an explicit enable).
 const V11: &str = "ALTER TABLE accounts ADD COLUMN preview_opt_in INTEGER NOT NULL DEFAULT 0;";
 
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11];
+/// Schema version 12 (AJ-E501, pass2 §5): the persistent process
+/// ledger — one row per Intent (before spawn), patched with PID/PGID/
+/// OS start time at spawn, helpers upserted per reconciler tick. It
+/// survives root exit, app exit, and reboot; exited rows retain 7 days.
+const V12: &str = "
+CREATE TABLE process_ledger (
+    pid INTEGER,
+    pgid INTEGER,
+    started_at INTEGER,
+    exe_path TEXT NOT NULL,
+    cmdline_hash TEXT NOT NULL,
+    cmdline_trunc TEXT NOT NULL,
+    boot_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    instance_id INTEGER,
+    provider TEXT NOT NULL,
+    account_id TEXT,
+    project_id TEXT,
+    machine_id TEXT NOT NULL,
+    root_pid INTEGER,
+    parent_pid INTEGER,
+    depth INTEGER NOT NULL DEFAULT 0,
+    role TEXT NOT NULL,
+    state TEXT NOT NULL,
+    listens_on TEXT,
+    cwd TEXT NOT NULL,
+    peak_rss INTEGER,
+    peak_cpu REAL,
+    exit_kind TEXT,
+    reaped_by_us INTEGER,
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL
+);
+CREATE INDEX process_ledger_session_state ON process_ledger(session_id, state);
+CREATE INDEX process_ledger_pid_start ON process_ledger(pid, started_at, boot_id);
+CREATE INDEX process_ledger_state_last_seen ON process_ledger(state, last_seen);
+";
+
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12];
 
 /// An opened AI Juggler database with typed repositories.
 #[derive(Debug)]

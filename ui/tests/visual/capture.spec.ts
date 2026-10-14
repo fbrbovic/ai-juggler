@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -937,6 +937,45 @@ test("preview — exited instance renders no preview (status only)", async ({ pa
   await expect(page.getByTestId("desktop-preview")).toHaveCount(0);
   await page.screenshot({ path: resolve(GALLERY, "15-preview/panel-exited-1280x800.png") });
 });
+
+// AJ-E501: the ledger-degraded banner (the Cleanup Centre stub's only
+// surface) — copy exact, both themes, on the Overview screen.
+for (const theme of ["dark", "light"] as const) {
+  test(`ledger — degraded banner (${theme} 1440x900)`, async ({ page }) => {
+    await page.addInitScript(
+      ({ fixture, t0, themeName }) => {
+        const seeded = { ...fixture };
+        seeded.stats = {
+          accounts: 3,
+          profiles: 3,
+          active_sessions: 3,
+          ledger_degraded: true,
+        };
+        (window as never as { __AIJ_FIXTURE__: unknown }).__AIJ_FIXTURE__ = seeded;
+        localStorage.setItem("aij.theme", themeName);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+        Date.now = () => t0;
+      },
+      { fixture: allStatuses, t0: T0, themeName: theme },
+    );
+    await page.emulateMedia({
+      reducedMotion: "reduce",
+      colorScheme: theme === "light" ? "light" : "dark",
+    });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Overview" }).click();
+    const banner = page.getByTestId("ledger-degraded-banner");
+    await expect(banner).toBeVisible();
+    await expect(banner).toContainText(
+      "Process tracking degraded — cleanup is read-only until restart.",
+    );
+    await page.screenshot({
+      path: resolve(GALLERY, `17-ledger/degraded-banner-1440x900-${theme}.png`),
+    });
+  });
+}
 
 // Determinism self-test (Req.4): same fixture twice → byte-identical PNG.
 test("determinism — two captures are byte-identical", async ({ page }) => {  const capture = async (suffix: string) => {
