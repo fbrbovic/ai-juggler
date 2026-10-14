@@ -91,6 +91,7 @@ const project: ProjectInfo = {
 const account: AccountInfo = {
   id: "fake-desk", provider: "fake-desktop", label: "Fake Desk", plan: null, login_state: "logged_in", cleanup_opt_in: false,
   renewal_date: null,
+  preview_opt_in: false,
 };
 const recipe: LaunchRecipeInfo = {
   id: "p-3", name: "App", account_id: "fake-desk", account_label: "Fake Desk",

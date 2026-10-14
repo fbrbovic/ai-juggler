@@ -182,6 +182,10 @@ pub struct Account {
     /// Optional user-entered renewal date, local calendar `YYYY-MM-DD`
     /// (D-12: never inferred; `None` renders `Expiry: unknown`).
     pub renewal_date: Option<String>,
+    /// AJ-E415 per-Account live-preview switch (Req.3): `ScreenCaptureKit`
+    /// mirror of a desktop Instance's window. Off by default — enabling
+    /// it is the user's explicit Screen-Recording consent moment.
+    pub preview_opt_in: bool,
 }
 
 /// Settings applied on top of an account's defaults when launching a profile.

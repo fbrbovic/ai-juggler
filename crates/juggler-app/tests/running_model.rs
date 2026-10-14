@@ -32,6 +32,7 @@ fn seeded_state(dir: &Path, launch_model: Option<&str>) -> Arc<AppState> {
                 state_dir: dir.join("state"),
                 cleanup_opt_in: false,
                 renewal_date: None,
+                preview_opt_in: false,
             })
             .unwrap();
         storage

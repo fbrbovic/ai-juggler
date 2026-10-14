@@ -52,6 +52,7 @@ fn arb_account() -> impl Strategy<Value = Account> {
             state_dir: PathBuf::from(state_dir),
             cleanup_opt_in: false,
             renewal_date: None,
+            preview_opt_in: false,
         })
 }
 
@@ -184,6 +185,7 @@ fn seed_chain(storage: &Storage) -> (Account, Profile) {
         state_dir: PathBuf::from("/tmp/seed"),
         cleanup_opt_in: false,
         renewal_date: None,
+        preview_opt_in: false,
     };
     let profile = Profile {
         id: ProfileId::new("seed-profile"),
@@ -541,8 +543,8 @@ fn v4_database_upgrades_in_place_to_v5_with_identical_values() {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     assert_eq!(
-        version, 10,
-        "v4 → current (v10, AJ-E414 window identity + app settings) exactly once, on open"
+        version, 11,
+        "v4 → current (v11, AJ-E415 preview opt-in) exactly once, on open"
     );
 
     let account = storage.accounts().get(&AccountId::new("acc-1")).unwrap();
@@ -569,7 +571,7 @@ fn v4_database_upgrades_in_place_to_v5_with_identical_values() {
         .raw_conn()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 10);
+    assert_eq!(version, 11);
     assert!(storage.sessions().get(&SessionId::new("sess-1")).is_ok());
 }
 
@@ -610,6 +612,7 @@ fn account_renewal_date_roundtrip_and_default_none() {
             state_dir: PathBuf::from("/tmp/renewal"),
             cleanup_opt_in: false,
             renewal_date: None,
+            preview_opt_in: false,
         })
         .unwrap();
     // A row stored WITHOUT the field loads as None — never a guess (D-12).
@@ -787,4 +790,21 @@ fn app_settings_kv_roundtrip() {
     storage.app_settings().set("go_to_hotkey", "").unwrap();
     assert_eq!(storage.app_settings().get("go_to_hotkey").unwrap(), None);
     assert!(storage.app_settings().list().unwrap().is_empty());
+}
+
+/// AJ-E415 (schema v11): the per-Account preview opt-in round-trips and
+/// defaults to off (consent is never implicit).
+#[test]
+fn account_preview_opt_in_roundtrip_and_default_off() {
+    let storage = Storage::open_in_memory().unwrap();
+    seed_chain(&storage);
+    let account_id = AccountId::new("seed-account");
+    let mut account = storage.accounts().get(&account_id).unwrap();
+    assert!(!account.preview_opt_in, "default off — consent is explicit");
+    account.preview_opt_in = true;
+    storage.accounts().update(&account).unwrap();
+    assert!(storage.accounts().get(&account_id).unwrap().preview_opt_in);
+    account.preview_opt_in = false;
+    storage.accounts().update(&account).unwrap();
+    assert!(!storage.accounts().get(&account_id).unwrap().preview_opt_in);
 }

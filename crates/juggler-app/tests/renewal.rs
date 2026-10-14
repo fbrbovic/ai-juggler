@@ -28,6 +28,7 @@ fn state_with_account(dir: &Path) -> Arc<AppState> {
                 state_dir: dir.join("state"),
                 cleanup_opt_in: false,
                 renewal_date: None,
+                preview_opt_in: false,
             })
             .unwrap();
     }

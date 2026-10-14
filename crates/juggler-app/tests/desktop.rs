@@ -55,6 +55,7 @@ fn desktop_state(dir: &Path) -> Arc<AppState> {
                 state_dir: dir.join("state"),
                 cleanup_opt_in: false,
                 renewal_date: None,
+                preview_opt_in: false,
             })
             .unwrap();
         storage
@@ -239,6 +240,7 @@ fn providers_without_a_desktop_app_are_refused_by_name() {
                 state_dir: dir.path().join("claude-state"),
                 cleanup_opt_in: false,
                 renewal_date: None,
+                preview_opt_in: false,
             })
             .unwrap();
         storage

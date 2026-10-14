@@ -91,6 +91,9 @@ pub struct AccountInfo {
     /// Optional user-entered renewal date, local calendar `YYYY-MM-DD`
     /// (D-12); `null` renders `Expiry: unknown` — never inferred.
     pub renewal_date: Option<String>,
+    /// AJ-E415 per-Account live-preview switch (off by default; the
+    /// enable is the Screen-Recording consent moment).
+    pub preview_opt_in: bool,
 }
 
 /// A Launch settings row for the UI (AJ-E107).
@@ -541,6 +544,7 @@ pub fn create_account(
         state_dir,
         cleanup_opt_in: false,
         renewal_date: None,
+        preview_opt_in: false,
     };
     lock_storage_arc(state)?.accounts().insert(&account)?;
     Ok(account_info_of(&account))
@@ -656,6 +660,7 @@ pub fn account_import_impl(
         state_dir,
         cleanup_opt_in: false,
         renewal_date: None,
+        preview_opt_in: false,
     };
     {
         let storage = lock_storage_arc(state)?;
@@ -1086,6 +1091,35 @@ pub struct FocusOutcomeInfo {
     pub window_title: Option<String>,
 }
 
+/// The window identity for a desktop Instance: recorded at launch, or
+/// synthesized for pre-v10 rows (bundle id from the adapter spec; pid 0
+/// forces re-discovery). Shared by the focus tiers and the preview.
+fn desktop_window_identity(
+    state: &Arc<AppState>,
+    record: &juggler_core::model::InstanceRecord,
+) -> AppResult<juggler_core::model::WindowIdentity> {
+    if let Some(identity) = record.window.clone() {
+        return Ok(identity);
+    }
+    let bundle_id = {
+        let storage = lock_storage_arc(state)?;
+        let account = storage
+            .accounts()
+            .get(&storage.profiles().get(&record.profile)?.account)?;
+        state
+            .registry
+            .get(&account.harness)
+            .and_then(|adapter| adapter.desktop_launch(&account).ok())
+            .and_then(|launch| launch.bundle_id)
+    };
+    Ok(juggler_core::model::WindowIdentity {
+        pid: 0,
+        bundle_id,
+        title: None,
+        cgwindow_id: None,
+    })
+}
+
 /// Runs the AJ-E414 focus tiers for one desktop Instance: activate the
 /// app, match the recorded window identity, clear `AXMinimized`, then
 /// `AXRaise` (see `focus.rs` for the mechanism pin). The outcome says
@@ -1137,31 +1171,7 @@ pub fn desktop_focus_with(
             window_title: record.window.as_ref().and_then(|w| w.title.clone()),
         });
     }
-    // Window identity at launch, or synthesized for pre-v10 rows (the
-    // bundle id from the adapter spec; pid 0 forces re-discovery).
-    let identity = if let Some(identity) = record.window.clone() {
-        identity
-    } else {
-        {
-            let bundle_id = {
-                let storage = lock_storage_arc(state)?;
-                let account = storage
-                    .accounts()
-                    .get(&storage.profiles().get(&record.profile)?.account)?;
-                state
-                    .registry
-                    .get(&account.harness)
-                    .and_then(|adapter| adapter.desktop_launch(&account).ok())
-                    .and_then(|launch| launch.bundle_id)
-            };
-            juggler_core::model::WindowIdentity {
-                pid: 0,
-                bundle_id,
-                title: None,
-                cgwindow_id: None,
-            }
-        }
-    };
+    let identity = desktop_window_identity(state, &record)?;
     // The tier engine is platform-independent over the runner seam
     // (CI drives it everywhere); the platform gate lives in the
     // command wrapper above.
@@ -1181,6 +1191,251 @@ pub fn desktop_focus_with(
             .as_ref()
             .and_then(|identity| identity.title.clone()),
     })
+}
+
+/// Wire payload for one preview frame (AJ-E415): a base64 PNG of the
+/// Instance's window plus its capture time (frame age) and sequence.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct PreviewFrameInfo {
+    /// Owning Instance id.
+    pub session_id: String,
+    /// Base64-encoded PNG bytes of the captured window.
+    pub png_b64: String,
+    /// Capture time, epoch milliseconds (the panel labels frame age).
+    #[ts(type = "number")]
+    pub at_ms: i64,
+    /// Monotonic frame sequence.
+    #[ts(type = "number")]
+    pub seq: u64,
+}
+
+/// Wire payload for a preview phase change (AJ-E415): the phase name
+/// (`live|paused|denied|unsupported`) and the copy-exact panel text.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct PreviewStateInfo {
+    /// Owning Instance id.
+    pub session_id: String,
+    /// `live` | `paused` | `denied` | `unsupported`.
+    pub phase: String,
+    /// Copy-exact text the panel renders for the phase (empty for live).
+    pub text: String,
+}
+
+/// The one live preview session (Req.5: one at a time — the selected
+/// Instance). Stop is a flag + a done channel (bounded join).
+pub struct PreviewSession {
+    /// The Instance whose window is mirrored.
+    pub session_id: String,
+    /// Stop flag (the loop polls it every tick).
+    pub stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Completes when the loop thread ended.
+    pub done: std::sync::mpsc::Receiver<()>,
+}
+
+/// Translates one driver event into the wire events (`preview://frame`
+/// / `preview://state`) with the copy-exact phase texts.
+fn emit_preview_event(app: &tauri::AppHandle, event: crate::preview::PreviewEvent) {
+    use tauri::Emitter;
+    match event {
+        crate::preview::PreviewEvent::Frame {
+            session_id,
+            png_b64,
+            at_ms,
+            seq,
+        } => {
+            let _ = app.emit(
+                crate::EVENT_PREVIEW_FRAME,
+                PreviewFrameInfo {
+                    session_id,
+                    png_b64,
+                    at_ms,
+                    seq,
+                },
+            );
+        }
+        crate::preview::PreviewEvent::Phase { session_id, phase } => {
+            let text = match phase {
+                crate::preview::PreviewPhase::Live => String::new(),
+                crate::preview::PreviewPhase::Paused => {
+                    crate::preview::PAUSED_NOT_VISIBLE.to_string()
+                }
+                crate::preview::PreviewPhase::Denied => {
+                    "Screen Recording permission needed — grant it in System Settings, then re-enable preview"
+                        .to_string()
+                }
+                crate::preview::PreviewPhase::Unsupported => {
+                    "Live preview is parked in this build — the capture runtime needs a platform decision (AJ-E415)".to_string()
+                }
+            };
+            let _ = app.emit(
+                crate::EVENT_PREVIEW_STATE,
+                PreviewStateInfo {
+                    session_id,
+                    phase: phase.as_str().to_string(),
+                    text,
+                },
+            );
+        }
+    }
+}
+
+/// Stops any running preview and waits ≤900 ms for the thread (the
+/// poll cadence bounds the wait; a late exit leaks nothing — one
+/// capture per poll, nothing persistent).
+fn stop_preview_session(state: &Arc<AppState>) {
+    let session = state
+        .preview
+        .lock()
+        .map_err(|_| AppError::StatePoisoned)
+        .ok()
+        .and_then(|mut slot| slot.take());
+    if let Some(session) = session {
+        session
+            .stop
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        if session
+            .done
+            .recv_timeout(Duration::from_millis(900))
+            .is_err()
+        {
+            eprintln!(
+                "ai-juggler: preview thread for {} outlived the stop budget",
+                session.session_id
+            );
+        }
+    }
+}
+
+/// Starts the read-only live preview for one desktop Instance
+/// (AJ-E415): strictly one at a time (the previous stream stops
+/// first); requires the Account's explicit preview opt-in; frames and
+/// phase changes arrive as `preview://frame` / `preview://state`
+/// events. Read-only by construction — pixels flow app → panel only.
+#[tauri::command]
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message for a non-desktop Instance,
+/// a missing opt-in, or an unknown id.
+pub fn preview_start(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    session_id: String,
+) -> AppResult<()> {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::mpsc;
+
+    let (record, identity) = {
+        let storage = lock_storage(&state)?;
+        let record = storage
+            .sessions()
+            .get(&SessionId::new(session_id.clone()))?;
+        if record.kind != juggler_core::model::InstanceKind::Desktop {
+            return Err(AppError::Validation {
+                subject: "live preview",
+                message: "preview mirrors desktop instance windows".into(),
+            });
+        }
+        if is_terminal(record.status) {
+            return Ok(()); // nothing to mirror; the panel renders status only
+        }
+        let identity = desktop_window_identity(state.inner(), &record)?;
+        (record, identity)
+    };
+    // The Account's explicit consent gate (Req.3) — default off.
+    {
+        let storage = lock_storage(&state)?;
+        let recipe = storage.profiles().get(&record.profile)?;
+        let account = storage.accounts().get(&recipe.account)?;
+        if !account.preview_opt_in {
+            return Err(AppError::Validation {
+                subject: "live preview",
+                message: format!(
+                    "preview is off for {} — enable it in Account Actions",
+                    account.label
+                ),
+            });
+        }
+    }
+    stop_preview_session(state.inner());
+
+    let (done_tx, done_rx) = mpsc::channel();
+    let stop = std::sync::Arc::new(AtomicBool::new(false));
+    let stop_flag = stop.clone();
+    let session = session_id.clone();
+    let live_id = SessionId::new(session_id.clone());
+    let state_for_thread = Arc::clone(state.inner());
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let emit = move |event: crate::preview::PreviewEvent| {
+            emit_preview_event(&app, event);
+        };
+        // AJ-E415 binding note: the real `ScreenshotSource` is parked —
+        // the binding needs an `unsafe` CoreGraphics init the workspace
+        // law forbids (see preview.rs and the crash evidence). The
+        // honest parked phase renders instead; no fake frames.
+        let source: std::sync::Arc<dyn crate::preview::CaptureSource> =
+            std::sync::Arc::new(crate::preview::ParkedSource);
+        let driver = crate::preview::PreviewDriver {
+            session_id: session.as_str(),
+            identity,
+            source: source.as_ref(),
+            is_live: &|| state_for_thread.supervisor.is_supervised(&live_id),
+            emit: &emit,
+            stopped: stop_flag.as_ref(),
+        };
+        driver.run();
+        let _ = done_tx.send(());
+    });
+    state
+        .preview
+        .lock()
+        .map_err(|_| AppError::StatePoisoned)?
+        .replace(PreviewSession {
+            session_id,
+            stop,
+            done: done_rx,
+        });
+    Ok(())
+}
+
+/// Stops the live preview (panel close / selection switch). Bounded
+/// teardown: the stop flag ends the loop within one poll interval.
+#[tauri::command]
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on state poisoning.
+pub fn preview_stop(state: tauri::State<'_, Arc<AppState>>) -> AppResult<()> {
+    stop_preview_session(state.inner());
+    Ok(())
+}
+
+/// Sets the per-Account live-preview opt-in (Req.3's permanent off
+/// switch; enabling is the Screen-Recording consent moment — the first
+/// start triggers the system prompt at that point, never before).
+#[tauri::command]
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message when the Account is unknown.
+pub fn account_set_preview_opt_in(
+    state: tauri::State<'_, Arc<AppState>>,
+    account_id: String,
+    opt_in: bool,
+) -> AppResult<AccountInfo> {
+    let account = {
+        let storage = lock_storage(&state)?;
+        let mut account = storage
+            .accounts()
+            .get(&AccountId::new(account_id.clone()))?;
+        account.preview_opt_in = opt_in;
+        storage.accounts().update(&account)?;
+        account
+    };
+    Ok(account_info_of(&account))
 }
 
 /// Reads one app-level setting (schema v10 kv); `None` = never set.
@@ -1844,6 +2099,7 @@ fn account_info_of(account: &Account) -> AccountInfo {
         plan: account.plan.as_ref().map(ToString::to_string),
         cleanup_opt_in: account.cleanup_opt_in,
         renewal_date: account.renewal_date.clone(),
+        preview_opt_in: account.preview_opt_in,
     }
 }
 
@@ -3315,6 +3571,7 @@ mod tests {
                 state_dir: std::env::temp_dir().join("aij-e401-account-state"),
                 cleanup_opt_in: false,
                 renewal_date: None,
+                preview_opt_in: false,
             })
             .expect("seed account");
         for (id, model) in [("rec-1", Some("opus")), ("rec-2", None)] {
@@ -3557,6 +3814,7 @@ mod tests {
                 state_dir: std::env::temp_dir().join("aij-e401-bench"),
                 cleanup_opt_in: false,
                 renewal_date: None,
+                preview_opt_in: false,
             })
             .expect("seed account");
         storage

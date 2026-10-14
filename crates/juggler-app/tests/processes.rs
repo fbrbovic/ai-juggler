@@ -57,6 +57,7 @@ fn seeded_state(dir: &Path, cleanup_opt_in: bool) -> Arc<AppState> {
                 state_dir: dir.join("account-state"),
                 cleanup_opt_in,
                 renewal_date: None,
+                preview_opt_in: false,
             })
             .unwrap();
         storage

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button, Card, Chip, type ChipTone } from "./primitives";
 import { TerminalView } from "./TerminalView";
+import { DesktopPreview } from "./DesktopPreview";
 import {
   IconFleet,
   IconJuggler,
@@ -342,6 +343,7 @@ export function RightInspector({
                 window.dispatchEvent(new Event("aij:focus-handover"));
               }}
               focusBridge={focusBridge}
+              visible={tab === entry.id}
             />
             {/* Footer: updated-ago + the field's REAL source (Req.5). */}
             <footer className="mt-auto flex items-center gap-1.5 border-t border-hairline/60 pt-2 text-[10px] text-faint">
@@ -376,6 +378,7 @@ function InspectorPanel(props: {
   onHandover: (sessionId: string, targetProfileId: string) => void;
   onFocusTerminal: () => void;
   focusBridge: FocusBridge;
+  visible: boolean;
 }) {
   const { tab, kind } = props;
 
@@ -488,6 +491,9 @@ const defaultProcessesBridge: ProcessesBridge = {
 
 type PanelProps = {
   kind: InspectorKind;
+  /** True while this panel's tab is the shown one (previews pause
+   *  otherwise — AJ-E415 Req.1 "not visible"). */
+  visible: boolean;
   data: InspectorData;
   /** AJ-E410 seam: the Processes-tab data/actions source (tests inject). */
   processesBridge: ProcessesBridge;
@@ -674,6 +680,20 @@ function InstanceOverview(props: PanelProps) {
                 Open / Focus window
               </Button>
             </div>
+            {isDesktop && live && (
+              <DesktopPreview
+                sessionId={session.id}
+                enabled={
+                  props.accounts.find((a) => a.id === session.account_id)
+                    ?.preview_opt_in === true
+                }
+                onFocus={() => {
+                  void props.focusBridge(session.id);
+                }}
+                now={props.now}
+                visible={props.visible}
+              />
+            )}
             <div
               className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] tabular-nums text-muted"
               data-testid="desktop-resources"
@@ -1559,6 +1579,21 @@ function AccountOverview(props: PanelProps) {
             Only PIDs the journal recorded as descendants are touched, and every kill is
             audit-logged (D-08).
           </span>
+          <label data-testid="account-preview-toggle" className="flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={account.preview_opt_in}
+              onChange={(event) => {
+                const optIn = event.target.checked;
+                void import("../lib/bridge").then((bridge) =>
+                  bridge.accountSetPreviewOptIn(account.id, optIn).catch(() => {
+                    /* re-reads from props on the next list refresh */
+                  }),
+                );
+              }}
+            />
+            <span className="text-muted">Live preview of desktop instances (opt-in)</span>
+          </label>
           <span data-testid="account-reset" className="text-muted">
             reset:{" "}
             {worst?.quota?.resets_at_ms ? (

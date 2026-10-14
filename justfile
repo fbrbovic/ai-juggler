@@ -3,8 +3,14 @@
 
 default: verify
 
+# CLT-only macOS machines need the Swift-bridge link shim (no-op
+# elsewhere; see scripts/ensure_swift_runtime.sh).
+swift-flags := if os() == "macos" { `./scripts/ensure_swift_runtime.sh | tail -1 | sed 's/^RUSTFLAGS=//'` } else { "" }
+export RUSTFLAGS := swift-flags
+
 # Full local gate — everything CI enforces.
 verify:
+    ./scripts/ensure_swift_runtime.sh > /dev/null
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace

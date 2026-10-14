@@ -37,6 +37,7 @@ function account(overrides: Partial<AccountInfo> = {}): AccountInfo {
     plan: null,
     login_state: "logged_in",
     cleanup_opt_in: false,
+    preview_opt_in: false,
     renewal_date: null,
     ...overrides,
   };
