@@ -34,5 +34,29 @@ pub use orphans::{
 };
 pub use ring::OutputRing;
 pub use supervisor::{
-    LiveProcessStats, LiveStatsCollector, ProcessRow, SpawnedProcess, Supervisor, TreeSample,
+    LiveProcessStats, LiveStatsCollector, ProcessFacts, ProcessRow, ProcessTable, SpawnedProcess,
+    Supervisor, TreeSample,
 };
+
+/// Counts every `sysinfo::System` construction in this crate
+/// (AJ-E504's regression gate: the reconciler tick must construct at
+/// most ONE — zero in the steady state, since the collector reuses
+/// its own table and queries read the published snapshot).
+static SYSTEM_CONSTRUCTIONS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Constructs a `sysinfo::System`, bumping the construction counter
+/// (the per-tick regression gate reads it — see
+/// [`system_construction_count`]).
+pub(crate) fn new_system() -> sysinfo::System {
+    SYSTEM_CONSTRUCTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    sysinfo::System::new()
+}
+
+/// How many `sysinfo::System` objects this crate has constructed —
+/// the AJ-E504 quality gate: a reconciler tick (plus its queries)
+/// must add at most one; steady state adds zero.
+#[must_use]
+pub fn system_construction_count() -> usize {
+    SYSTEM_CONSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed)
+}

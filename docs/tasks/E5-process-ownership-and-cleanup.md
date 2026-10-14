@@ -113,7 +113,7 @@
 - Supervisor wiring: `os_probed` (one targeted refresh, retry on table lag) builds spawn identities at all three paths; `SpawnedProcess`/`ChildHandle`/`ChildExtras` carry it; the ledger's `started_at` now comes from the same probe (one probe, not two — `os_start_time` deleted).
 - Evidence: `docs/qa/evidence/AJ-E503/` — the PID-reuse drill (forged single-field strangers, 0-signal trap-log witness, dead-pid arm, control arm), 6 unit tests per quality gate, adoption-restart test, storage roundtrip, sqlite dump of the flipped row.
 
-### AJ-E504 Reconciler loop, orphan detection, and children-map eviction | Status: TODO | Priority P0 | Effort L | Depends: AJ-E501, AJ-E502, AJ-E503
+### AJ-E504 Reconciler loop, orphan detection, and children-map eviction | Status: DONE-EVIDENCED (evidence: docs/qa/evidence/AJ-E504/manifest.md) | Priority P0 | Effort L | Depends: AJ-E501, AJ-E502, AJ-E503
 
 **Goal**:
 One shared 2-second reconciler replaces per-call `System::new()` scans, maintains the ledger for live and exited Instances, and marks true orphans (T2) only after grace and two-tick confirmation.
@@ -166,6 +166,14 @@ Record a 10 s screen capture of Cleanup Centre during a `cargo build` fork storm
 Trap: `sysinfo` CPU% needs two samples — first tick after spawn shows
 0% by design, do not "fix" by refreshing faster. Trap: do not lower
 `orphan_grace` to make demos snappier; the grace is the false-alert budget. Next agent: AJ-E505 ports join this same tick, not a new loop.
+
+*Implementation mapping (recorded in this task's PR per the claiming protocol)*:
+- ONE shared table (Req.1): `LiveStatsCollector::tick` builds ONE `ProcessTable` (ppid map + per-pid identity facts `start_time`/`exe`) from its persistent `sysinfo::System` and publishes it to `Supervisor`; `descendants()` walks the cached snapshot (counted cold fallback only before the first tick); every `System::new()` in the crate routes through `system_construction_count()` — the regression gate (soak observed 0/tick, gate ≤1).
+- Reconcile pass (Req.2): after the batched helper upsert (now recording the REAL kernel start time + exe — never wall-clock/name; legacy name-exe rows healed once inside the upsert transaction), `candidates(machine)` for `running|orphaned` rows are re-verified against the tick's OWN table: boot gate first (FMEA C8), start-time all rows, exe KERNEL-vs-kernel for helpers, roots against the ChildHandle's kernel-recorded identity (the launch program may be kernel-aliased, e.g. macOS /bin/sh → bash); mismatch → `mark_unverifiable` (permanent, E503). Helper exits patch by TWO-tick absence (`unknown`). Ports join in E505 on this same tick.
+- Orphans (Req.3): running helpers of an EXITED root, past `orphan_grace` (`DEFAULT_ORPHAN_GRACE_SECS = 30`, per-Provider via `set_orphan_grace`; `app_settings.orphan_grace_secs` pushed at init), whose ppid chain (`detached_from`, 64-hop guard) no longer reaches a live owned root → `mark_orphaned` only after TWO consecutive agreeing ticks (flap counters reset on disagreement); `HelperOrphaned { session, pid }` event emitted; in-grace exits journal as `exited` and never surface (asserted).
+- Eviction (Req.4): `emit_exit` stamps `exit_at_ms`; each tick `sweep_finished` drops finished handles past `OUTPUT_RETENTION_AFTER_EXIT_MS` (120 s) — soak asserts 25/25 stopped evicted, 25/25 live untouched; ledger rows keep the history.
+- Ledger vocabulary: `STATE_ORPHANED` — orphaned rows STAY candidates (re-verified per tick) and resolve to `exited` on death; `candidates` selects `running|orphaned`; `mark_exited` accepts both.
+- Evidence: `docs/qa/evidence/AJ-E504/` — grace drill + early-exit drill + 50-instance soak (avg 12 ms/tick, max 25 ms, self CPU 0.34%, 0 constructions) + the orphaned-row sqlite dump with full attribution.
 
 ### AJ-E505 Port occupancy map and leftover inventory data | Status: TODO | Priority P0 | Effort M | Depends: AJ-E504
 

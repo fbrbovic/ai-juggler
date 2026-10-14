@@ -1687,7 +1687,9 @@ pub fn apply_lifecycle_event(
     quota_blocked: Option<&juggler_core::model::AttentionReason>,
 ) -> Option<SessionRecord> {
     let session_id = match &event {
-        LifecycleEvent::Started { session, .. } | LifecycleEvent::Exited { session, .. } => session,
+        LifecycleEvent::Started { session, .. }
+        | LifecycleEvent::Exited { session, .. }
+        | LifecycleEvent::HelperOrphaned { session, .. } => session,
     };
     let mut record = storage.sessions().get(session_id).ok()?;
     match event {
@@ -1695,6 +1697,10 @@ pub fn apply_lifecycle_event(
             record.status = SessionStatus::Running;
             record.attention = None;
         }
+        // AJ-E504: helper-level delta — the SESSION record does not
+        // change (the root still owns the row state); the Cleanup
+        // Centre (AJ-E506) consumes these via the ledger.
+        LifecycleEvent::HelperOrphaned { .. } => return None,
         LifecycleEvent::Exited { kind, .. } => {
             record.status = if stopped_by_user {
                 // The stop ladder (PTY exits surface kills as plain

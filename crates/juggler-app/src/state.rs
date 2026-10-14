@@ -86,6 +86,19 @@ impl AppState {
         let _ = ledger.prune(cutoff);
         let supervisor =
             Supervisor::with_journal(&data_dir.join("supervision"))?.with_ledger(ledger.clone());
+        // Orphan grace (AJ-E504 Req.3): the user-tunable default, from
+        // settings; per-Provider overrides land with the Cleanup
+        // Centre's settings surface (AJ-E506). 30 s when unset — the
+        // false-alert budget, never lowered for demos.
+        if let Some(secs) = storage
+            .app_settings()
+            .get("orphan_grace_secs")
+            .ok()
+            .flatten()
+            .and_then(|value| value.parse::<u64>().ok())
+        {
+            supervisor.set_orphan_grace("", secs);
+        }
         // Crash/restart reconciliation: sessions recorded running whose
         // processes did not survive the restart are marked stopped —
         // never a permanently fake "live" dot (survivors stay running).

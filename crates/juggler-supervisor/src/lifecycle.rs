@@ -38,6 +38,15 @@ pub enum LifecycleEvent {
         /// How it ended.
         kind: ExitKind,
     },
+    /// A helper row was confirmed `Orphaned` by the reconciler
+    /// (AJ-E504): its Instance's root exited, the grace window
+    /// passed, and two consecutive ticks agreed it was left behind.
+    HelperOrphaned {
+        /// The Instance the helper was left behind by.
+        session: SessionId,
+        /// The orphaned helper's process id.
+        pid: u32,
+    },
 }
 
 impl LifecycleEvent {
@@ -45,9 +54,9 @@ impl LifecycleEvent {
     #[must_use]
     pub fn session(&self) -> &SessionId {
         match self {
-            LifecycleEvent::Started { session, .. } | LifecycleEvent::Exited { session, .. } => {
-                session
-            }
+            LifecycleEvent::Started { session, .. }
+            | LifecycleEvent::Exited { session, .. }
+            | LifecycleEvent::HelperOrphaned { session, .. } => session,
         }
     }
 }

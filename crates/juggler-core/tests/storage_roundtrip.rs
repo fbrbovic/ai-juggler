@@ -987,6 +987,35 @@ fn process_ledger_lifecycle_roundtrip() {
         .any(|r| r.pid == Some(5001));
     assert!(flipped_still, "the prune never removes an unverifiable row");
 
+    // 5c. AJ-E504: orphaned rows STAY candidates (re-verified each
+    // tick) and resolve to `exited` when they later die.
+    repo.mark_orphaned(5002, "boot-42", 3_700).unwrap();
+    let orphaned = repo
+        .rows_for_session("sess-ledger")
+        .unwrap()
+        .into_iter()
+        .find(|r| r.pid == Some(5002))
+        .unwrap();
+    assert_eq!(orphaned.state, juggler_core::storage::STATE_ORPHANED);
+    let candidates = repo.candidates("machine-stable").unwrap();
+    assert!(
+        candidates.iter().any(|r| r.pid == Some(5002)),
+        "orphaned rows remain candidates (Running|Orphaned)"
+    );
+    assert!(
+        candidates.iter().all(|r| r.pid != Some(5001)),
+        "unverifiable rows still never return"
+    );
+    repo.mark_exited(5002, "boot-42", "unknown", false, 3_800)
+        .unwrap();
+    let resolved = repo
+        .rows_for_session("sess-ledger")
+        .unwrap()
+        .into_iter()
+        .find(|r| r.pid == Some(5002))
+        .unwrap();
+    assert_eq!(resolved.state, STATE_EXITED, "a dead orphan resolves");
+
     // 6. Persistence: reopen the same file — everything survives
     // (root exit, app exit, reboot are all just "reopen later").
     drop(repo);

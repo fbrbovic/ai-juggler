@@ -297,7 +297,8 @@ fn spawn_lifecycle_forwarder(state: Arc<state::AppState>) {
                         None
                     }
                 }
-                juggler_supervisor::LifecycleEvent::Started { .. } => None,
+                juggler_supervisor::LifecycleEvent::Started { .. }
+                | juggler_supervisor::LifecycleEvent::HelperOrphaned { .. } => None,
             };
             if let juggler_supervisor::LifecycleEvent::Exited { kind, session, pid } = &event {
                 // AJ-E410: freeze the pre-exit descendant rows into the
