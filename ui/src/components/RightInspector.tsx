@@ -424,7 +424,10 @@ type PanelProps = {
 function InstanceOverview(props: PanelProps) {
   const handoverRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    const scroll = () => handoverRef.current?.scrollIntoView({ block: "center" });
+    const scroll = () => {
+      // jsdom has no scrollIntoView; the guard keeps tests honest.
+      handoverRef.current?.scrollIntoView?.({ block: "center" });
+    };
     window.addEventListener("aij:focus-handover", scroll);
     return () => window.removeEventListener("aij:focus-handover", scroll);
   }, []);
