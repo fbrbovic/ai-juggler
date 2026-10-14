@@ -185,7 +185,7 @@
 **Research basis**: pass2/04 §5.1 (lines 288-302), §5.2 (304-320), §7.2 wireframe (465-480); SPEC.md:185,288-302,347,349; deep 02 §§7,10,11.3.
 **Handover note**: Lineage data depends on the Switch Graph (E2 epic); until it lands, render lineage only when edges exist and omit the section (per §5.1 empty rule) — do not fabricate A->B links from Profile history.
 
-### AJ-E408 Inspector content for Provider, Account, and Project selections | Status: TODO | Priority P0 | Effort L | Depends: AJ-E406,AJ-E401
+### AJ-E408 Inspector content for Provider, Account, and Project selections | Status: DONE-EVIDENCED (zcode-primary, 2026-10-13) | Priority P0 | Effort L | Depends: AJ-E406,AJ-E401
 **Goal**: Fill all six tabs for Provider, Account, and Project selections per pass2/04 §5.3-5.5, so no selection type is a second-class citizen (D-06).
 **User story**: As a developer choosing where to launch next, I want an Account's burn-down and a Project's "who is on it now" in the same inspector, so that the launch decision takes seconds.
 **Requirements**:
@@ -202,6 +202,10 @@
 **Evidence/validation proof**: UI tests `inspector-provider/account/project.test` with 2-Provider/3-Account/2-Project fixtures asserting reqs 1, 3, 5 field-by-field; pass = all assertions green; live dogfood: log out one fixture account, confirm sign-in-card collapse; evidence (test log + screenshots) linked in PR.
 **Visual testing**: Screenshots 1440x900 + 1280x800: Provider Overview (drift warning state), Account Overview (rings with % text + forecast), Account logged-out collapse, Project Overview ("On it now" card), Project missing-dir banner; Playwright diff tolerance 1%; a11y axe 0 critical + ring `role="img"` labels read quota text. Pass = reviewer verifies every number traces to a fixture row.
 **Files to touch**: `ui/src/screens/WorkPanels.tsx`, `ui/src/components/primitives.tsx:165`, `ui/src/App.tsx:513`, `ui/src/lib/bridge.ts:142,149,257,296`, `crates/juggler-app/src/commands.rs:236,249,554,1203`, `crates/juggler-core/src/model.rs:120,371`.
+*Implementation mapping (corrected in this task's PR per the claiming protocol)*:
+- Content extends the E406 shell (`RightInspector.tsx`); backend adds `ProjectInfo.missing` (root stat — the danger-banner source); `QuotaRing` gains `%`-left text + `role="img"` (WCAG 1.4.1 gate; ring `percent` semantics = fill/used).
+- Binary version / verified-range / capability flags / burn-down forecast / window timeline / adapter history render honest `No data` badges naming their wiring tasks — no fabricated vendor data. Provider "Check for update" disabled with the never-auto-update reason (SPEC §5.4 guardrail). D-10 honoured: `New launch settings…`.
+- Aggregate = per-account rows worst-first (each traceable); the cross-account `mixed` label appears exactly when confidence tiers differ. Project launch ranking = quota headroom with the `Usual` star (from accounts_used).
 **Research basis**: pass2/04 §5.3 (322-341), §5.4 (343-364), §5.5 (366-381); SPEC.md:146,158,257,349,358,409; deep 02 PF-03/PF-08/PP-02/PP-05/PP-07.
 **Handover note**: Trap: D-10 — "New profile" in Account Actions is legacy wording; label it `New launch settings...`. Provider "Check for update" must never auto-update the binary (SPEC.md:358 guardrail test).
 

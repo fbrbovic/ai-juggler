@@ -314,6 +314,9 @@ pub struct ProjectInfo {
     /// Sessions discovered in imported transcripts (pre-AI-Juggler work).
     #[ts(type = "number")]
     pub history_sessions: u64,
+    /// True when the root directory no longer exists on disk (AJ-E408
+    /// Overview danger banner + `Relocate…`).
+    pub missing: bool,
 }
 
 /// Dashboard counts.
@@ -1768,6 +1771,7 @@ pub fn projects_list_impl(state: &Arc<AppState>) -> AppResult<Vec<ProjectInfo>> 
                 accounts_used,
                 instance_count: u64::try_from(owned.len()).unwrap_or_default(),
                 history_sessions: project.history.native_sessions,
+                missing: !project.root.exists(),
             }
         })
         .collect())

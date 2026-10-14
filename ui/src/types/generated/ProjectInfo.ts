@@ -37,4 +37,9 @@ instance_count: number,
 /**
  * Sessions discovered in imported transcripts (pre-AI-Juggler work).
  */
-history_sessions: number, };
+history_sessions: number, 
+/**
+ * True when the root directory no longer exists on disk (AJ-E408
+ * Overview danger banner + `Relocate…`).
+ */
+missing: boolean, };

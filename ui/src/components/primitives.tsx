@@ -175,6 +175,7 @@ export function QuotaRing({
 }) {
   const hasData = percent !== null;
   const clamped = hasData ? Math.max(0, Math.min(100, percent)) : 0;
+  const left = 100 - clamped;
   const stroke = 5;
   const radius = (size - stroke) / 2;
   const circumference = 2 * Math.PI * radius;
@@ -188,6 +189,12 @@ export function QuotaRing({
     <div className="flex flex-col items-center gap-1.5">
       <div
         className="rounded-full"
+        role="img"
+        aria-label={
+          hasData
+            ? `${Math.round(left)}% quota left`
+            : "Quota: no data"
+        }
         style={{ boxShadow: `0 0 20px -8px ${hasData && clamped > 0 ? color : "transparent"}` }}
       >
         <svg width={size} height={size} className="-rotate-90">
@@ -219,6 +226,11 @@ export function QuotaRing({
         </svg>
       </div>
       {label && <span className="text-[11px] text-muted">{label}</span>}
+      {/* The % text rides the ring (WCAG 1.4.1): colour is never the
+          only channel — `No data` for the dashed honest state. */}
+      <span className="text-[10px] tabular-nums text-muted">
+        {hasData ? `${Math.round(left)}% left` : "No data"}
+      </span>
     </div>
   );
 }

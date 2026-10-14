@@ -61,6 +61,7 @@ const project: ProjectInfo = {
   accounts_used: [],
   instance_count: 1,
   history_sessions: 0,
+  missing: false,
 };
 
 const account: AccountInfo = {

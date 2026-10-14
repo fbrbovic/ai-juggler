@@ -192,6 +192,7 @@ const MOCK_PROJECTS: ProjectInfo[] = seeded.projects ?? [
     accounts_used: ["Work Max"],
     instance_count: 1,
     history_sessions: 0,
+    missing: false,
   },
   {
     id: "proj-payments",
@@ -201,7 +202,7 @@ const MOCK_PROJECTS: ProjectInfo[] = seeded.projects ?? [
     active_instance: null,
     accounts_used: ["Personal", "Work Max"],
     instance_count: 2,
-    history_sessions: 14,
+    history_sessions: 14, missing: false,
   },
 ];
 
