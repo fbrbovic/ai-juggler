@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "16-onboarding-detect"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "16-onboarding-detect"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -515,6 +515,83 @@ test("inspector — Processes tab good empty state", async ({ page }) => {
   await page.getByRole("tab", { name: "Processes" }).click();
   await expect(page.getByTestId("processes-empty")).toBeVisible();
   await page.screenshot({ path: resolve(GALLERY, "10-processes/empty-1440x900.png") });
+});
+
+// AJ-E411 renewal captures: every threshold state on the Account
+// Overview, `Expiry: unknown`, the editor + helper text, and the row
+// chip on the Accounts screen. Dates are pinned relative to T0 so the
+// tiers are deterministic.
+function renewalDate(daysFromT0: number): string {
+  const target = new Date(T0 + daysFromT0 * 86_400_000);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${target.getFullYear()}-${pad(target.getMonth() + 1)}-${pad(target.getDate())}`;
+}
+
+async function seedRenewalPage(
+  page: import("@playwright/test").Page,
+  vp: { width: number; height: number },
+  days: number | null,
+) {
+  await page.addInitScript(
+    ({ fixture, t0, days: d }) => {
+      const accounts = (fixture.accounts ?? []).map((entry: { id: string }, index: number) => ({
+        ...entry,
+        renewal_date: index === 0 ? (d === null ? null : new Date(t0 + d * 86_400_000).toISOString().slice(0, 10)) : null,
+      }));
+      (window as never as { __AIJ_FIXTURE__: unknown }).__AIJ_FIXTURE__ = { ...fixture, accounts };
+      localStorage.setItem("aij.theme", "dark");
+      localStorage.setItem("aij.onboarding.dismissed", "1");
+      sessionStorage.setItem("aij.ready.skipped", "1");
+      Date.now = () => t0;
+    },
+    { fixture: allStatuses, t0: T0, days },
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: vp.width, height: vp.height });
+  await page.goto("/");
+}
+
+async function openAccountOverview(page: import("@playwright/test").Page) {
+  await page.getByRole("button", { name: "Accounts" }).click();
+  await page.getByRole("button", { name: "Inspect claude-code" }).first().click();
+  await expect(page.getByTestId("account-overview")).toBeVisible();
+}
+
+for (const [name, days] of [
+  ["date-only", 20],
+  ["countdown", 10],
+  ["warning", 6],
+  ["danger", 0],
+  ["unknown", null],
+] as const) {
+  test(`renewal — Account Overview ${name} state`, async ({ page }) => {
+    await seedRenewalPage(page, { width: 1440, height: 900 }, days);
+    await openAccountOverview(page);
+    await expect(page.getByTestId("account-renewal")).toBeVisible();
+    await page.screenshot({ path: resolve(GALLERY, `11-renewal/account-${name}-1440x900.png`) });
+  });
+}
+
+test("renewal — editor with helper text (1440x900 + 1280x800)", async ({ page }) => {
+  await seedRenewalPage(page, { width: 1440, height: 900 }, 6);
+  await openAccountOverview(page);
+  await expect(page.getByTestId("renewal-editor")).toBeVisible();
+  await expect(page.getByText("Entered by you - Juggler does not read billing")).toBeVisible();
+  await page.screenshot({ path: resolve(GALLERY, "11-renewal/editor-1440x900.png") });
+});
+
+test("renewal — editor at 1280x800", async ({ page }) => {
+  await seedRenewalPage(page, { width: 1280, height: 800 }, 6);
+  await openAccountOverview(page);
+  await expect(page.getByTestId("renewal-editor")).toBeVisible();
+  await page.screenshot({ path: resolve(GALLERY, "11-renewal/editor-1280x800.png") });
+});
+
+test("renewal — Accounts row chip at <= 7 days (and none for unknown)", async ({ page }) => {
+  await seedRenewalPage(page, { width: 1440, height: 900 }, 6);
+  await page.getByRole("button", { name: "Accounts" }).click();
+  await expect(page.getByText("Renews in 6 days").first()).toBeVisible();
+  await page.screenshot({ path: resolve(GALLERY, "11-renewal/accounts-row-chip-1440x900.png") });
 });
 
 // Determinism self-test (Req.4): same fixture twice → byte-identical PNG.

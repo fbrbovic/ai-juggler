@@ -20,6 +20,7 @@
 | AJ-E408 | PASS10 | 2026-10-13 | [manifest](AJ-E408/manifest.md) |
 | AJ-E409 | PASS13 | 2026-10-13 | [manifest](AJ-E409/manifest.md) |
 | AJ-E410 | PASS13 | 2026-10-13 | [manifest](AJ-E410/manifest.md) |
+| AJ-E411 | PASS12 | 2026-10-14 | [manifest](AJ-E411/manifest.md) |
 | AJ-E801 | PASS5 | 2026-10-13 | [manifest](AJ-E801/manifest.md) |
 | AJ-E802 | PASS7 | 2026-10-13 | [manifest](AJ-E802/manifest.md) |
 | AJ-E806 | PASS4 | 2026-10-13 | [manifest](AJ-E806/manifest.md) |

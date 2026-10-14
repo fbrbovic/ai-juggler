@@ -7,7 +7,7 @@ import {
   IconTerminal,
   IconUsage,
 } from "./components/icons";
-import { AttentionAnnouncer, IndicatorLegend } from "./components/indicator";
+import { AttentionAnnouncer, IndicatorLegend, RenewalAnnouncer } from "./components/indicator";
 import {
   DENSITY_ORDER,
   isDensityShortcut as isDensityShortcutEvent,
@@ -402,6 +402,7 @@ export default function App() {
   return (
     <div className="flex h-screen w-screen overflow-hidden">
       <AttentionAnnouncer sessions={sessions} />
+      <RenewalAnnouncer accounts={accounts} />
       <WorkflowRail
         tab={tab}
         onTab={setTab}
@@ -409,6 +410,7 @@ export default function App() {
         onCycleDensity={cycleDensity}
         projects={projects}
         sessions={sessions}
+        accounts={accounts}
         loginTerminals={loginTerminals}
         selectedId={selection.kind === "none" ? null : selection.id}
         onSelectSession={(id) =>

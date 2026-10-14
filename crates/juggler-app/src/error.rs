@@ -26,6 +26,14 @@ pub enum AppError {
     /// The requested harness has no registered adapter.
     #[error("no adapter for harness {0}")]
     UnknownHarness(String),
+    /// Caller-supplied input failed validation (honest rejection).
+    #[error("invalid {subject}: {message}")]
+    Validation {
+        /// What was being validated.
+        subject: &'static str,
+        /// Why it was rejected.
+        message: String,
+    },
     /// Filesystem/OS failure with context.
     #[error("{context}: {message}")]
     Io {

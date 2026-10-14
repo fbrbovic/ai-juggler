@@ -1,6 +1,6 @@
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { IconProjects, IconSessions, IconTerminal } from "./icons";
-import type { InstanceInfo, ProjectInfo } from "../lib/bridge";
+import type { AccountInfo, InstanceInfo, ProjectInfo } from "../lib/bridge";
 import type { Density } from "../lib/density";
 import { REFRESH_INTERVALS, staleCaption } from "../lib/density";
 import {
@@ -82,6 +82,7 @@ export function WorkflowRail({
   onCycleDensity,
   projects,
   sessions,
+  accounts = [],
   loginTerminals,
   selectedId,
   onSelectSession,
@@ -98,6 +99,8 @@ export function WorkflowRail({
   onCycleDensity: () => void;
   projects: ProjectInfo[];
   sessions: InstanceInfo[];
+  /** AJ-E411 Req.5: account expiry feeds the Needs-me tie-break. */
+  accounts?: AccountInfo[];
   loginTerminals: { id: string; title: string; ended: boolean }[];
   selectedId: string | null;
   onSelectSession: (id: string) => void;
@@ -237,6 +240,7 @@ export function WorkflowRail({
         ) : (
           <InstanceBoard
             sessions={sessions}
+            accounts={accounts}
             loginTerminals={loginTerminals}
             selectedId={selectedId}
             onSelect={onSelectSession}
@@ -367,9 +371,12 @@ export function InstanceBoard({
   freshness,
   now,
   projects,
+  accounts = [],
   snooze,
   onSnooze,
 }: {
+  /** AJ-E411 Req.5: account expiry feeds the Needs-me tie-break. */
+  accounts?: AccountInfo[];
   sessions: InstanceInfo[];
   loginTerminals: { id: string; title: string; ended: boolean }[];
   selectedId: string | null;
@@ -412,7 +419,7 @@ export function InstanceBoard({
 
   const effectiveDensity = density === "minimal" ? "compact" : density;
   const filtered = filterSessions(sessions, filters, query, projects);
-  const sorted = sortSessions(filtered, sort, snooze, now, projects);
+  const sorted = sortSessions(filtered, sort, snooze, now, projects, accounts);
   // Quota-risk groups the unknowns under `no data` (Req.2); other sorts
   // group only when the user picked a Group-by.
   const effectiveGroup: GroupBy | "quota-data" =

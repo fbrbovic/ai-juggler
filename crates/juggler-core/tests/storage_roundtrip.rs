@@ -51,6 +51,7 @@ fn arb_account() -> impl Strategy<Value = Account> {
             plan: plan.map(PlanTier::new),
             state_dir: PathBuf::from(state_dir),
             cleanup_opt_in: false,
+            renewal_date: None,
         })
 }
 
@@ -180,6 +181,7 @@ fn seed_chain(storage: &Storage) -> (Account, Profile) {
         plan: Some(PlanTier::new("max-20x")),
         state_dir: PathBuf::from("/tmp/seed"),
         cleanup_opt_in: false,
+        renewal_date: None,
     };
     let profile = Profile {
         id: ProfileId::new("seed-profile"),
@@ -531,8 +533,8 @@ fn v4_database_upgrades_in_place_to_v5_with_identical_values() {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     assert_eq!(
-        version, 7,
-        "v4 → current (v7, AJ-E410 cleanup opt-in) exactly once, on open"
+        version, 8,
+        "v4 → current (v8, AJ-E411 renewal date) exactly once, on open"
     );
 
     let account = storage.accounts().get(&AccountId::new("acc-1")).unwrap();
@@ -559,7 +561,7 @@ fn v4_database_upgrades_in_place_to_v5_with_identical_values() {
         .raw_conn()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, 8);
     assert!(storage.sessions().get(&SessionId::new("sess-1")).is_ok());
 }
 
@@ -584,4 +586,57 @@ fn launch_recipe_alias_roundtrip_pre_rename_values() {
     assert_eq!(read, written);
     let as_alias: Profile = read;
     assert_eq!(as_alias.name, "Main");
+}
+
+#[test]
+fn account_renewal_date_roundtrip_and_default_none() {
+    use juggler_core::model::HarnessId;
+    let storage = Storage::open_in_memory().unwrap();
+    storage
+        .accounts()
+        .insert(&Account {
+            id: AccountId::new("acc-renewal"),
+            harness: HarnessId::new("claude-code"),
+            label: "Work Max".into(),
+            plan: None,
+            state_dir: PathBuf::from("/tmp/renewal"),
+            cleanup_opt_in: false,
+            renewal_date: None,
+        })
+        .unwrap();
+    // A row stored WITHOUT the field loads as None — never a guess (D-12).
+    assert_eq!(
+        storage
+            .accounts()
+            .get(&AccountId::new("acc-renewal"))
+            .unwrap()
+            .renewal_date,
+        None
+    );
+
+    let mut account = storage
+        .accounts()
+        .get(&AccountId::new("acc-renewal"))
+        .unwrap();
+    account.renewal_date = Some("2026-11-02".into());
+    storage.accounts().update(&account).unwrap();
+    assert_eq!(
+        storage
+            .accounts()
+            .get(&AccountId::new("acc-renewal"))
+            .unwrap()
+            .renewal_date,
+        Some("2026-11-02".into())
+    );
+
+    account.renewal_date = None; // Clear
+    storage.accounts().update(&account).unwrap();
+    assert_eq!(
+        storage
+            .accounts()
+            .get(&AccountId::new("acc-renewal"))
+            .unwrap()
+            .renewal_date,
+        None
+    );
 }

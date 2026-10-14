@@ -75,6 +75,7 @@ const project: ProjectInfo = {
 };
 const account: AccountInfo = {
   id: "claude-work", provider: "claude-code", label: "Work Max", plan: "max-20x", login_state: "logged_in", cleanup_opt_in: false,
+  renewal_date: null,
 };
 const recipe: LaunchRecipeInfo = {
   id: "p-1", name: "Deep work", account_id: "claude-work", account_label: "Work Max",

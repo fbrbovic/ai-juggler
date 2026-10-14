@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import type { InstanceInfo } from "../lib/bridge";
+import type { AccountInfo, InstanceInfo } from "../lib/bridge";
+import { renewalLabel, renewalRowVisible } from "../lib/renewal";
 import {
   IconFork,
   IconGitBranch,
@@ -487,6 +488,40 @@ export function AttentionAnnouncer({ sessions }: { sessions: InstanceInfo[] }) {
 
   return (
     <div aria-live="polite" className="sr-only" data-testid="attention-announcer">
+      {message}
+    </div>
+  );
+}
+
+
+/**
+ * AJ-E411 (D-12): polite once-per-day announcement when an Account's
+ * renewal date crosses into <= 7 days (warning) or is past (danger) —
+ * never on every tick (UI/UX reasoning). The last-announced local date
+ * is remembered per account in localStorage.
+ */
+export function RenewalAnnouncer({ accounts, now = Date.now() }: { accounts: AccountInfo[]; now?: number }) {
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    const local = new Date(now);
+    const pad = (value: number) => String(value).padStart(2, "0");
+    const today = `${local.getFullYear()}-${pad(local.getMonth() + 1)}-${pad(local.getDate())}`;
+    const parts: string[] = [];
+    for (const account of accounts) {
+      const label = renewalLabel(account.renewal_date, now);
+      if (!renewalRowVisible(label)) continue;
+      const key = `aij.renewal.announced.${account.id}`;
+      if (localStorage.getItem(key) === today) continue;
+      localStorage.setItem(key, today);
+      parts.push(`${account.label} renewal: ${label?.text ?? "Renewal date passed"}`);
+    }
+    setMessage(parts.length > 0 ? parts.join(". ") : "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accounts, now]);
+
+  return (
+    <div aria-live="polite" className="sr-only" data-testid="renewal-announcer">
       {message}
     </div>
   );

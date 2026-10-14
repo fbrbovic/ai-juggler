@@ -119,7 +119,7 @@ function instance(id: string, overrides: Partial<InstanceInfo> = {}): InstanceIn
 const base = {
   projects: [] as ProjectInfo[],
   accounts: [
-    { id: "a1", provider: "claude-code", label: "Work Max", plan: null, login_state: "logged_in", cleanup_opt_in: false },
+    { id: "a1", provider: "claude-code", label: "Work Max", plan: null, login_state: "logged_in", cleanup_opt_in: false, renewal_date: null },
   ] as AccountInfo[],
   profiles: [] as LaunchRecipeInfo[],
   terminalTitle: null,

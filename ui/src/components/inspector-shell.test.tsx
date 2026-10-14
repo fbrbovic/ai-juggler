@@ -70,6 +70,7 @@ const account: AccountInfo = {
   label: "Work Max",
   plan: "max-20x",
   login_state: "logged_in", cleanup_opt_in: false,
+  renewal_date: null,
 };
 
 const recipe: LaunchRecipeInfo = {

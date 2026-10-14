@@ -7,7 +7,8 @@
  * from day one; with one local machine it simply never splits.
  */
 
-import type { InstanceInfo, ProjectInfo } from "./bridge";
+import type { AccountInfo, InstanceInfo, ProjectInfo } from "./bridge";
+import { renewalLabel, renewalTieBreak } from "./renewal";
 
 export type SortMode = "needs" | "quota" | "project" | "provider" | "account" | "age" | "name";
 export type GroupBy = "none" | "project" | "account" | "provider";
@@ -52,6 +53,13 @@ export function severityRank(row: InstanceInfo): number {
 /** Waiting duration in ms (how long the instance has waited for the user). */
 function waitingMs(row: InstanceInfo, now: number): number {
   return row.last_activity_ms !== null ? Math.max(0, now - row.last_activity_ms) : 0;
+}
+
+/** AJ-E411 Req.5: the account-expiry tie-break rank for a session row. */
+function expiryTieBreak(row: InstanceInfo, accounts: AccountInfo[], now: number): number {
+  const account = accounts.find((entry) => entry.id === row.account_id);
+  if (!account?.renewal_date) return 2;
+  return renewalTieBreak(renewalLabel(account.renewal_date, now));
 }
 
 // --- snooze ----------------------------------------------------------------------
@@ -99,6 +107,7 @@ export function sortSessions(
   snooze: SnoozeState,
   now: number,
   projects: ProjectInfo[] = [],
+  accounts: AccountInfo[] = [],
 ): InstanceInfo[] {
   const projectName = projectNames(projects);
   const snoozed = (row: InstanceInfo) => (isSnoozed(row, snooze, now) ? 1 : 0);
@@ -107,11 +116,15 @@ export function sortSessions(
     case "needs":
       // Failed > QuotaBlocked > WaitingUser (wait desc) > Stuck > Running
       // > rest; snoozed sink below unsnoozed peers (Req.1/Req.6).
+      // AJ-E411 Req.5: account expiry joins ONLY at <= 7 days and ONLY
+      // as a tie-break below the live attention states — it never
+      // outranks a blocked agent (severityRank already ordered those).
       sorted.sort(
         (a, b) =>
           severityRank(a) - severityRank(b) ||
           snoozed(a) - snoozed(b) ||
           waitingMs(b, now) - waitingMs(a, now) ||
+          expiryTieBreak(a, accounts, now) - expiryTieBreak(b, accounts, now) ||
           a.id.localeCompare(b.id),
       );
       break;

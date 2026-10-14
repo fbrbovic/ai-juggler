@@ -88,9 +88,16 @@ declare global {
 
 const seeded = (typeof window !== "undefined" && window.__AIJ_FIXTURE__) || {};
 
+/** A `YYYY-MM-DD` string N days from today (fixture dates move with the clock). */
+function renewalFixtureInDays(days: number): string {
+  const target = new Date(Date.now() + days * 86_400_000);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${target.getFullYear()}-${pad(target.getMonth() + 1)}-${pad(target.getDate())}`;
+}
+
 const MOCK_ACCOUNTS: AccountInfo[] = [
-  { id: "claude-work", provider: "claude-code", label: "Work Max", plan: Some("max-20x"), login_state: "logged_in", cleanup_opt_in: false },
-  { id: "claude-personal", provider: "claude-code", label: "Personal", plan: None(), login_state: "logged_out", cleanup_opt_in: false },
+  { id: "claude-work", provider: "claude-code", label: "Work Max", plan: Some("max-20x"), login_state: "logged_in", cleanup_opt_in: false, renewal_date: Some(renewalFixtureInDays(6)) },
+  { id: "claude-personal", provider: "claude-code", label: "Personal", plan: None(), login_state: "logged_out", cleanup_opt_in: false, renewal_date: None() },
 ];
 
 const MOCK_PROFILES: LaunchRecipeInfo[] = [
@@ -343,6 +350,7 @@ export async function createAccount(
       plan,
       login_state: "logged_out",
       cleanup_opt_in: false,
+      renewal_date: null,
     };
   }
   return invoke<AccountInfo>("account_create", { harness, label, plan });
@@ -402,6 +410,7 @@ export async function accountImport(
         plan,
         login_state: "logged_out",
         cleanup_opt_in: false,
+        renewal_date: null,
       },
       files_copied: 128,
       bytes_copied: 46_000_000,
@@ -548,6 +557,19 @@ export async function orphanVerify(sessionId: string, pid: number): Promise<Orph
     return { pid, alive: false, parent_pid: null, note: "process is gone" };
   }
   return invoke<OrphanVerifyInfo>("orphan_verify", { sessionId, pid });
+}
+
+/** AJ-E411 (D-12): set (validate server-side) or clear the user-entered renewal date. */
+export async function accountSetRenewal(
+  accountId: string,
+  date: string | null,
+): Promise<AccountInfo> {
+  if (!hasBackend) {
+    const account = MOCK_ACCOUNTS.find((row) => row.id === accountId);
+    if (!account) throw new Error(`unknown account \${accountId}`);
+    return { ...account, renewal_date: date };
+  }
+  return invoke<AccountInfo>("account_set_renewal", { accountId, date });
 }
 
 /** AJ-E410 (D-08): set the per-Account Tier-1 cleanup opt-in. */

@@ -87,6 +87,9 @@ pub struct AccountInfo {
     pub login_state: String,
     /// D-08 Tier-1 cleanup opt-in (off by default — notify-only tier).
     pub cleanup_opt_in: bool,
+    /// Optional user-entered renewal date, local calendar `YYYY-MM-DD`
+    /// (D-12); `null` renders `Expiry: unknown` — never inferred.
+    pub renewal_date: Option<String>,
 }
 
 /// A Launch settings row for the UI (AJ-E107).
@@ -506,6 +509,7 @@ pub fn create_account(
         plan: plan.map(juggler_core::model::PlanTier::new),
         state_dir,
         cleanup_opt_in: false,
+        renewal_date: None,
     };
     lock_storage_arc(state)?.accounts().insert(&account)?;
     Ok(account_info_of(&account))
@@ -620,6 +624,7 @@ pub fn account_import_impl(
         plan: plan.map(juggler_core::model::PlanTier::new),
         state_dir,
         cleanup_opt_in: false,
+        renewal_date: None,
     };
     {
         let storage = lock_storage_arc(state)?;
@@ -1445,6 +1450,7 @@ fn account_info_of(account: &Account) -> AccountInfo {
         label: account.label.clone(),
         plan: account.plan.as_ref().map(ToString::to_string),
         cleanup_opt_in: account.cleanup_opt_in,
+        renewal_date: account.renewal_date.clone(),
     }
 }
 
@@ -2421,6 +2427,54 @@ pub fn account_set_cleanup_arc(
     Ok(account_info_of(&account))
 }
 
+/// Sets or clears the optional user-entered renewal date (AJ-E411,
+/// D-12). `date` must be a valid local calendar `YYYY-MM-DD` (strictly
+/// validated — honest rejection, never a repair); `None` clears it.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message when the Account is unknown
+/// or the date format is invalid.
+#[tauri::command]
+pub fn account_set_renewal(
+    state: tauri::State<'_, Arc<AppState>>,
+    account_id: String,
+    date: Option<String>,
+) -> AppResult<AccountInfo> {
+    account_set_renewal_arc(&state, &account_id, date.as_deref())
+}
+
+/// The Arc-based core (tests call this directly).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message when the Account is unknown
+/// or the date format is invalid.
+pub fn account_set_renewal_arc(
+    state: &Arc<AppState>,
+    account_id: &str,
+    date: Option<&str>,
+) -> AppResult<AccountInfo> {
+    if let Some(raw) = date
+        && juggler_core::renewal::CalendarDate::parse(raw).is_none()
+    {
+        return Err(AppError::Validation {
+            subject: "renewal date",
+            message: format!("must be YYYY-MM-DD (got {raw:?})"),
+        });
+    }
+    let account = {
+        let storage = lock_storage_arc(state)?;
+        let mut account = storage
+            .accounts()
+            .get(&AccountId::new(account_id.to_string()))?;
+        account.renewal_date = date.map(ToString::to_string);
+        storage.accounts().update(&account)?;
+        account
+    };
+    Ok(account_info_of(&account))
+}
+
 /// The exit-snapshot hook (AJ-E410 Req.3): freezes the pre-exit
 /// descendant rows into the tracker and journals the durable
 /// allow-list. Called by the lifecycle forwarder on every Exited event
@@ -2628,6 +2682,7 @@ mod tests {
                 plan: None,
                 state_dir: std::env::temp_dir().join("aij-e401-account-state"),
                 cleanup_opt_in: false,
+                renewal_date: None,
             })
             .expect("seed account");
         for (id, model) in [("rec-1", Some("opus")), ("rec-2", None)] {
@@ -2826,6 +2881,7 @@ mod tests {
                 plan: None,
                 state_dir: std::env::temp_dir().join("aij-e401-bench"),
                 cleanup_opt_in: false,
+                renewal_date: None,
             })
             .expect("seed account");
         storage
