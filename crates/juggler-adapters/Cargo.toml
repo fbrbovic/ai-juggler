@@ -23,3 +23,7 @@ tempfile = "3.27.0"
 [[bin]]
 name = "fake-harness"
 path = "src/bin/fake_harness.rs"
+
+[[bin]]
+name = "fake-desktop"
+path = "src/bin/fake_desktop.rs"

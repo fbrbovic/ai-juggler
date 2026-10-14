@@ -154,6 +154,7 @@ export function RightInspector({
   onHandover,
   onNew,
   processesBridge = defaultProcessesBridge,
+  focusBridge = defaultFocusBridge,
 }: {
   selection: InspectorSelection;
   data: InspectorData;
@@ -172,6 +173,7 @@ export function RightInspector({
   onHandover: (sessionId: string, targetProfileId: string) => void;
   onNew: () => void;
   processesBridge?: ProcessesBridge;
+  focusBridge?: FocusBridge;
 }) {
   const kind: InspectorKind | "none" | "login" = selection.kind;
   const [tab, setTab] = useState<InspectorTab>(() =>
@@ -333,6 +335,7 @@ export function RightInspector({
                 chooseTab("overview");
                 window.dispatchEvent(new Event("aij:focus-handover"));
               }}
+              focusBridge={focusBridge}
             />
             {/* Footer: updated-ago + the field's REAL source (Req.5). */}
             <footer className="mt-auto flex items-center gap-1.5 border-t border-hairline/60 pt-2 text-[10px] text-faint">
@@ -366,6 +369,7 @@ function InspectorPanel(props: {
   onStopped: () => void;
   onHandover: (sessionId: string, targetProfileId: string) => void;
   onFocusTerminal: () => void;
+  focusBridge: FocusBridge;
 }) {
   const { tab, kind } = props;
 
@@ -493,10 +497,23 @@ type PanelProps = {
   onStopped: () => void;
   onHandover: (sessionId: string, targetProfileId: string) => void;
   onFocusTerminal: () => void;
+  /** AJ-E413 seam (E410 pattern): the desktop window-focus source
+   *  (tests inject a recorder; the app uses the bridge default). */
+  focusBridge: FocusBridge;
 };
+
+/** The desktop focus action: resolves to the outcome label shown
+ *  verbatim on the Instance (never overstated). */
+export type FocusBridge = (sessionId: string) => Promise<string>;
+
+const defaultFocusBridge: FocusBridge = async (sessionId) =>
+  (await import("../lib/bridge")).desktopFocus(sessionId);
 
 function InstanceOverview(props: PanelProps) {
   const handoverRef = useRef<HTMLDivElement | null>(null);
+  // AJ-E413: which focus tier the last Open/Focus attempt achieved —
+  // shown verbatim, never overstated (AJ-E414 classifies further).
+  const [focusOutcome, setFocusOutcome] = useState<string | null>(null);
   useEffect(() => {
     const scroll = () => {
       // jsdom has no scrollIntoView; the guard keeps tests honest.
@@ -509,6 +526,9 @@ function InstanceOverview(props: PanelProps) {
 
   if (kind === "instance" && data.instance) {
     const session = data.instance;
+    // AJ-E413: a desktop Instance has no terminal — the desktop surface
+    // replaces the terminal card, and `Open / Focus window` is primary.
+    const isDesktop = session.kind === "desktop";
     const terminalId = session.id;
     const live = session.status === "running" || session.status === "starting";
     const project = props.projects.find((p) => p.id === session.project_id) ?? null;
@@ -604,15 +624,99 @@ function InstanceOverview(props: PanelProps) {
             {project.name}
           </button>
         )}
-        {/* The terminal IS the Overview for a terminal-kind Instance. */}
-        <Card className="min-h-0 flex-1 overflow-hidden bg-[#05070b] p-0">
-          <TerminalView id={terminalId} title={terminalTitle ?? session.account_label} />
-        </Card>
-        {!live && (
+        {/* The terminal IS the Overview for a terminal-kind Instance; a
+            desktop-kind Instance renders the desktop surface instead
+            (AJ-E413 Req.3) — status, account, project, resources, the
+            per-Provider isolation claim, and window focus as primary. */}
+        {isDesktop ? (
+          <Card
+            className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4"
+            data-testid="desktop-surface"
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <Chip tone={statusTone(session.status).tone}>
+                {statusTone(session.status).label}
+              </Chip>
+              <span title="desktop app instance" className="inline-flex">
+                <Chip tone="neutral">app</Chip>
+              </span>
+              <Chip tone="neutral">{session.provider}</Chip>
+              <span className="text-[11.5px] text-muted">
+                {session.account_label}
+                {project ? ` · ${project.name}` : ""}
+              </span>
+              <Button
+                size="sm"
+                variant="primary"
+                data-testid="desktop-focus"
+                onClick={async () => {
+                  try {
+                    setFocusOutcome(await props.focusBridge(session.id));
+                  } catch (cause) {
+                    setFocusOutcome(`Focus failed: ${String(cause)}`);
+                  }
+                }}
+              >
+                Open / Focus window
+              </Button>
+            </div>
+            <div
+              className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] tabular-nums text-muted"
+              data-testid="desktop-resources"
+            >
+              <span>
+                cpu {session.cpu_pct !== null ? `${Math.round(session.cpu_pct)}%` : "—"} · ram{" "}
+                {session.rss_bytes !== null ? formatBytes(session.rss_bytes) : "—"} · children{" "}
+                {session.child_count ?? "—"}
+              </span>
+              <span>
+                {session.tokens
+                  ? `tokens ${(
+                      session.tokens.input + session.tokens.output
+                    ).toLocaleString()} (${session.tokens.input.toLocaleString()} in / ${session.tokens.output.toLocaleString()} out)`
+                  : "No usage recorded yet"}
+              </span>
+            </div>
+            {session.isolation_label !== null && (
+              <div
+                className="flex items-start gap-2.5 rounded-lg border border-warning/25 bg-warning-soft p-2.5"
+                data-testid="desktop-isolation"
+              >
+                <Chip tone="warning">isolation</Chip>
+                <p className="text-[11.5px] leading-relaxed text-ink">
+                  {session.isolation_label}
+                </p>
+              </div>
+            )}
+            {focusOutcome !== null && (
+              <p className="text-[11.5px] text-muted" data-testid="desktop-focus-outcome">
+                {focusOutcome}
+              </p>
+            )}
+            {!live && (
+              <p className="text-[11px] text-faint" data-testid="desktop-state-line">
+                {session.status === "failed"
+                  ? "app crashed · exit details on the Processes tab"
+                  : "app exited · relaunch from Actions"}
+              </p>
+            )}
+            <p className="text-[11px] text-faint">
+              The window is the app's own; Juggler tracks the process, never embeds it.
+              Exact-window focus (this instance's window, even minimised or on another Space)
+              lands with AJ-E414.
+            </p>
+          </Card>
+        ) : (
+          <Card className="min-h-0 flex-1 overflow-hidden bg-[#05070b] p-0">
+            <TerminalView id={terminalId} title={terminalTitle ?? session.account_label} />
+          </Card>
+        )}
+        {!live && !isDesktop && (
           <p className="text-[11px] text-faint">
-            ran {since(session.started_at_ms, Date.now())} · scrollback replayed
+            {`ran ${since(session.started_at_ms, Date.now())} · scrollback replayed`}
           </p>
         )}
+        {!isDesktop && (
         <div ref={handoverRef} className="flex flex-col gap-2" data-testid="handover-section">
           <p className="text-[11px] uppercase tracking-wider text-faint">
             Continue on another account
@@ -647,6 +751,7 @@ function InstanceOverview(props: PanelProps) {
             )}
           </div>
         </div>
+        )}
       </div>
     );
   }
@@ -1062,7 +1167,16 @@ function InstanceActions(props: PanelProps & { onRelaunch?: (recipe: LaunchRecip
   const recipe = props.profiles.find((r) => r.id === instance.launch_recipe_id) ?? null;
   return (
     <div className="flex flex-col gap-2" data-testid="instance-actions">
-      <ActionRow label="Focus terminal" onClick={() => props.onFocusTerminal()} reason={instance.kind === "desktop" ? "desktop instances focus their own window" : undefined} />
+      <ActionRow
+        label={instance.kind === "desktop" ? "Open / Focus window" : "Focus terminal"}
+        onClick={
+          instance.kind === "desktop"
+            ? () => {
+                void props.focusBridge(instance.id);
+              }
+            : props.onFocusTerminal
+        }
+      />
       <ActionRow label="Stop" shortcut="⌘." onClick={live ? props.onStopped : undefined} reason={live ? undefined : "not running"} />
       <ActionRow
         label={ended ? "Relaunch" : "Resume"}

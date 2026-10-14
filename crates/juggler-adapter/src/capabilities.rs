@@ -26,6 +26,12 @@ bitflags::bitflags! {
         const FORK = 1 << 7;
         /// Cross-account session transplant is implemented (spec §7 tier T2).
         const TRANSPLANT = 1 << 8;
+        /// The provider ships a desktop-class app that can be launched
+        /// and tracked as an Instance (AJ-E413).
+        const DESKTOP_APP = 1 << 9;
+        /// The desktop app is single-account: Juggler tracks it but
+        /// cannot isolate accounts inside it (honest label, Req.1).
+        const DESKTOP_SINGLE_ACCOUNT = 1 << 10;
     }
 }
 

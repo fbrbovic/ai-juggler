@@ -113,6 +113,7 @@ function instance(id: string, overrides: Partial<InstanceInfo> = {}): InstanceIn
     machine_id: "this-mac",
     cwd: "/w/x",
     kind: "terminal",
+    isolation_label: null,
     project_id: null,
     conversation_id: null,
     ...overrides,

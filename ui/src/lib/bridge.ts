@@ -10,6 +10,7 @@ import type { InstanceQuotaInfo } from "../types/generated/InstanceQuotaInfo";
 import type { InstanceResourcesInfo } from "../types/generated/InstanceResourcesInfo";
 import type { LaunchRecipeInfo } from "../types/generated/LaunchRecipeInfo";
 import type { OrphanVerifyInfo } from "../types/generated/OrphanVerifyInfo";
+import type { DesktopLaunchInfo } from "../types/generated/DesktopLaunchInfo";
 import type { ProcessesInfo } from "../types/generated/ProcessesInfo";
 import type { StopOutcomeInfo } from "../types/generated/StopOutcomeInfo";
 import type { LaunchResult } from "../types/generated/LaunchResult";
@@ -221,6 +222,7 @@ const MOCK_SESSIONS: InstanceInfo[] = seeded.sessions ?? [
     machine_id: "this-mac",
     cwd: "/Users/dev/ai-juggler",
     kind: "terminal",
+    isolation_label: null,
     project_id: "proj-ai-juggler",
     conversation_id: "822e4125-e07d-4866-9954-ec9295efb079",
   },
@@ -250,6 +252,7 @@ const MOCK_SESSIONS: InstanceInfo[] = seeded.sessions ?? [
     machine_id: "this-mac",
     cwd: "/Users/dev/ai-juggler",
     kind: "terminal",
+    isolation_label: null,
     project_id: "proj-payments",
     conversation_id: null,
   },
@@ -279,6 +282,7 @@ const MOCK_SESSIONS: InstanceInfo[] = seeded.sessions ?? [
     machine_id: "this-mac",
     cwd: "/Users/dev/ai-juggler",
     kind: "terminal",
+    isolation_label: null,
     project_id: "proj-payments",
     conversation_id: "c3f10b52-9a41-4f0e-8f2a-7717db9c04aa",
   },
@@ -509,6 +513,27 @@ export async function instancesList(): Promise<InstanceInfo[]> {
 
 /** @deprecated legacy alias (AJ-E107) — use instancesList. */
 export const sessionsList = instancesList;
+
+/** AJ-E413: launch the Provider's desktop app under an Account. */
+export async function desktopLaunch(accountId: string): Promise<DesktopLaunchInfo> {
+  if (!hasBackend) {
+    return {
+      session_id: "sess-desktop-1",
+      pid: 42_042,
+      bundle_id: "dev.aijuggler.fake-desktop",
+      isolation_label: "Single-account app — Juggler tracks, cannot isolate",
+    };
+  }
+  return invoke<DesktopLaunchInfo>("desktop_launch", { accountId });
+}
+
+/** AJ-E413: open/activate the desktop app (app tier; window tier = AJ-E414). */
+export async function desktopFocus(sessionId: string): Promise<string> {
+  if (!hasBackend) {
+    return "App opened — exact-window focus lands with AJ-E414";
+  }
+  return invoke<string>("desktop_focus", { sessionId });
+}
 
 /** AJ-E409: D-07 quality signals for the selected Instance (no score). */
 export async function instanceQuality(sessionId: string): Promise<QualitySignalsInfo | null> {

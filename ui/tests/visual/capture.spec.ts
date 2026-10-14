@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "16-onboarding-detect"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "16-onboarding-detect"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -635,6 +635,98 @@ test("model — not reported by Provider inspector state", async ({ page }) => {
     "Model: not reported by claude-code",
   );
   await page.screenshot({ path: resolve(GALLERY, "12-model/not-reported-1440x900.png") });
+});
+
+// AJ-E413 desktop captures: the panel surface (no terminal card), the
+// rail `app` chip, and the state matrix (running, exited, crashed,
+// single-account warning) at the two required viewports.
+test("desktop — Instance panel (running app, isolation label, no terminal)", async ({ page }) => {
+  await seedInspectorPage(page, { width: 1280, height: 800 });
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  await page
+    .getByRole("button", { name: /Fake Desk/ })
+    .filter({ has: page.getByTestId("rail-app-chip") })
+    .filter({ hasText: /running/i })
+    .click();
+  await expect(page.getByTestId("desktop-surface")).toBeVisible();
+  await expect(page.getByTestId("desktop-surface")).toContainText("Running");
+  await expect(page.getByTestId("desktop-focus")).toBeVisible();
+  await expect(page.getByTestId("desktop-isolation")).toContainText("Single-account app");
+  await page.screenshot({ path: resolve(GALLERY, "13-desktop/panel-running-1280x800.png") });
+});
+
+test("desktop — panel at 1024x680 light", async ({ page }) => {
+  await page.addInitScript(
+    ({ fixture, t0 }) => {
+      (window as never as { __AIJ_FIXTURE__: unknown }).__AIJ_FIXTURE__ = fixture;
+      localStorage.setItem("aij.theme", "light");
+      localStorage.setItem("aij.onboarding.dismissed", "1");
+      sessionStorage.setItem("aij.ready.skipped", "1");
+      Date.now = () => t0;
+    },
+    { fixture: allStatuses, t0: T0 },
+  );
+  await page.emulateMedia({ reducedMotion: "reduce", colorScheme: "light" });
+  await page.setViewportSize({ width: 1024, height: 680 });
+  await page.goto("/");
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  await page
+    .getByRole("button", { name: /Fake Desk/ })
+    .filter({ has: page.getByTestId("rail-app-chip") })
+    .filter({ hasText: /running/i })
+    .click();
+  await expect(page.getByTestId("desktop-surface")).toBeVisible();
+  await expect(page.getByTestId("desktop-isolation")).toContainText("Single-account app");
+  await page.screenshot({ path: resolve(GALLERY, "13-desktop/panel-running-1024x680-light.png") });
+});
+
+test("desktop — exited app state", async ({ page }) => {
+  await seedInspectorPage(page, { width: 1280, height: 800 });
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  await page
+    .getByRole("button", { name: /Fake Desk/ })
+    .filter({ has: page.getByTestId("rail-app-chip") })
+    .filter({ hasText: /finished/i })
+    .click();
+  await expect(page.getByTestId("desktop-surface")).toBeVisible();
+  await expect(page.getByTestId("desktop-surface")).toContainText("app exited");
+  await page.screenshot({ path: resolve(GALLERY, "13-desktop/panel-exited-1280x800.png") });
+});
+
+test("desktop — crashed app state", async ({ page }) => {
+  await seedInspectorPage(page, { width: 1280, height: 800 });
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  await page
+    .getByRole("button", { name: /Fake Desk/ })
+    .filter({ has: page.getByTestId("rail-app-chip") })
+    .filter({ hasText: /failed|crashed/i })
+    .click();
+  await expect(page.getByTestId("desktop-surface")).toBeVisible();
+  await expect(page.getByTestId("desktop-surface")).toContainText("app crashed");
+  await page.screenshot({ path: resolve(GALLERY, "13-desktop/panel-crashed-1280x800.png") });
+});
+
+test("desktop — single-account warning state", async ({ page }) => {
+  await seedInspectorPage(page, { width: 1280, height: 800 });
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  await page
+    .getByRole("button", { name: /Fake Desk/ })
+    .filter({ has: page.getByTestId("rail-app-chip") })
+    .filter({ hasText: /running/i })
+    .click();
+  const warning = page.getByTestId("desktop-isolation");
+  await expect(warning).toBeVisible();
+  await expect(warning).toContainText(
+    "Single-account app — Juggler tracks, cannot isolate",
+  );
+  await page.screenshot({ path: resolve(GALLERY, "13-desktop/panel-single-account-warning-1280x800.png") });
+});
+
+test("desktop — rail app chip", async ({ page }) => {
+  await seedInspectorPage(page, { width: 1280, height: 800 });
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  await expect(page.getByTestId("rail-app-chip").first()).toBeVisible();
+  await page.screenshot({ path: resolve(GALLERY, "13-desktop/rail-app-chip-1280x800.png") });
 });
 
 // Determinism self-test (Req.4): same fixture twice → byte-identical PNG.

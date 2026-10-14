@@ -31,6 +31,6 @@ pub use capabilities::Capabilities;
 pub use discovery::{DiscoveryReport, InstallStatus, VerificationStatus};
 pub use environment::{DiscoveredInstall, ImportOutcome, InstallOrigin, LoginProbe, LoginUrl};
 pub use error::AdapterError;
-pub use launch::{EnvMap, LaunchMode, LaunchSpec};
+pub use launch::{DesktopLaunch, EnvMap, LaunchMode, LaunchSpec};
 pub use registry::AdapterRegistry;
 pub use watcher::{SessionEvent, SessionWatcher};

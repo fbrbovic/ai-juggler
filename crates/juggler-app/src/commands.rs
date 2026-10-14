@@ -337,6 +337,11 @@ pub struct InstanceInfo {
     /// The native conversation inside this Instance, once discovered
     /// (AJ-E104: Instance row → conversation inside; None while Starting).
     pub conversation_id: Option<String>,
+    /// AJ-E413 Req.1: the per-Provider isolation claim for desktop
+    /// Instances, verbatim (`Single-account app — Juggler tracks,
+    /// cannot isolate` for single-account apps); `null` for terminal
+    /// Instances and when the provider's adapter is not registered.
+    pub isolation_label: Option<String>,
 }
 
 /// Deprecated alias (one version). AJ-E107.
@@ -394,6 +399,22 @@ pub struct LaunchResult {
     pub session_id: String,
     /// OS process id.
     pub pid: u32,
+}
+
+/// Result of a desktop launch (AJ-E413 Req.1): the tracked Instance id,
+/// the OS pid, and the bundle identifier when the platform has one.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct DesktopLaunchInfo {
+    /// The new (desktop-kind) Instance id.
+    pub session_id: String,
+    /// OS process id.
+    pub pid: u32,
+    /// Bundle identifier (macOS), when known.
+    pub bundle_id: Option<String>,
+    /// The per-Provider isolation claim, shown verbatim (Req.1): e.g.
+    /// `Single-account app — Juggler tracks, cannot isolate`.
+    pub isolation_label: String,
 }
 
 /// An existing harness setup found by the onboarding environment scan
@@ -941,6 +962,137 @@ pub fn launch_profile(
     })
 }
 
+/// Launches the Provider's desktop app under an Account and tracks it
+/// as a desktop-kind Instance in the same ledger (AJ-E413). Capability-
+/// gated: providers without `DESKTOP_APP` are refused by name.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message when the provider ships no
+/// desktop app or the process cannot start.
+#[tauri::command]
+pub fn desktop_launch(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    account_id: String,
+) -> AppResult<DesktopLaunchInfo> {
+    let result = desktop_launch_arc(state.inner(), &account_id)?;
+    emit_sessions(&app, state.inner())?;
+    Ok(result)
+}
+
+/// The Arc-based core (tests call this directly).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message when the provider ships no
+/// desktop app, the account lacks launch settings (the owning recipe is
+/// the storage anchor), or the process cannot start.
+pub fn desktop_launch_arc(state: &Arc<AppState>, account_id: &str) -> AppResult<DesktopLaunchInfo> {
+    use juggler_core::model::MachineId;
+
+    let (account, recipe_id) = {
+        let storage = lock_storage_arc(state)?;
+        let account = storage
+            .accounts()
+            .get(&AccountId::new(account_id.to_string()))?;
+        // Desktop instances anchor to the account's launch settings row
+        // (the storage FK); the overlay itself is not applied — env
+        // isolation is what the DESKTOP adapter declares, honestly.
+        let recipe = storage
+            .profiles()
+            .list_by_account(&account.id)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| AppError::NotFound {
+                entity: "launch settings",
+                id: account.id.to_string(),
+            })?;
+        (account, recipe.id)
+    };
+    let adapter = state
+        .registry
+        .get(&account.harness)
+        .ok_or_else(|| AppError::UnknownHarness(account.harness.to_string()))?;
+    if !adapter
+        .capabilities()
+        .contains(juggler_adapter::Capabilities::DESKTOP_APP)
+    {
+        return Err(AppError::Validation {
+            subject: "desktop launch",
+            message: format!("provider {} ships no desktop app", account.harness.as_str()),
+        });
+    }
+    // Idempotent account-dir preparation (the same contract terminal
+    // launches honour) — the launch cwd must exist before spawn.
+    adapter.prepare_account(&account.state_dir)?;
+    let launch = adapter.desktop_launch(&account)?;
+    let session_id = SessionId::new(format!("sess-{}", unique_suffix()));
+    let spawned = state.supervisor.spawn_desktop(&session_id, &launch)?;
+    {
+        let storage = lock_storage_arc(state)?;
+        let project = storage.projects().touch(&launch.cwd, None)?;
+        storage.sessions().insert(&SessionRecord {
+            id: session_id.clone(),
+            conversation: None,
+            profile: recipe_id,
+            machine: MachineId::new("this-mac"),
+            kind: juggler_core::model::InstanceKind::Desktop,
+            project: Some(project.id.clone()),
+            cwd: launch.cwd.clone(),
+            status: SessionStatus::Starting,
+            started_at: Timestamp::now(),
+            last_activity: None,
+            usage: juggler_core::model::UsageSnapshot::default(),
+            attention: None,
+            running: None,
+            transcript_ref: None,
+        })?;
+    }
+    Ok(DesktopLaunchInfo {
+        session_id: session_id.to_string(),
+        pid: spawned.pid,
+        bundle_id: launch.bundle_id,
+        isolation_label: launch.isolation_label.to_string(),
+    })
+}
+
+/// Opens/activates the desktop app for one Instance (AJ-E413's tier:
+/// app activation via the OS opener). Exact-window focus —
+/// `AXUIElement` raise across Spaces/minimised windows — lands with
+/// AJ-E414; the returned outcome label says exactly which tier ran
+/// (never overstated).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message when the Instance is unknown.
+#[tauri::command]
+pub fn desktop_focus(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    session_id: String,
+) -> AppResult<String> {
+    use tauri_plugin_opener::OpenerExt;
+    let (live, cwd) = {
+        let storage = lock_storage(&state)?;
+        let record = storage.sessions().get(&SessionId::new(session_id))?;
+        (!is_terminal(record.status), record.cwd.clone())
+    };
+    if !live {
+        return Ok("App not running — Relaunch?".to_string());
+    }
+    // App-level activation (the E413 tier): the opener reveals the app's
+    // context; window-level targeting (`AXUIElement` raise) is AJ-E414's
+    // contract and is never claimed here.
+    app.opener()
+        .open_path(cwd.to_string_lossy(), None::<&str>)
+        .map_err(|e| AppError::Io {
+            context: "open desktop app",
+            message: e.to_string(),
+        })?;
+    Ok("App opened — exact-window focus lands with AJ-E414".to_string())
+}
+
 /// Lists Instances (board feed), newest first (canonical name
 /// `instances_list`; legacy alias registered in the handler).
 #[tauri::command(rename = "instances_list")]
@@ -952,8 +1104,9 @@ pub fn sessions_list(state: tauri::State<'_, Arc<AppState>>) -> AppResult<Vec<In
     // Collector lock first and alone: the resource tick shares it, and no
     // code path ever holds the storage and collector locks together.
     let live = live_stats_of(state.inner());
+    let labels = desktop_isolation_labels(&state.registry);
     let storage = lock_storage(&state)?;
-    session_infos(&storage, &live)
+    session_infos(&storage, &live, &labels)
 }
 
 /// Stops a session via the supervisor ladder (grace, then kill).
@@ -1382,7 +1535,7 @@ pub fn emit_sessions(app: &tauri::AppHandle, state: &Arc<AppState>) -> AppResult
     let live = live_stats_of(state);
     let sessions = {
         let storage = state.storage.lock().map_err(|_| AppError::StatePoisoned)?;
-        session_infos(&storage, &live)?
+        session_infos(&storage, &live, &desktop_isolation_labels(&state.registry))?
     };
     let _ = app.emit(crate::EVENT_SESSIONS_UPDATED, sessions);
     Ok(())
@@ -1668,6 +1821,24 @@ fn display_model(
     (observed.or_else(|| launch.cloned()), source.to_string())
 }
 
+/// Per-Provider desktop isolation claims (AJ-E413 Req.1): provider id →
+/// the label shown verbatim on that provider's desktop Instances.
+/// Providers without a desktop app contribute nothing.
+fn desktop_isolation_labels(
+    registry: &juggler_adapter::AdapterRegistry,
+) -> std::collections::BTreeMap<String, String> {
+    registry
+        .ids()
+        .into_iter()
+        .filter_map(|harness| {
+            registry
+                .get(&harness)
+                .and_then(|adapter| adapter.desktop_isolation_label())
+                .map(|label| (harness.to_string(), label.to_string()))
+        })
+        .collect()
+}
+
 /// Session rows with denormalized account/provider joins and the full
 /// I-01..I-11 read model (AJ-E401). One storage pass per collection
 /// (accounts, launch settings, instances) joined in memory — no per-row
@@ -1678,12 +1849,27 @@ fn display_model(
 ///
 /// Returns the typed [`AppError`] message on storage failures.
 pub fn session_infos_snapshot(storage: &Storage) -> AppResult<Vec<InstanceInfo>> {
-    session_infos(storage, &LiveStatsMap::new())
+    session_infos(
+        storage,
+        &LiveStatsMap::new(),
+        &std::collections::BTreeMap::new(),
+    )
 }
 
-fn session_infos(storage: &Storage, live: &LiveStatsMap) -> AppResult<Vec<InstanceInfo>> {
-    // account id → (label, provider)
-    let account_index: std::collections::BTreeMap<String, (String, String)> = storage
+/// account id → (label, provider).
+type AccountIndex = std::collections::BTreeMap<String, (String, String)>;
+/// launch-recipe id → (account id, provider, overlay model).
+type RecipeIndex = std::collections::BTreeMap<String, (String, String, Option<String>)>;
+
+/// Join indexes for the read model: account id → (label, provider) and
+/// launch-recipe id → (account id, provider, overlay model). One
+/// storage pass per collection, joined in memory — no per-row reads.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on storage failures.
+fn session_join_indexes(storage: &Storage) -> AppResult<(AccountIndex, RecipeIndex)> {
+    let account_index: AccountIndex = storage
         .accounts()
         .list()?
         .into_iter()
@@ -1694,9 +1880,7 @@ fn session_infos(storage: &Storage, live: &LiveStatsMap) -> AppResult<Vec<Instan
             )
         })
         .collect();
-    // launch-recipe id → (account id, provider, overlay model)
-    let mut recipe_index: std::collections::BTreeMap<String, (String, String, Option<String>)> =
-        std::collections::BTreeMap::new();
+    let mut recipe_index: RecipeIndex = std::collections::BTreeMap::new();
     for (account_id, (_, harness)) in &account_index {
         for recipe in storage
             .profiles()
@@ -1712,6 +1896,15 @@ fn session_infos(storage: &Storage, live: &LiveStatsMap) -> AppResult<Vec<Instan
             );
         }
     }
+    Ok((account_index, recipe_index))
+}
+
+fn session_infos(
+    storage: &Storage,
+    live: &LiveStatsMap,
+    desktop_labels: &std::collections::BTreeMap<String, String>,
+) -> AppResult<Vec<InstanceInfo>> {
+    let (account_index, recipe_index) = session_join_indexes(storage)?;
     Ok(storage
         .sessions()
         .list(None)?
@@ -1719,6 +1912,11 @@ fn session_infos(storage: &Storage, live: &LiveStatsMap) -> AppResult<Vec<Instan
         .map(|record| {
             let (account_id, account_label, provider, launch_model) =
                 resolved_join(&recipe_index, &account_index, &record.profile.to_string());
+            let isolation_label = if record.kind == juggler_core::model::InstanceKind::Desktop {
+                desktop_labels.get(&provider).cloned()
+            } else {
+                None
+            };
             let (model, model_source) =
                 display_model(record.running.as_ref(), launch_model.as_ref());
             let terminal = is_terminal(record.status);
@@ -1784,6 +1982,7 @@ fn session_infos(storage: &Storage, live: &LiveStatsMap) -> AppResult<Vec<Instan
                     .as_ref()
                     .map(std::string::ToString::to_string),
                 conversation_id: record.conversation.as_ref().map(|c| c.as_str().to_string()),
+                isolation_label,
             }
         })
         .collect())
@@ -2045,7 +2244,11 @@ pub fn projects_list_impl(state: &Arc<AppState>) -> AppResult<Vec<ProjectInfo>> 
     // storage guard for the whole join below.
     let live_stats = live_stats_of(state);
     let storage = lock_storage_arc(state)?;
-    let sessions = session_infos(&storage, &live_stats)?;
+    let sessions = session_infos(
+        &storage,
+        &live_stats,
+        &desktop_isolation_labels(&state.registry),
+    )?;
     // Statuses that mean "occupying the project right now".
     let live = |status: &str| matches!(status, "starting" | "running");
     Ok(storage
@@ -3015,7 +3218,8 @@ mod tests {
         )]
         .into_iter()
         .collect();
-        let rows = session_infos(&storage, &live).expect("rows");
+        let rows =
+            session_infos(&storage, &live, &std::collections::BTreeMap::new()).expect("rows");
         let full = row(&rows, "sess-full");
 
         assert_eq!(full.account_id.as_deref(), Some("acc-1"));
@@ -3053,7 +3257,12 @@ mod tests {
     #[test]
     fn session_info_absent_data_is_null_not_zero() {
         let storage = fixture_storage();
-        let rows = session_infos(&storage, &LiveStatsMap::new()).expect("rows");
+        let rows = session_infos(
+            &storage,
+            &LiveStatsMap::new(),
+            &std::collections::BTreeMap::new(),
+        )
+        .expect("rows");
 
         // Quota-less: no feed, no observed tokens, never sampled.
         let no_quota = row(&rows, "sess-no-quota");
@@ -3092,6 +3301,43 @@ mod tests {
                 "{id}: {json}"
             );
         }
+    }
+
+    /// AJ-E413 Req.1: desktop rows carry the per-Provider isolation
+    /// claim verbatim; terminal rows and unregistered providers stay
+    /// `null` — the panel never guesses a limit.
+    #[test]
+    fn session_info_desktop_isolation_label_maps_per_provider() {
+        let storage = fixture_storage();
+        let mut desktop = record(
+            "sess-desk",
+            "rec-1",
+            SessionStatus::Running,
+            git_cwd("feat/x"),
+        );
+        desktop.kind = InstanceKind::Desktop;
+        storage.sessions().insert(&desktop).expect("seed desktop");
+
+        let labels = std::collections::BTreeMap::from([(
+            "claude-code".to_string(),
+            "Single-account app — Juggler tracks, cannot isolate".to_string(),
+        )]);
+        let rows = session_infos(&storage, &LiveStatsMap::new(), &labels).expect("rows");
+        assert_eq!(
+            row(&rows, "sess-desk").isolation_label.as_deref(),
+            Some("Single-account app — Juggler tracks, cannot isolate")
+        );
+        // Terminal instances never carry a desktop claim.
+        assert_eq!(row(&rows, "sess-full").isolation_label, None);
+        // Desktop row whose provider has no registered label: null, not
+        // an inherited or default claim.
+        let bare = session_infos(
+            &storage,
+            &LiveStatsMap::new(),
+            &std::collections::BTreeMap::new(),
+        )
+        .expect("rows");
+        assert_eq!(row(&bare, "sess-desk").isolation_label, None);
     }
 
     /// AJ-E401 performance budget: the in-memory join (storage reads +
@@ -3138,7 +3384,12 @@ mod tests {
         let mut samples: Vec<u128> = Vec::new();
         for _ in 0..100 {
             let start = std::time::Instant::now();
-            let rows = session_infos(&storage, &LiveStatsMap::new()).expect("rows");
+            let rows = session_infos(
+                &storage,
+                &LiveStatsMap::new(),
+                &std::collections::BTreeMap::new(),
+            )
+            .expect("rows");
             assert_eq!(rows.len(), 50);
             samples.push(start.elapsed().as_micros());
         }
@@ -3154,7 +3405,12 @@ mod tests {
     #[test]
     fn session_info_status_vocabulary_is_the_nine_wire_strings() {
         let storage = fixture_storage();
-        let rows = session_infos(&storage, &LiveStatsMap::new()).expect("rows");
+        let rows = session_infos(
+            &storage,
+            &LiveStatsMap::new(),
+            &std::collections::BTreeMap::new(),
+        )
+        .expect("rows");
         let vocabulary: Vec<&str> = rows.iter().map(|row| row.status.as_str()).collect();
         for wire in [
             "starting",

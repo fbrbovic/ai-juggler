@@ -7,7 +7,7 @@ use crate::capabilities::Capabilities;
 use crate::discovery::DiscoveryReport;
 use crate::environment::{DiscoveredInstall, ImportOutcome, LoginUrl};
 use crate::error::AdapterError;
-use crate::launch::{EnvMap, LaunchMode, LaunchSpec};
+use crate::launch::{DesktopLaunch, EnvMap, LaunchMode, LaunchSpec};
 use crate::model::{Account, HarnessId, Profile};
 use crate::watcher::SessionWatcher;
 
@@ -64,6 +64,31 @@ pub trait HarnessAdapter: Send + Sync {
         cwd: &Path,
         mode: &LaunchMode,
     ) -> Result<LaunchSpec, AdapterError>;
+
+    /// Builds a desktop launch for the account (AJ-E413): the
+    /// windowed app tracked as an Instance. Providers without a
+    /// desktop app keep the default — `Unsupported`, and the core
+    /// never offers the launch (capability-gated).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError::Unsupported`] when the provider ships no
+    /// desktop app, [`AdapterError::InvalidLaunch`] for a missing binary.
+    fn desktop_launch(&self, account: &Account) -> Result<DesktopLaunch, AdapterError> {
+        let _ = account;
+        Err(AdapterError::Unsupported(
+            "this provider ships no desktop app".into(),
+        ))
+    }
+
+    /// The per-Provider desktop isolation claim (AJ-E413 Req.1), shown
+    /// verbatim on every desktop Instance of this provider. `None` for
+    /// providers without a desktop app; single-account apps carry
+    /// `Single-account app — Juggler tracks, cannot isolate` — never an
+    /// implied isolation the vendor does not provide.
+    fn desktop_isolation_label(&self) -> Option<&'static str> {
+        None
+    }
 
     /// Creates a watcher over the account's transcript root.
     ///

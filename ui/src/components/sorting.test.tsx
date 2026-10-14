@@ -50,6 +50,7 @@ function mk(id: string, overrides: Partial<InstanceInfo> = {}): InstanceInfo {
     machine_id: "this-mac",
     cwd: "/Users/dev/ai-juggler",
     kind: "terminal",
+    isolation_label: null,
     project_id: "proj-1",
     conversation_id: null,
     ...overrides,
