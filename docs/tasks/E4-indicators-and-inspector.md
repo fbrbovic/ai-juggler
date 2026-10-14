@@ -136,7 +136,7 @@
 **Research basis**: pass2/04 §3 I-10 + §6 Stuck row (lines 184, 418); SPEC.md:220-221, §5.1 heuristics (docs/SPEC.md sed 220-234); EPICS.md:79 (M2-5 >= 90%); full review F2.5 ("modelled but never emitted", model.rs:188-207).
 **Handover note**: This is the upstream gap every E4 rendering task assumes. If heuristics cannot reach 90% on a fixture class, ship the emission with that class labelled `Stuck?` only and record the shortfall — never silently widen thresholds to pass.
 
-### AJ-E406 Right Inspector shell: 6 tabs x 5 selection types | Status: TODO | Priority P0 | Effort L | Depends: AJ-E401
+### AJ-E406 Right Inspector shell: 6 tabs x 5 selection types | Status: DONE-EVIDENCED (zcode-primary, 2026-10-13) | Priority P0 | Effort L | Depends: AJ-E401
 **Goal**: Build the inspector container that shows Overview/Usage/History/Quality-Performance/Processes/Actions for Session, Provider, Account, Instance, and Project selections (D-06), with the fleet-at-a-glance empty state.
 **User story**: As Persona A, I want one stable right-hand home whose tabs never move whatever I click, so that muscle memory replaces hunting through screens.
 **Requirements**:
@@ -153,6 +153,11 @@
 **Evidence/validation proof**: UI test `inspector-shell.test`: programmatically select each of the 5 types from fixtures, assert 6 tabs present, header fields, and per-type tab persistence across a reselection; pass = 30/30 assertions; plus live dogfood step: click Instance -> Project -> Account in the dev app (`just dev`) and record that tab memory holds; log linked in PR.
 **Visual testing**: Screenshots at 1440x900 and 1280x800: empty-selection summary, Instance/Overview, Account/Usage, Project/Processes headers; states: populated, honest-empty tab, stale footer; Playwright diff tolerance 1%; a11y axe 0 critical + manual tab-order walkthrough recorded as checklist in PR. Pass = reviewer approves header/tab consistency across all five types.
 **Files to touch**: `ui/src/App.tsx`, `ui/src/screens/WorkPanels.tsx`, `ui/src/components/WorkflowRail.tsx:295`, `ui/src/lib/bridge.ts:38,303`, `ui/src/styles.css`, `docs/SPEC.md:343-353` (read only, cite).
+*Implementation mapping (corrected in this task's PR per the claiming protocol)*:
+- The shell is `ui/src/components/RightInspector.tsx` (new; one name everywhere per the handover note). WorkPanels' ProjectPanel/WorkEmpty bodies were EXTRACTED into it (WorkPanels keeps the login-terminal panel + NewSessionModal only); `ui/src/screens/Profiles.tsx` gained the account-inspect entry (HarnessGlyph button) and Overview's quota cards select their Provider.
+- The terminal NEVER unmounts on tab switches: all six panels mount once per selection and toggle `hidden` (also the pre-fetched-content perf model).
+- Login terminals keep their dedicated panel (not one of the five types); the Session (conversation) type renders honest empties until AJ-E407 fills it.
+- Corpus flake note (AJ-E806): the E405 attention-corpus test flaked twice under cold parallel workspace load (5 s spawn deadline); deadlines widened to 20 s/90 s — three consecutive fully-loaded runs green; recorded in the E406 manifest.
 **Research basis**: decision-log D-06 (lines 60-68); pass2/04 §5 intro (lines 268-286) and §5.1-5.5; 00-executive-delta §1.2 item 7 (no Provider panel exists, SPEC.md:343).
 **Handover note**: Name the component `RightInspector`, not `SessionPanel`/`SnapshotPanel` (prior-report names) — one name everywhere. Trap: WorkPanels.tsx today hosts panel content; extract, do not duplicate, the shell.
 

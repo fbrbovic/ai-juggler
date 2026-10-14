@@ -27,8 +27,10 @@ import {
 
 export function ProfilesScreen({
   openTerminal,
+  onInspectAccount,
 }: {
   openTerminal: (id: string, title: string) => void;
+  onInspectAccount?: (id: string) => void;
 }) {
   const [accounts, setAccounts] = useState<AccountInfo[] | null>(null);
   const [profiles, setProfiles] = useState<LaunchRecipeInfo[] | null>(null);
@@ -114,6 +116,7 @@ export function ProfilesScreen({
               }}
               onNewProfile={() => setNewProfileFor(account)}
               onLogin={() => setLoginFor(account)}
+              onInspect={() => onInspectAccount?.(account.id)}
               onLoginRechecked={refresh}
             />
           ))}
@@ -179,6 +182,7 @@ function AccountCard({
   onNewProfile,
   onLogin,
   onLoginRechecked,
+  onInspect,
 }: {
   account: AccountInfo;
   profiles: LaunchRecipeInfo[];
@@ -187,6 +191,7 @@ function AccountCard({
   onNewProfile: () => void;
   onLogin: () => void;
   onLoginRechecked: () => Promise<void>;
+  onInspect?: () => void;
 }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const onToggleSettings = () => setSettingsOpen((v) => !v);
@@ -195,7 +200,7 @@ function AccountCard({
   return (
     <Card className="overflow-hidden">
       <div className="flex flex-wrap items-center gap-2.5 border-b border-hairline px-5 py-3.5">
-        <HarnessGlyph provider={account.provider} />
+        <HarnessGlyph provider={account.provider} onClick={onInspect} />
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className="truncate text-sm font-semibold">{account.label}</span>
@@ -289,17 +294,20 @@ function AccountCard({
   );
 }
 
-function HarnessGlyph({ provider }: { provider: string }) {
+function HarnessGlyph({ provider, onClick }: { provider: string; onClick?: () => void }) {
   // Claude Code mark: an abstract spark; per-harness glyphs grow with M2.
   return (
-    <span
-      className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-accent/20 bg-accent-soft text-accent-hi"
-      title={provider}
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!onClick}
+      title={onClick ? `Inspect ${provider}` : provider}
+      className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-accent/20 bg-accent-soft text-accent-hi outline-none transition-colors focus-visible:ring-1 focus-visible:ring-accent/60 enabled:hover:border-accent/40 disabled:cursor-default"
     >
       <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
         <path d="M12 2.6c.5 3.9 2.4 6.6 6.9 8-4.5 1.4-6.4 4.1-6.9 8-.5-3.9-2.4-6.6-6.9-8 4.5-1.4 6.4-4.1 6.9-8Z" />
       </svg>
-    </span>
+    </button>
   );
 }
 

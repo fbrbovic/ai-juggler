@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "16-onboarding-detect"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "16-onboarding-detect"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -116,7 +116,10 @@ for (const theme of THEMES) {
       await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
       await page.setViewportSize({ width: vp.width, height: vp.height });
       await page.goto("/");
-      await expect(page.getByText("Pick something in the rail", { exact: false })).toBeVisible();
+      // AJ-E406: the empty work area is the fleet-at-a-glance summary
+      // (RightInspector, Req.4) — never a blank panel.
+      await expect(page.getByText("Nothing selected", { exact: false })).toBeVisible();
+      await expect(page.getByText("Lowest quota")).toBeVisible();
       await page.screenshot({
         path: resolve(GALLERY, `01-rail/honest-empty-${vp.name}-${theme}.png`),
       });
@@ -311,6 +314,64 @@ async function seedRail(
   await page.goto("/");
   await expect(page.getByRole("tab", { name: "Sessions" })).toBeVisible();
   await page.getByRole("tab", { name: "Sessions" }).click();
+}
+
+// AJ-E406 inspector captures: the RightInspector shell across selection
+// types (empty summary, Instance/Overview, Account/Usage honest empty,
+// Project/Processes header) at 1440x900 + 1280x800.
+const INSPECTOR_VIEWPORTS = [
+  { name: "1440x900", width: 1440, height: 900 },
+  { name: "1280x800", width: 1280, height: 800 },
+] as const;
+
+async function seedInspectorPage(page: import("@playwright/test").Page, vp: { width: number; height: number }) {
+  await page.addInitScript(
+    ({ fixture, t0 }) => {
+      (window as never as { __AIJ_FIXTURE__: unknown }).__AIJ_FIXTURE__ = fixture;
+      localStorage.setItem("aij.theme", "dark");
+      localStorage.setItem("aij.onboarding.dismissed", "1");
+      sessionStorage.setItem("aij.ready.skipped", "1");
+      Date.now = () => t0;
+    },
+    { fixture: allStatuses, t0: T0 },
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: vp.width, height: vp.height });
+  await page.goto("/");
+}
+
+for (const vp of INSPECTOR_VIEWPORTS) {
+  test(`inspector — fleet-at-a-glance (empty) — ${vp.name}`, async ({ page }) => {
+    await seedInspectorPage(page, vp);
+    await expect(page.getByText("Nothing selected", { exact: false })).toBeVisible();
+    await page.screenshot({ path: resolve(GALLERY, `06-inspector/empty-${vp.name}.png`) });
+  });
+
+  test(`inspector — Instance / Overview — ${vp.name}`, async ({ page }) => {
+    await seedInspectorPage(page, vp);
+    await page.getByRole("tab", { name: "Sessions" }).click();
+    await page.getByRole("button", { name: /Work Max/ }).first().click();
+    await expect(page.getByRole("tab", { name: "Quality / Performance" })).toBeVisible();
+    await page.screenshot({ path: resolve(GALLERY, `06-inspector/instance-overview-${vp.name}.png`) });
+  });
+
+  test(`inspector — Account / Usage honest empty — ${vp.name}`, async ({ page }) => {
+    await seedInspectorPage(page, vp);
+    await page.getByRole("button", { name: "Accounts" }).click();
+    await page.getByRole("button", { name: "Inspect claude-code" }).first().click();
+    await expect(page.getByRole("tab", { name: "Usage" })).toBeVisible();
+    await page.getByRole("tab", { name: "Usage" }).click();
+    await expect(page.getByText("No measured usage yet", { exact: false })).toBeVisible();
+    await page.screenshot({ path: resolve(GALLERY, `06-inspector/account-usage-${vp.name}.png`) });
+  });
+
+  test(`inspector — Project / Processes — ${vp.name}`, async ({ page }) => {
+    await seedInspectorPage(page, vp);
+    await page.getByRole("tab", { name: "Projects" }).click();
+    await page.getByRole("button", { name: /ai-juggler/ }).first().click();
+    await expect(page.getByRole("tab", { name: "Processes" })).toBeVisible();
+    await page.screenshot({ path: resolve(GALLERY, `06-inspector/project-processes-${vp.name}.png`) });
+  });
 }
 
 // Determinism self-test (Req.4): same fixture twice → byte-identical PNG.
