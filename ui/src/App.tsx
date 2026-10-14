@@ -17,6 +17,7 @@ import {
   type Density,
 } from "./lib/density";
 import { hasLiveBackend } from "./lib/bridge";
+import { isHandoverShortcut, isStopShortcut } from "./lib/shortcuts";
 import { ProfilesScreen } from "./screens/Profiles";
 import { OnboardingWizard } from "./screens/OnboardingWizard";
 import { NewSessionModal } from "./screens/NewSession";
@@ -328,6 +329,24 @@ export default function App() {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
         setNewSession(true);
+      }
+      // ⌘. stops the selected live Instance (AJ-E407 Actions); ⌘⇧H
+      // focuses the hand-over section (RightInspector switches tabs).
+      if (isStopShortcut(event)) {
+        event.preventDefault();
+        if (
+          selectedSession &&
+          (selectedSession.status === "running" || selectedSession.status === "starting")
+        ) {
+          void import("./lib/bridge").then(async ({ terminalKill }) => {
+            await terminalKill(selectedSession.id);
+            void refresh();
+          });
+        }
+      }
+      if (isHandoverShortcut(event)) {
+        event.preventDefault();
+        window.dispatchEvent(new Event("aij:focus-handover"));
       }
       // ⌘K/Ctrl+K focuses the rail search (AJ-E404 Req.4); Esc clears it
       // inside the input and focus stays there.

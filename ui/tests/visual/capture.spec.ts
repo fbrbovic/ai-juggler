@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "16-onboarding-detect"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "16-onboarding-detect"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -97,7 +97,7 @@ for (const theme of THEMES) {
       // The row carries its account in the aria-label (initials disc on
       // screen) — click by accessible name (AJ-E402).
       await page.getByRole("button", { name: /Work Max/ }).first().click();
-      await expect(page.getByText("Continue on another account")).toBeVisible();
+      await expect(page.getByTestId("handover-section")).toBeVisible();
       await page.screenshot({
         path: resolve(GALLERY, `05-session-panel/populated-${vp.name}-${theme}.png`),
       });
@@ -373,6 +373,41 @@ for (const vp of INSPECTOR_VIEWPORTS) {
     await page.screenshot({ path: resolve(GALLERY, `06-inspector/project-processes-${vp.name}.png`) });
   });
 }
+
+// AJ-E407 inspector-content captures (Instance + Session tabs).
+test("inspector — Instance Overview fields (populated)", async ({ page }) => {
+  await seedInspectorPage(page, { width: 1440, height: 900 });
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  await page.getByRole("button", { name: /Work Max/ }).first().click();
+  await expect(page.getByTestId("instance-overview-fields")).toBeVisible();
+  await page.screenshot({ path: resolve(GALLERY, "07-inspector-content/instance-overview-populated.png") });
+});
+
+test("inspector — Instance Usage honest chart empties", async ({ page }) => {
+  await seedInspectorPage(page, { width: 1440, height: 900 });
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  await page.getByRole("button", { name: /Work Max/ }).first().click();
+  await page.getByRole("tab", { name: "Usage" }).click();
+  await expect(page.locator('section:not([hidden])').getByText('No data — arrives with statusline').first()).toBeVisible();
+  await page.screenshot({ path: resolve(GALLERY, "07-inspector-content/instance-usage.png") });
+});
+
+test("inspector — Instance Actions disabled-with-reason", async ({ page }) => {
+  await seedInspectorPage(page, { width: 1440, height: 900 });
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  await page.getByRole("button", { name: /Work Max/ }).first().click();
+  await page.getByRole("tab", { name: "Actions" }).click();
+  await expect(page.getByText("AJ-E202").first()).toBeVisible();
+  await page.screenshot({ path: resolve(GALLERY, "07-inspector-content/instance-actions.png") });
+});
+
+test("inspector — Session Overview ended stamp", async ({ page }) => {
+  await seedInspectorPage(page, { width: 1440, height: 900 });
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  await page.getByRole("button", { name: /Personal/ }).first().click();
+  await expect(page.getByText(/Ended|Conversation|Transcript not readable yet/).first()).toBeVisible();
+  await page.screenshot({ path: resolve(GALLERY, "07-inspector-content/session-overview.png") });
+});
 
 // Determinism self-test (Req.4): same fixture twice → byte-identical PNG.
 test("determinism — two captures are byte-identical", async ({ page }) => {  const capture = async (suffix: string) => {
