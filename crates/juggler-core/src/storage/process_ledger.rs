@@ -20,6 +20,10 @@ pub const STATE_STARTING: &str = "starting";
 pub const STATE_RUNNING: &str = "running";
 /// The process ended; the row retains 7 days for audit/cleanup.
 pub const STATE_EXITED: &str = "exited";
+/// Identity verification failed (AJ-E503 §6.2): PERMANENT — the row
+/// leaves every kill path and the candidate set forever, and the
+/// prune never touches it (neither running nor exited).
+pub const STATE_UNVERIFIABLE: &str = "unverifiable";
 
 /// Row role: the root harness process.
 pub const ROLE_ROOT: &str = "root";
@@ -370,6 +374,29 @@ impl ProcessLedgerRepo {
                 boot_id,
                 STATE_RUNNING
             ],
+        )?;
+        Ok(())
+    }
+
+    /// Flips the newest RUNNING row for `(pid, boot_id)` to the
+    /// permanent `unverifiable` state (AJ-E503 Req.5) — the row
+    /// exits `candidates` (running-only) and every kill path, and
+    /// the exited-only prune can never remove it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::Storage`] on SQLite failures.
+    pub fn mark_unverifiable(&self, pid: u32, boot_id: &str, now_ms: i64) -> Result<(), CoreError> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE process_ledger SET
+                 state = ?2, last_seen = ?3
+             WHERE rowid IN (
+                 SELECT rowid FROM process_ledger
+                 WHERE pid = ?1 AND boot_id = ?4 AND state = ?5
+                 ORDER BY first_seen DESC LIMIT 1
+             )",
+            params![pid, STATE_UNVERIFIABLE, now_ms, boot_id, STATE_RUNNING],
         )?;
         Ok(())
     }

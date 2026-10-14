@@ -22,7 +22,7 @@ use rusqlite::Connection;
 pub use accounts::AccountsRepo;
 pub use process_ledger::{
     LedgerRow, ProcessLedgerRepo, ROLE_HELPER, ROLE_LOGIN, ROLE_ROOT, STATE_EXITED, STATE_RUNNING,
-    STATE_STARTING,
+    STATE_STARTING, STATE_UNVERIFIABLE,
 };
 pub use profiles::ProfilesRepo;
 pub use projects::ProjectsRepo;
