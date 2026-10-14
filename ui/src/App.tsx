@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, Card, Chip, QuotaBar, QuotaRing, StatCard } from "./components/primitives";
 import { SessionCard, WorkflowRail, type Freshness, type WorkTab } from "./components/WorkflowRail";
+import { GoToPalette } from "./components/GoToPalette";
 import {
   IconFleet,
   IconJuggler,
@@ -37,6 +38,10 @@ import {
   sessionHandover,
   onFolderDropped,
   launchSession,
+  appSettingGet,
+  desktopFocus,
+  goToHotkeySet,
+  onGoToHotkey,
   type LaunchRecipeInfo,
   dashboardStats,
   fetchAppInfo,
@@ -131,6 +136,10 @@ export default function App() {
     { id: string; title: string; ended: boolean }[]
   >([]);
   const [newSession, setNewSession] = useState(false);
+  // AJ-E414: the "Go to instance…" palette — summoned by the global
+  // hotkey (backend event) or in-app ⌘K; the binding is rebindable.
+  const [goToOpen, setGoToOpen] = useState(false);
+  const [goToHotkey, setGoToHotkey] = useState("Alt+Space");
   const [wizard, setWizard] = useState(false);
 
   useEffect(() => {
@@ -383,6 +392,26 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [cycleDensity, density, setDensityAndStore]);
+
+  useEffect(() => {
+    void appSettingGet("go_to_hotkey").then((stored) => {
+      if (stored !== null) setGoToHotkey(stored);
+    });
+    return onGoToHotkey(() => setGoToOpen(true));
+  }, []);
+
+  // ⌘K/Ctrl+K toggles the palette in-app (the global binding covers
+  // the over-any-app case; both land on the same list).
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setGoToOpen((openNow) => !openNow);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const contextTitle =
     global !== null
@@ -642,6 +671,24 @@ export default function App() {
           )}
         </main>
       </div>
+
+      <GoToPalette
+        open={goToOpen}
+        onClose={() => setGoToOpen(false)}
+        sessions={sessions}
+        onFocusWindow={(instance) => {
+          void desktopFocus(instance.id).then(() => {
+            void refresh();
+            selectSession(instance.id);
+          });
+        }}
+        onOpenSession={selectSession}
+        hotkey={goToHotkey}
+        onHotkeyChange={async (combo) => {
+          await goToHotkeySet(combo);
+          setGoToHotkey(combo);
+        }}
+      />
 
       {wizard && (
         <OnboardingWizard

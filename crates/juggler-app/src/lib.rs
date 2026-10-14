@@ -13,6 +13,7 @@
 
 pub mod commands;
 pub mod error;
+pub mod focus;
 pub mod state;
 pub mod terminal;
 
@@ -36,19 +37,21 @@ pub const EVENT_SESSIONS_RESOURCES: &str = "session://resources";
 /// exists (AJ-E606+).
 pub const EVENT_SESSIONS_QUOTA: &str = "session://quota";
 
+/// Name of the event emitted when the global "Go to instance…"
+/// hotkey fires (AJ-E414 Req.4): the payload is empty — the UI lists
+/// live instances itself.
+pub const EVENT_GO_TO: &str = "app://go-to";
+
+/// The app-settings key holding the "Go to instance…" hotkey binding.
+pub const GO_TO_HOTKEY_KEY: &str = "go_to_hotkey";
+
+/// Default "Go to instance…" hotkey (SPEC §9.2 / deep-review §4.17:
+/// `⌥Space`, rebindable).
+pub const DEFAULT_GO_TO_HOTKEY: &str = "Alt+Space";
+
 /// Builds and runs the desktop application.
 pub fn run() {
-    let data_dir = state::resolve_data_dir().unwrap_or_else(|message| {
-        eprintln!("ai-juggler: cannot resolve data dir: {message}");
-        std::process::exit(1);
-    });
-    if let Err(message) = std::fs::create_dir_all(&data_dir) {
-        eprintln!(
-            "ai-juggler: cannot create {}: {message}",
-            data_dir.display()
-        );
-        std::process::exit(1);
-    }
+    let data_dir = bootstrap_data_dir();
     let app_state = Arc::new(state::AppState::init(data_dir).unwrap_or_else(|error| {
         eprintln!("ai-juggler: fatal: {error}");
         std::process::exit(1);
@@ -75,6 +78,18 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // The global "Go to instance…" hotkey (AJ-E414 Req.4): the
+        // registration itself happens in setup (stored binding or the
+        // default); a conflict there logs and leaves the in-app ⌘K path.
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        let _ = app.emit(EVENT_GO_TO, ());
+                    }
+                })
+                .build(),
+        )
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
@@ -114,9 +129,14 @@ pub fn run() {
             commands::account_set_renewal,
             commands::desktop_launch,
             commands::desktop_focus,
+            commands::app_setting_get,
+            commands::app_setting_set,
+            commands::go_to_hotkey_set,
+            commands::open_accessibility_settings,
         ])
         .setup(|app| {
             let _ = app.emit(EVENT_APP_READY, commands::AppInfo::current());
+            register_go_to_hotkey(app.handle());
             spawn_read_model_ticks(
                 app.handle().clone(),
                 resource_tick_state,
@@ -132,6 +152,42 @@ pub fn run() {
             eprintln!("ai-juggler: fatal: {error}");
             std::process::exit(1);
         });
+}
+
+/// Resolves and creates the data dir, exiting with a plain-language
+/// message on failure (the shell entry point's first duty).
+fn bootstrap_data_dir() -> std::path::PathBuf {
+    let data_dir = state::resolve_data_dir().unwrap_or_else(|message| {
+        eprintln!("ai-juggler: cannot resolve data dir: {message}");
+        std::process::exit(1);
+    });
+    if let Err(message) = std::fs::create_dir_all(&data_dir) {
+        eprintln!(
+            "ai-juggler: cannot create {}: {message}",
+            data_dir.display()
+        );
+        std::process::exit(1);
+    }
+    data_dir
+}
+
+/// Registers the stored (or default) "Go to instance…" hotkey
+/// (AJ-E414 Req.4). A conflict or a locked-down system key logs and
+/// continues — the palette stays reachable in-app (⌘K).
+fn register_go_to_hotkey(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    let hotkey = app
+        .state::<std::sync::Arc<state::AppState>>()
+        .storage
+        .lock()
+        .ok()
+        .and_then(|storage| storage.app_settings().get(GO_TO_HOTKEY_KEY).ok())
+        .flatten()
+        .unwrap_or_else(|| DEFAULT_GO_TO_HOTKEY.to_string());
+    if let Err(error) = app.global_shortcut().register(hotkey.as_str()) {
+        eprintln!("ai-juggler: hotkey {hotkey} not registered: {error}");
+    }
 }
 
 /// Read-model ticks (AJ-E401 Req.4): `session://updated` stays event-driven

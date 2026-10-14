@@ -11,6 +11,7 @@ import type { InstanceResourcesInfo } from "../types/generated/InstanceResources
 import type { LaunchRecipeInfo } from "../types/generated/LaunchRecipeInfo";
 import type { OrphanVerifyInfo } from "../types/generated/OrphanVerifyInfo";
 import type { DesktopLaunchInfo } from "../types/generated/DesktopLaunchInfo";
+import type { FocusOutcomeInfo } from "../types/generated/FocusOutcomeInfo";
 import type { ProcessesInfo } from "../types/generated/ProcessesInfo";
 import type { StopOutcomeInfo } from "../types/generated/StopOutcomeInfo";
 import type { LaunchResult } from "../types/generated/LaunchResult";
@@ -25,6 +26,7 @@ import type { TokenCountsInfo } from "../types/generated/TokenCountsInfo";
 
 export type {
   AppInfo,
+  FocusOutcomeInfo,
   QualitySignalsInfo,
   ProcessesInfo,
   StopOutcomeInfo,
@@ -59,6 +61,8 @@ export const EVENTS = {
   sessionsResources: "session://resources",
   /** 30 s quota tick (I-05 deltas; AJ-E401). */
   sessionsQuota: "session://quota",
+  /** Global "Go to instance…" hotkey (AJ-E414). */
+  goTo: "app://go-to",
 } as const;
 
 const hasBackend =
@@ -527,12 +531,82 @@ export async function desktopLaunch(accountId: string): Promise<DesktopLaunchInf
   return invoke<DesktopLaunchInfo>("desktop_launch", { accountId });
 }
 
-/** AJ-E413: open/activate the desktop app (app tier; window tier = AJ-E414). */
-export async function desktopFocus(sessionId: string): Promise<string> {
+/** AJ-E414: run the focus tiers for one desktop Instance — activate,
+ * match the recorded window identity, clear AXMinimized, AXRaise. The
+ * returned outcome says exactly which tier ran (never overstated). */
+export async function desktopFocus(sessionId: string): Promise<FocusOutcomeInfo> {
   if (!hasBackend) {
-    return "App opened — exact-window focus lands with AJ-E414";
+    // Harness seam (AJ-E802): captures may pin the outcome they render.
+    const w = window as unknown as { __AIJ_FOCUS_OUTCOME__?: FocusOutcomeInfo };
+    return (
+      w.__AIJ_FOCUS_OUTCOME__ ?? {
+        outcome: "Focused window",
+        permission_missing: false,
+        window_title: "notes-a",
+      }
+    );
   }
-  return invoke<string>("desktop_focus", { sessionId });
+  return invoke<FocusOutcomeInfo>("desktop_focus", { sessionId });
+}
+
+/** Reads one app-level setting (schema v10 kv); null = never set. */
+export async function appSettingGet(key: string): Promise<string | null> {
+  if (!hasBackend) {
+    return key === "go_to_hotkey" ? "Alt+Space" : null;
+  }
+  return invoke<string | null>("app_setting_get", { key });
+}
+
+/** Writes one app-level setting (empty value = reset to default). */
+export async function appSettingSet(key: string, value: string): Promise<void> {
+  if (!hasBackend) {
+    return;
+  }
+  await invoke("app_setting_set", { key, value });
+}
+
+/** Rebinds the global "Go to instance…" hotkey (registers with the OS
+ * first; a failure restores the previous binding). */
+export async function goToHotkeySet(hotkey: string): Promise<void> {
+  if (!hasBackend) {
+    return;
+  }
+  await invoke("go_to_hotkey_set", { hotkey });
+}
+
+/** Opens the system Accessibility privacy pane (the explainer's deep
+ * link; the target is fixed in Rust — never caller-supplied). */
+export async function openAccessibilitySettings(): Promise<void> {
+  if (!hasBackend) {
+    return;
+  }
+  await invoke("open_accessibility_settings");
+}
+
+/** Fires when the global "Go to instance…" hotkey is pressed anywhere
+ * in the system (AJ-E414 Req.4). No-backend: the palette stays
+ * reachable in-app via ⌘K. */
+export function onGoToHotkey(handler: () => void): () => void {
+  if (!hasBackend) {
+    return () => {};
+  }
+  let unlisten: (() => void) | null = null;
+  let disposed = false;
+  listen(EVENTS.goTo, () => handler())
+    .then((stop) => {
+      if (disposed) {
+        stop();
+      } else {
+        unlisten = stop;
+      }
+    })
+    .catch(() => {
+      // backend gone; ⌘K remains
+    });
+  return () => {
+    disposed = true;
+    unlisten?.();
+  };
 }
 
 /** AJ-E409: D-07 quality signals for the selected Instance (no score). */

@@ -9,7 +9,13 @@ import {
   IconSessions,
   IconTerminal,
 } from "./icons";
-import type { AccountInfo, InstanceInfo, LaunchRecipeInfo, ProjectInfo } from "../lib/bridge";
+import type {
+  AccountInfo,
+  FocusOutcomeInfo,
+  InstanceInfo,
+  LaunchRecipeInfo,
+  ProjectInfo,
+} from "../lib/bridge";
 import { renewalLabel } from "../lib/renewal";
 import { QuotaBar, formatCountdown, quotaTierTag, QuotaRing } from "./primitives";
 import { formatBytes, stateChip } from "./indicator";
@@ -502,18 +508,22 @@ type PanelProps = {
   focusBridge: FocusBridge;
 };
 
-/** The desktop focus action: resolves to the outcome label shown
- *  verbatim on the Instance (never overstated). */
-export type FocusBridge = (sessionId: string) => Promise<string>;
+/** The desktop focus action: resolves to the honest outcome (which
+ *  tier ran, the targeted window title — never overstated). */
+export type FocusBridge = (sessionId: string) => Promise<FocusOutcomeInfo>;
 
 const defaultFocusBridge: FocusBridge = async (sessionId) =>
   (await import("../lib/bridge")).desktopFocus(sessionId);
 
 function InstanceOverview(props: PanelProps) {
   const handoverRef = useRef<HTMLDivElement | null>(null);
-  // AJ-E413: which focus tier the last Open/Focus attempt achieved —
-  // shown verbatim, never overstated (AJ-E414 classifies further).
-  const [focusOutcome, setFocusOutcome] = useState<string | null>(null);
+  // AJ-E414: which focus tier the last Open/Focus attempt achieved —
+  // shown verbatim, never overstated. A missing Accessibility grant
+  // additionally raises the one-time explainer (Req.3).
+  const [focusOutcome, setFocusOutcome] = useState<FocusOutcomeInfo | null>(null);
+  const [explainerDismissed, setExplainerDismissed] = useState(
+    () => localStorage.getItem("aij.a11y-explainer.dismissed") === "1",
+  );
   useEffect(() => {
     const scroll = () => {
       // jsdom has no scrollIntoView; the guard keeps tests honest.
@@ -653,7 +663,11 @@ function InstanceOverview(props: PanelProps) {
                   try {
                     setFocusOutcome(await props.focusBridge(session.id));
                   } catch (cause) {
-                    setFocusOutcome(`Focus failed: ${String(cause)}`);
+                    setFocusOutcome({
+                      outcome: `Focus failed: ${String(cause)}`,
+                      permission_missing: false,
+                      window_title: null,
+                    });
                   }
                 }}
               >
@@ -690,8 +704,45 @@ function InstanceOverview(props: PanelProps) {
             )}
             {focusOutcome !== null && (
               <p className="text-[11.5px] text-muted" data-testid="desktop-focus-outcome">
-                {focusOutcome}
+                {focusOutcome.outcome}
+                {focusOutcome.window_title !== null ? (
+                  <span className="text-faint"> · window “{focusOutcome.window_title}”</span>
+                ) : null}
               </p>
+            )}
+            {focusOutcome?.permission_missing === true && !explainerDismissed && (
+              <div
+                role="note"
+                aria-label="Accessibility permission explainer"
+                className="flex flex-col gap-2 rounded-lg border border-warning/25 bg-warning-soft p-2.5"
+                data-testid="desktop-a11y-explainer"
+              >
+                <p className="text-[11.5px] leading-relaxed text-ink">
+                  Juggler can open the app; exact-window focus needs Accessibility permission
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    data-testid="open-a11y-settings"
+                    onClick={() => {
+                      void import("../lib/bridge").then((bridge) => bridge.openAccessibilitySettings());
+                    }}
+                  >
+                    Open System Settings…
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      localStorage.setItem("aij.a11y-explainer.dismissed", "1");
+                      setExplainerDismissed(true);
+                    }}
+                  >
+                    Don’t show again
+                  </Button>
+                </div>
+              </div>
             )}
             {!live && (
               <p className="text-[11px] text-faint" data-testid="desktop-state-line">
@@ -702,8 +753,8 @@ function InstanceOverview(props: PanelProps) {
             )}
             <p className="text-[11px] text-faint">
               The window is the app's own; Juggler tracks the process, never embeds it.
-              Exact-window focus (this instance's window, even minimised or on another Space)
-              lands with AJ-E414.
+              Focus matches this Instance's recorded window — a stale title or a collision is
+              reported, never guessed to a wrong window.
             </p>
           </Card>
         ) : (

@@ -351,3 +351,209 @@ fn real_desktop_launch_record_textedit() {
         "journal records the exit"
     );
 }
+
+// --- AJ-E414: the focus command over the scripted runner seam ---------
+
+/// A scripted focus runner: two windows; the pid path answers unless
+/// `pid` is 0 (the synthesized-identity case), the bundle path then
+/// re-discovers (pid 42424).
+struct FocusFixture {
+    permission_denied: std::sync::atomic::AtomicBool,
+}
+
+impl juggler_app::focus::ScriptRunner for FocusFixture {
+    fn osascript(&self, source: &str) -> Result<String, String> {
+        if self
+            .permission_denied
+            .load(std::sync::atomic::Ordering::SeqCst)
+            && source.contains("System Events")
+        {
+            return Err(
+                "execution error: osascript is not allowed assistive access (-25211)".into(),
+            );
+        }
+        if source.contains("get name of every window") {
+            if source.contains("unix id is 0") {
+                return Err("execution error: Can't get application process (-600)".into());
+            }
+            return Ok("notes-a, notes-b".into());
+        }
+        if source.contains("get unix id of") {
+            return Ok("42424".into());
+        }
+        Ok(String::new())
+    }
+    fn activate(&self, _bundle_id: &str) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[test]
+fn desktop_focus_runs_tiers_and_persists_first_sight_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = desktop_state(dir.path());
+    let info = commands::desktop_launch_arc(&state, "acc-desktop").unwrap();
+    // The launch recorded pid + bundle (no title yet).
+    {
+        let storage = state.storage.lock().unwrap();
+        let record = storage
+            .sessions()
+            .get(&juggler_core::model::SessionId::new(
+                info.session_id.clone(),
+            ))
+            .unwrap();
+        let identity = record.window.as_ref().unwrap();
+        assert_eq!(identity.pid, info.pid);
+        assert_eq!(
+            identity.bundle_id.as_deref(),
+            Some("dev.aijuggler.fake-desktop")
+        );
+        assert_eq!(identity.title, None);
+    }
+    let runner = std::sync::Arc::new(FocusFixture {
+        permission_denied: std::sync::atomic::AtomicBool::new(false),
+    });
+    let outcome = commands::desktop_focus_with(&state, &info.session_id, runner).unwrap();
+    assert_eq!(outcome.outcome, "Focused window");
+    assert!(!outcome.permission_missing);
+    assert_eq!(outcome.window_title.as_deref(), Some("notes-a"));
+    // First-sight title persisted on the Instance (Req.2).
+    let storage = state.storage.lock().unwrap();
+    let record = storage
+        .sessions()
+        .get(&juggler_core::model::SessionId::new(
+            info.session_id.clone(),
+        ))
+        .unwrap();
+    assert_eq!(
+        record.window.as_ref().unwrap().title.as_deref(),
+        Some("notes-a")
+    );
+}
+
+#[test]
+fn desktop_focus_on_a_ended_instance_reports_not_running_without_scripts() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = desktop_state(dir.path());
+    let storage = state.storage.lock().unwrap();
+    let mut record = juggler_core::model::InstanceRecord {
+        id: juggler_core::model::SessionId::new("sess-desk-done"),
+        conversation: None,
+        profile: ProfileId::new("rec-desktop"),
+        machine: juggler_core::model::MachineId::new("this-mac"),
+        kind: InstanceKind::Desktop,
+        project: None,
+        cwd: dir.path().to_path_buf(),
+        status: juggler_core::model::SessionStatus::Finished,
+        started_at: juggler_core::model::Timestamp::now(),
+        last_activity: None,
+        usage: Default::default(),
+        attention: None,
+        running: None,
+        window: None,
+        transcript_ref: None,
+    };
+    storage.sessions().insert(&record).unwrap();
+    record.status = juggler_core::model::SessionStatus::Finished;
+    drop(storage);
+    let runner = std::sync::Arc::new(FocusFixture {
+        permission_denied: std::sync::atomic::AtomicBool::new(false),
+    });
+    let outcome = commands::desktop_focus_with(&state, "sess-desk-done", runner).unwrap();
+    assert_eq!(outcome.outcome, "App not running — Relaunch?");
+    assert_eq!(outcome.window_title, None);
+}
+
+#[test]
+fn desktop_focus_refuses_terminal_instances_by_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = desktop_state(dir.path());
+    let runner = std::sync::Arc::new(FocusFixture {
+        permission_denied: std::sync::atomic::AtomicBool::new(false),
+    });
+    // A terminal-kind row (the read model forbids window focus).
+    let storage = state.storage.lock().unwrap();
+    storage
+        .sessions()
+        .insert(&juggler_core::model::InstanceRecord {
+            id: juggler_core::model::SessionId::new("sess-term"),
+            conversation: None,
+            profile: ProfileId::new("rec-desktop"),
+            machine: juggler_core::model::MachineId::new("this-mac"),
+            kind: InstanceKind::Terminal,
+            project: None,
+            cwd: dir.path().to_path_buf(),
+            status: juggler_core::model::SessionStatus::Running,
+            started_at: juggler_core::model::Timestamp::now(),
+            last_activity: None,
+            usage: Default::default(),
+            attention: None,
+            running: None,
+            window: None,
+            transcript_ref: None,
+        })
+        .unwrap();
+    drop(storage);
+    let error = commands::desktop_focus_with(&state, "sess-term", runner).unwrap_err();
+    assert!(error.to_string().contains("desktop instances"), "{error}");
+}
+
+#[test]
+fn desktop_focus_without_recorded_identity_redisovers_by_bundle() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = desktop_state(dir.path());
+    // A pre-v10-style desktop row: live, but no window identity.
+    {
+        let storage = state.storage.lock().unwrap();
+        storage
+            .sessions()
+            .insert(&juggler_core::model::InstanceRecord {
+                id: juggler_core::model::SessionId::new("sess-desk-legacy"),
+                conversation: None,
+                profile: ProfileId::new("rec-desktop"),
+                machine: juggler_core::model::MachineId::new("this-mac"),
+                kind: InstanceKind::Desktop,
+                project: None,
+                cwd: dir.path().to_path_buf(),
+                status: juggler_core::model::SessionStatus::Running,
+                started_at: juggler_core::model::Timestamp::now(),
+                last_activity: None,
+                usage: Default::default(),
+                attention: None,
+                running: None,
+                window: None,
+                transcript_ref: None,
+            })
+            .unwrap();
+    }
+    let runner = std::sync::Arc::new(FocusFixture {
+        permission_denied: std::sync::atomic::AtomicBool::new(false),
+    });
+    let outcome = commands::desktop_focus_with(&state, "sess-desk-legacy", runner).unwrap();
+    assert_eq!(outcome.outcome, "Focused window");
+    // The synthesized identity was enriched and persisted.
+    let storage = state.storage.lock().unwrap();
+    let record = storage
+        .sessions()
+        .get(&juggler_core::model::SessionId::new("sess-desk-legacy"))
+        .unwrap();
+    let identity = record.window.as_ref().unwrap();
+    assert_eq!(identity.pid, 42_424, "re-discovered pid persisted");
+    assert_eq!(identity.title.as_deref(), Some("notes-a"));
+}
+
+#[test]
+fn desktop_focus_permission_denial_degrades_with_flag() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = desktop_state(dir.path());
+    let info = commands::desktop_launch_arc(&state, "acc-desktop").unwrap();
+    let runner = std::sync::Arc::new(FocusFixture {
+        permission_denied: std::sync::atomic::AtomicBool::new(true),
+    });
+    let outcome = commands::desktop_focus_with(&state, &info.session_id, runner).unwrap();
+    assert_eq!(outcome.outcome, "App opened — window not found");
+    assert!(
+        outcome.permission_missing,
+        "the UI explainer keys on this flag"
+    );
+}

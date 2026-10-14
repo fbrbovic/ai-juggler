@@ -471,6 +471,31 @@ pub struct InstanceRecord {
     /// the transcript feed (AJ-E412); `None` = not observed yet —
     /// never filled from the launch overlay. (Storage v9 JSON blob.)
     pub running: Option<RunningModel>,
+    /// The desktop window identity for this Instance (AJ-E414 Req.2),
+    /// recorded at launch (owning PID + bundle id) and enriched at
+    /// first sight / each focus attempt (window title; `CGWindow` id
+    /// where a source exists). `None` for terminal Instances — never
+    /// guessed. (Storage v10 JSON blob.)
+    pub window: Option<WindowIdentity>,
+}
+
+/// The exact window a desktop Instance owns (AJ-E414): focus matches
+/// THIS window, not just the app. Re-discovered on every focus attempt;
+/// stale identities are re-enumerated, never assumed.
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub struct WindowIdentity {
+    /// The OS process id that owns the window.
+    pub pid: u32,
+    /// Bundle identifier (macOS), when known.
+    pub bundle_id: Option<String>,
+    /// Window title at discovery time — the AX match key. `None` until
+    /// first sight.
+    pub title: Option<String>,
+    /// `CGWindow` id, where a source exists for it (none today — the
+    /// `AppleScript` enumeration exposes titles only, and CoreGraphics
+    /// FFI is barred by the workspace `unsafe_code = "forbid"` law).
+    /// Never fabricated.
+    pub cgwindow_id: Option<u64>,
 }
 
 /// ADR-0008: old name kept one minor version as a pure alias.

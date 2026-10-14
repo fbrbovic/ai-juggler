@@ -95,6 +95,7 @@ fn seed_instance(state: &Arc<AppState>, dir: &Path, id: &str) -> SessionId {
             attention: None,
             running: None,
             transcript_ref: None,
+            window: None,
         })
         .unwrap();
     session

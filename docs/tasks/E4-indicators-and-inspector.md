@@ -342,7 +342,7 @@
 - Req.4: capability-gated both ways (`ships no desktop app` refusal test; fake-desktop `launch_spec` refuses CLI). No dual-capability provider ships in the default registry yet — the Add-time dual offer renders when one does (ZCode, SPEC.md:134); the seam is the capability bits + both launch paths.
 - Evidence: `docs/qa/evidence/AJ-E413/` (fake-desktop e2e log, real TextEdit launch record incl. journal lines, manifest); gallery `_gallery/13-desktop/` (6 captures, states running/exited/crashed/single-account warning, dark+light).
 
-### AJ-E414 Focus Window service — go to that exact instance's window | Status: TODO | Priority P0 | Effort M | Depends: AJ-E413
+### AJ-E414 Focus Window service — go to that exact instance's window | Status: DONE-EVIDENCED (evidence: docs/qa/evidence/AJ-E414/manifest.md) | Priority P0 | Effort M | Depends: AJ-E413
 **Goal**: One click (or hotkey) from any desktop Instance raises that application's exact window, even when the app holds several windows or sits on another Space or minimised.
 **User story**: As a user juggling three desktop windows, I want "Focus window" to land me on the right window, not just the right app.
 **Requirements**:
@@ -359,6 +359,15 @@
 **Files to touch**: new `crates/juggler-app/src/focus.rs` (AX via accessibility-sys or objc2-app-kit — pin in PR), `crates/juggler-app/src/commands.rs`, `ui/src/screens/WorkPanels.tsx`, `ui/src/App.tsx` (hotkey), `crates/juggler-core/src/model.rs` (window identity fields).
 **Research basis**: External macOS evidence gathered 2026-10-13: AXRaise + NSRunningApplication.activate pattern; minimised windows need AXMinimized cleared first (claude-notifications-go issue #67 pattern); SPEC.md:335 "focus its window"; wireframe screen 24.
 **Handover note**: Traps: AXRaise on a minimised window is a silent no-op; windows on another Space may be invisible to AX until the app is activated — activate, then re-enumerate. Never focus by PID alone when titles collide; record the ambiguity as `window not found`.
+
+*Implementation mapping (corrected in this task's PR per the claiming protocol)*:
+- Mechanism pin (recorded deviation): `accessibility-sys`/`objc2-app-kit` require `unsafe` FFI, barred by the workspace `unsafe_code = "forbid"` law — the same AX operations run through `/usr/bin/osascript` + System Events, and tier (a) activation via `/usr/bin/open -b` (the `LaunchServices` equivalent of `NSRunningApplication.activate`, needing no grant at all).
+- Tiers (Req.1): new `crates/juggler-app/src/focus.rs` — `FocusService::attempt` over the scriptable `ScriptRunner` seam: activate ALWAYS first (other-Space trap), enumerate by recorded PID (stale → re-discover by bundle id, persist fresh PID), match recorded title (absent → first-sight adoption; ≠1 match → `window not found`), then one atomic raise script (`set AXMinimized false` → `perform AXRaise` → `set frontmost`; clearing FIRST per the no-op trap).
+- Identity (Req.2): `InstanceRecord.window: Option<WindowIdentity>` (schema v10 additive blob + `app_settings` kv table); pid+bundle recorded at `desktop_launch`; title adopted at first sight; `cgwindow_id` honestly `null` (no non-FFI source).
+- Permission (Req.3): every System Events error classified by stderr (`is_permission_denied`) → degrade to activation + `FocusOutcomeInfo.permission_missing`; panel renders the one-time dismissible explainer (copy exact) + the fixed deep link (`open_accessibility_settings`). Live-caught during the real record: process-NAME probes pass WITHOUT the grant (window reads are the AX-protected surface) — classification therefore lives on the enumeration errors, not an upfront probe.
+- Hotkey + palette (Req.4): `tauri-plugin-global-shortcut` (stored binding, default `Alt+Space`; `go_to_hotkey_set` registers first, restores on failure) emitting `app://go-to`; the "Go to instance…" palette (⌘K or hotkey) — live instances, desktop first, combobox a11y, Enter → window focus / panel open, in-palette rebind capture. The full §4.17 palette remains its own unowned surface.
+- Outcomes (Req.5): copy-exact `Focused window` / `App opened — window not found` / `App not running — Relaunch?` as text on the Instance (+ targeted window title).
+- Evidence: `docs/qa/evidence/AJ-E414/` — 12/12 tier unit tests (two-window fixture 10/10 with trap-order asserts), 9/9 desktop integration, real two-window TextEdit record (this machine: degraded tier 10/10 in 118–189 ms; the granted-machine focused record awaits the maintainer's Accessibility toggle — same command re-run); gallery `_gallery/14-focus/` (4 captures, vision-verified).
 
 ### AJ-E415 Desktop live preview — read-only window mirror in the panel | Status: TODO | Priority P1 | Effort L | Depends: AJ-E413, AJ-E414
 **Goal**: Show a live, read-only ScreenCaptureKit preview of a desktop instance's window inside its panel, so its state is glanceable without switching away; clicking the preview focuses the real window.
