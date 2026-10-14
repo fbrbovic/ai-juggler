@@ -139,7 +139,7 @@ impl LiveStatsCollector {
     }
 
     /// One 2 s sampling tick (AJ-E410): targeted refresh of known pids
-    /// (full scan every [`FULL_SCAN_EVERY`]th tick for discovery),
+    /// (full scan every 5th tick for discovery),
     /// recompute per-tree rows + stats, append one ring sample per live
     /// tree. Finished sessions keep their last rows frozen (the exit
     /// snapshot source) and report definitive dead stats.
