@@ -12,6 +12,7 @@ use juggler_adapter::LaunchSpec;
 use juggler_core::model::{SessionId, Timestamp};
 
 use crate::error::SupervisorError;
+use crate::group;
 use crate::journal::Journal;
 use crate::lifecycle::{ExitKind, LifecycleEvent};
 use crate::ring::OutputRing;
@@ -26,6 +27,10 @@ pub struct SpawnedProcess {
     pub session: SessionId,
     /// OS process id.
     pub pid: u32,
+    /// The child's process-group id (AJ-E502): one `getpgid` at spawn;
+    /// `None` where the platform has no groups — the ownership
+    /// identity later kill paths target (never a guessed group).
+    pub pgid: Option<u32>,
 }
 
 /// Live process statistics for one supervised Instance (AJ-E401 read
@@ -192,6 +197,10 @@ impl LiveStatsCollector {
     /// One batched helper upsert per live session per 2 s (AJ-E501
     /// Req.4): rows come from the freshly rebuilt trees; the root's
     /// own row was patched at spawn and is owned by the exit patch.
+    /// Per helper it also records the LIVE process-group id and flags
+    /// `escaped_group` when it left the root's group (AJ-E502 Req.4)
+    /// — one `getpgid` per helper riding the existing tick, zero new
+    /// polling; the flag is sticky in the store (MAX), never un-set.
     fn ledger_upserts(&mut self, supervisor: &Supervisor, now_ms: i64) {
         let Some(ledger) = supervisor.ledger.clone() else {
             return;
@@ -213,14 +222,24 @@ impl LiveStatsCollector {
             let Some(ctx) = contexts.get(session) else {
                 continue;
             };
+            let root_pgid = supervisor.root_pgid(session);
             let mut helpers = Vec::new();
             for row in tree.rows.iter().skip(1) {
                 let started_at = now_ms
                     .checked_sub(i64::try_from(row.age_ms).unwrap_or(0))
                     .map(|ms| ms.div_euclid(1000));
+                // Containment probe: a helper that itself `setsid`'d has
+                // a live PGID ≠ the root's. Probe failure (process gone
+                // this tick) claims NOTHING — the sticky store flag owns
+                // the verdict, and absence stays absence.
+                let live_pgid = crate::group::pgid_of(row.pid).ok();
+                let escaped_group = match (root_pgid, live_pgid) {
+                    (Some(root), Some(live)) => live != root,
+                    _ => false,
+                };
                 helpers.push(juggler_core::storage::LedgerRow {
                     pid: Some(row.pid),
-                    pgid: None,
+                    pgid: live_pgid,
                     started_at,
                     exe_path: row.name.clone(),
                     cmdline_hash: format!("name:{}", row.name),
@@ -243,6 +262,7 @@ impl LiveStatsCollector {
                     peak_cpu: row.cpu_pct,
                     exit_kind: None,
                     reaped_by_us: None,
+                    escaped_group,
                     first_seen: now_ms,
                     last_seen: now_ms,
                 });
@@ -442,10 +462,15 @@ fn tree_rows(
 struct ChildExtras {
     pty: Option<Arc<Mutex<PtyHandle>>>,
     last_output_ms: Arc<std::sync::atomic::AtomicI64>,
+    /// The child's process-group id (AJ-E502): the deterministic kill
+    /// target; `None` where the platform has no groups (honest).
+    pgid: Option<u32>,
 }
 
 struct ChildHandle {
     pid: u32,
+    /// The child's process-group id (AJ-E502, the ownership identity).
+    pgid: Option<u32>,
     ring: Arc<Mutex<OutputRing>>,
     finished: Arc<AtomicBool>,
     /// Last output arrival (epoch ms, 0 = none) — feeds the Stuck rule
@@ -601,6 +626,7 @@ impl Supervisor {
             peak_cpu: None,
             exit_kind: None,
             reaped_by_us: None,
+            escaped_group: false,
             first_seen: now,
             last_seen: now,
         }
@@ -660,7 +686,10 @@ impl Supervisor {
             self.spawn_piped(session, spec)?
         };
         let started_at = Self::os_start_time(spawned.pid);
-        self.ledger_write(|ledger| ledger.spawned(session, spawned.pid, None, started_at));
+        // AJ-E502 Req.2: the PGID captured per path (piped: own group
+        // leader; PTY: one getpgid) lands in the ledger patch before
+        // `spawn` returns.
+        self.ledger_write(|ledger| ledger.spawned(session, spawned.pid, spawned.pgid, started_at));
         if let Some(journal) = &self.journal {
             journal.record_spawned(session, spawned.pid, &spec.program)?;
         }
@@ -680,6 +709,7 @@ impl Supervisor {
     /// # Errors
     ///
     /// Returns [`SupervisorError::Spawn`] when the process cannot start.
+    #[allow(clippy::similar_names)] // pid/pgid are the kernel's own names
     pub fn spawn_desktop(
         &self,
         session: &SessionId,
@@ -720,7 +750,8 @@ impl Supervisor {
         })?;
         let pid = child.id();
         let started_at = Self::os_start_time(pid);
-        self.ledger_write(|ledger| ledger.spawned(session, pid, None, started_at));
+        let pgid = group::pgid_of(pid).ok();
+        self.ledger_write(|ledger| ledger.spawned(session, pid, pgid, started_at));
         let ring = Arc::new(Mutex::new(OutputRing::new(DEFAULT_RING_CAPACITY)));
         let child = Arc::new(Mutex::new(child));
         let finished = Arc::new(AtomicBool::new(false));
@@ -737,6 +768,7 @@ impl Supervisor {
             ChildExtras {
                 pty: None,
                 last_output_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+                pgid,
             },
         );
         if let Some(journal) = &self.journal {
@@ -772,9 +804,11 @@ impl Supervisor {
         Ok(SpawnedProcess {
             session: session.clone(),
             pid,
+            pgid,
         })
     }
 
+    #[allow(clippy::similar_names)] // pid/pgid are the kernel's own names
     fn spawn_piped(
         &self,
         session: &SessionId,
@@ -790,11 +824,24 @@ impl Supervisor {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        // AJ-E502: the piped root becomes its OWN group leader at
+        // spawn — every in-group helper is later reachable as one
+        // owned group (deterministic kill), not a ppid-walk snapshot.
+        // Where groups do not exist, spawn proceeds groupless (the
+        // honest `None`, never a pretended group).
+        if let Err(group::GroupError::UnsupportedPlatform) = group::make_group_leader(&mut command)
+        {
+            eprintln!(
+                "ai-juggler: process groups unsupported; tracking pid-only for {}",
+                session.as_str()
+            );
+        }
         let child = command.spawn().map_err(|e| SupervisorError::Spawn {
             program: spec.program.clone(),
             message: e.to_string(),
         })?;
         let pid = child.id();
+        let pgid = group::pgid_of(pid).ok();
         let ring = Arc::new(Mutex::new(OutputRing::new(DEFAULT_RING_CAPACITY)));
         let child = Arc::new(Mutex::new(child));
         let finished = Arc::new(AtomicBool::new(false));
@@ -813,6 +860,7 @@ impl Supervisor {
             ChildExtras {
                 pty: None,
                 last_output_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+                pgid,
             },
         );
         let (out_atomic, err_atomic) = (Arc::clone(&last_output), last_output);
@@ -861,9 +909,11 @@ impl Supervisor {
         Ok(SpawnedProcess {
             session: session.clone(),
             pid,
+            pgid,
         })
     }
 
+    #[allow(clippy::similar_names)] // pid/pgid are the kernel's own names
     fn spawn_pty(
         &self,
         session: &SessionId,
@@ -956,6 +1006,11 @@ impl Supervisor {
             }
         });
 
+        // AJ-E502 Req.1: the PTY path RECORDS the child's PGID (one
+        // getpgid) instead of assuming portable-pty's session
+        // grouping — the identity comes from the kernel, not the
+        // wrapper's convention.
+        let pgid = group::pgid_of(pid).ok();
         self.register(
             session.clone(),
             pid,
@@ -965,11 +1020,13 @@ impl Supervisor {
             ChildExtras {
                 pty,
                 last_output_ms: last_output,
+                pgid,
             },
         );
         Ok(SpawnedProcess {
             session: session.clone(),
             pid,
+            pgid,
         })
     }
 
@@ -989,6 +1046,7 @@ impl Supervisor {
         let last_output_ms = parts.last_output_ms;
         let handle = Arc::new(ChildHandle {
             pid,
+            pgid: parts.pgid,
             ring,
             finished,
             last_output_ms: Arc::clone(&last_output_ms),
@@ -1148,6 +1206,18 @@ impl Supervisor {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// The root's process-group id as captured at spawn (AJ-E502) —
+    /// the containment key helpers are compared against at reconcile
+    /// time. `None` when the platform lacks groups (Windows seam,
+    /// M7-5) or the session is not supervised.
+    #[must_use]
+    pub fn root_pgid(&self, session: &SessionId) -> Option<u32> {
+        self.children
+            .lock()
+            .ok()
+            .and_then(|children| children.get(session).and_then(|h| h.pgid))
     }
 
     /// Feeds keyboard input to a PTY session's process.

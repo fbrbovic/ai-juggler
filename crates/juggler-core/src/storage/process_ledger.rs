@@ -82,6 +82,10 @@ pub struct LedgerRow {
     pub exit_kind: Option<String>,
     /// True when Juggler reaped the exit (waited the root).
     pub reaped_by_us: Option<bool>,
+    /// True when the helper left the root's process group (live PGID ≠
+    /// root PGID at reconcile time — AJ-E502 Req.4). Sticky once set:
+    /// containment is void for this row, forever.
+    pub escaped_group: bool,
     /// When the Intent row was first written, epoch ms.
     pub first_seen: i64,
     /// Last update, epoch ms.
@@ -149,6 +153,7 @@ impl ProcessLedgerRepo {
                 peak_cpu REAL,
                 exit_kind TEXT,
                 reaped_by_us INTEGER,
+                escaped_group INTEGER NOT NULL DEFAULT 0,
                 first_seen INTEGER NOT NULL,
                 last_seen INTEGER NOT NULL
             );
@@ -159,6 +164,11 @@ impl ProcessLedgerRepo {
             CREATE INDEX IF NOT EXISTS process_ledger_state_last_seen
                 ON process_ledger(state, last_seen);",
         )?;
+        // v13's `escaped_group` column on a LEGACY v12 file is added by
+        // the main store's migration (`Storage::open` always runs before
+        // this repo in the app; two writers for one ALTER would race to
+        // "duplicate column"). This CREATE only builds standalone
+        // ledgers (supervisor tests), already in the v13 shape.
         Ok(Self {
             conn: std::sync::Mutex::new(conn),
         })
@@ -265,7 +275,9 @@ impl ProcessLedgerRepo {
                 "UPDATE process_ledger SET
                      last_seen = ?2,
                      peak_rss = MAX(COALESCE(peak_rss, 0), COALESCE(?3, 0)),
-                     peak_cpu = MAX(COALESCE(peak_cpu, 0.0), COALESCE(?4, 0.0))
+                     peak_cpu = MAX(COALESCE(peak_cpu, 0.0), COALESCE(?4, 0.0)),
+                     pgid = COALESCE(?8, pgid),
+                     escaped_group = MAX(escaped_group, ?9)
                  WHERE session_id = ?1 AND pid = ?5 AND boot_id = ?6 AND state = ?7",
             )?;
             let mut insert = tx.prepare(
@@ -273,9 +285,11 @@ impl ProcessLedgerRepo {
                      (pid, pgid, started_at, exe_path, cmdline_hash, cmdline_trunc, boot_id,
                       session_id, instance_id, provider, account_id, project_id, machine_id,
                       root_pid, parent_pid, depth, role, state, listens_on, cwd,
-                      peak_rss, peak_cpu, exit_kind, reaped_by_us, first_seen, last_seen)
+                      peak_rss, peak_cpu, exit_kind, reaped_by_us, escaped_group,
+                      first_seen, last_seen)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                         ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, NULL, NULL, ?23, ?23)",
+                         ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, NULL, NULL, ?23,
+                         ?24, ?24)",
             )?;
             for row in helpers {
                 let changed = update.execute(params![
@@ -286,6 +300,8 @@ impl ProcessLedgerRepo {
                     row.pid,
                     row.boot_id,
                     STATE_RUNNING,
+                    row.pgid,
+                    i64::from(row.escaped_group),
                 ])?;
                 if changed == 0 {
                     insert.execute(params![
@@ -311,6 +327,7 @@ impl ProcessLedgerRepo {
                         row.cwd,
                         row.peak_rss,
                         row.peak_cpu,
+                        i64::from(row.escaped_group),
                         row.first_seen,
                     ])?;
                 }
@@ -444,6 +461,7 @@ fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LedgerRow> {
         peak_cpu: row.get("peak_cpu")?,
         exit_kind: row.get("exit_kind")?,
         reaped_by_us: row.get::<_, Option<i64>>("reaped_by_us")?.map(|v| v != 0),
+        escaped_group: row.get::<_, i64>("escaped_group")? != 0,
         first_seen: row.get("first_seen")?,
         last_seen: row.get("last_seen")?,
     })

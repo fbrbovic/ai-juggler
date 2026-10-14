@@ -170,7 +170,14 @@ CREATE INDEX process_ledger_pid_start ON process_ledger(pid, started_at, boot_id
 CREATE INDEX process_ledger_state_last_seen ON process_ledger(state, last_seen);
 ";
 
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12];
+/// v13 (AJ-E502): escaped-group flag — a helper whose live PGID left
+/// the root's group at reconcile time. Sticky once set: containment
+/// is void for that row, forever (pass2 §4 F-9).
+const V13: &str = "
+ALTER TABLE process_ledger ADD COLUMN escaped_group INTEGER NOT NULL DEFAULT 0;
+";
+
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13];
 
 /// An opened AI Juggler database with typed repositories.
 #[derive(Debug)]

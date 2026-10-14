@@ -23,4 +23,4 @@ thiserror = "2.0.21"
 tempfile = "3.27.0"
 
 [target."cfg(unix)".dependencies]
-nix = { version = "0.31.3", features = ["signal"] }
+nix = { version = "0.31.3", features = ["signal", "process"] }

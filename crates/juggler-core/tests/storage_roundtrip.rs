@@ -543,8 +543,8 @@ fn v4_database_upgrades_in_place_to_v5_with_identical_values() {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     assert_eq!(
-        version, 12,
-        "v4 → current (v12, AJ-E501 process ledger) exactly once, on open"
+        version, 13,
+        "v4 → current (v13, AJ-E502 escaped_group) exactly once, on open"
     );
 
     let account = storage.accounts().get(&AccountId::new("acc-1")).unwrap();
@@ -571,7 +571,7 @@ fn v4_database_upgrades_in_place_to_v5_with_identical_values() {
         .raw_conn()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 12);
+    assert_eq!(version, 13);
     assert!(storage.sessions().get(&SessionId::new("sess-1")).is_ok());
 }
 
@@ -846,6 +846,7 @@ fn process_ledger_lifecycle_roundtrip() {
         peak_cpu: None,
         exit_kind: None,
         reaped_by_us: None,
+        escaped_group: false,
         first_seen: 1_000,
         last_seen: 1_000,
     };
@@ -870,7 +871,7 @@ fn process_ledger_lifecycle_roundtrip() {
     assert_eq!(rows[0].state, STATE_RUNNING);
 
     // 3. Helper upserts batched; repeats refresh, never duplicate.
-    let helper = |pid: u32, rss: Option<i64>| LedgerRow {
+    let helper = |pid: u32, rss: Option<i64>, escaped: bool| LedgerRow {
         pid: Some(pid),
         pgid: Some(4242),
         started_at: Some(123_456),
@@ -895,15 +896,16 @@ fn process_ledger_lifecycle_roundtrip() {
         peak_cpu: None,
         exit_kind: None,
         reaped_by_us: None,
+        escaped_group: escaped,
         first_seen: 2_000,
         last_seen: 2_000,
     };
     repo.upsert_helpers(
         "sess-ledger",
-        &[helper(5001, Some(1_000)), helper(5002, None)],
+        &[helper(5001, Some(1_000), false), helper(5002, None, false)],
     )
     .unwrap();
-    repo.upsert_helpers("sess-ledger", &[helper(5001, Some(2_000))])
+    repo.upsert_helpers("sess-ledger", &[helper(5001, Some(2_000), false)])
         .unwrap();
     let rows = repo.rows_for_session("sess-ledger").unwrap();
     assert_eq!(rows.len(), 3, "root + two helpers, no duplicates");
@@ -911,6 +913,30 @@ fn process_ledger_lifecycle_roundtrip() {
     assert_eq!(h1.role, juggler_core::storage::ROLE_HELPER);
     assert_eq!(h1.peak_rss, Some(2_000), "peaks take the max");
     assert_eq!(h1.depth, 1);
+
+    // 3b. AJ-E502: a setsid'd helper lands flagged with its live pgid;
+    // the flag is STICKY — a later tick computing false (probe raced
+    // the exit) never revokes the no-containment verdict.
+    let mut escapee = helper(5003, None, true);
+    escapee.pgid = Some(5003);
+    repo.upsert_helpers("sess-ledger", &[escapee]).unwrap();
+    let esc = repo
+        .rows_for_session("sess-ledger")
+        .unwrap()
+        .into_iter()
+        .find(|r| r.pid == Some(5003))
+        .unwrap();
+    assert!(esc.escaped_group);
+    assert_eq!(esc.pgid, Some(5003), "live pgid recorded on the row");
+    repo.upsert_helpers("sess-ledger", &[helper(5003, None, false)])
+        .unwrap();
+    let esc = repo
+        .rows_for_session("sess-ledger")
+        .unwrap()
+        .into_iter()
+        .find(|r| r.pid == Some(5003))
+        .unwrap();
+    assert!(esc.escaped_group, "escape flag survives a clean re-tick");
 
     // 4. Exit patch (reaped root) + candidates exclude it.
     repo.mark_exited(4242, "boot-42", "code:0", true, 3_000)
@@ -941,5 +967,57 @@ fn process_ledger_lifecycle_roundtrip() {
     // (root exit, app exit, reboot are all just "reopen later").
     drop(repo);
     let repo = ProcessLedgerRepo::open(&db).unwrap();
-    assert_eq!(repo.rows_for_session("sess-ledger").unwrap().len(), 2);
+    assert_eq!(repo.rows_for_session("sess-ledger").unwrap().len(), 3);
+}
+
+/// AJ-E502 (schema v13): a genuine v12 ledger file (pre-`escaped_group`)
+/// gains the column on every open path — the repo's standalone init and
+/// the main store's migration — idempotently, with existing rows
+/// reading `escaped_group = false` (never claimed escaped, never
+/// claimed contained).
+#[test]
+fn v12_ledger_upgrades_in_place_to_v13() {
+    use juggler_core::storage::ProcessLedgerRepo;
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("v12-ledger.sqlite");
+    {
+        let conn = Connection::open(&file).unwrap();
+        let migrations = Storage::migrations();
+        conn.execute_batch(&migrations[..12].join(";")).unwrap();
+        conn.pragma_update(None, "user_version", 12).unwrap();
+        conn.execute(
+            "INSERT INTO process_ledger
+                 (pid, pgid, started_at, exe_path, cmdline_hash, cmdline_trunc, boot_id,
+                  session_id, instance_id, provider, account_id, project_id, machine_id,
+                  root_pid, parent_pid, depth, role, state, listens_on, cwd,
+                  peak_rss, peak_cpu, exit_kind, reaped_by_us, first_seen, last_seen)
+             VALUES (9001, 9001, NULL, '/bin/sh', 'h', 'sh', 'boot-1',
+                     'sess-old', NULL, 'claude-code', NULL, NULL, 'machine-stable',
+                     NULL, NULL, 0, 'root', 'running', NULL, '/tmp',
+                     NULL, NULL, NULL, NULL, 1, 1)",
+            [],
+        )
+        .unwrap();
+    }
+
+    // Production ordering: the main store migrates (exactly once)…
+    let storage = Storage::open(&file).unwrap();
+    let version: i64 = storage
+        .raw_conn()
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 13, "v12 → v13 exactly once, on open");
+    drop(storage);
+
+    // …then the ledger repo opens the same file (CREATE no-ops, the
+    // migration's column is already there) and reads v12 rows as
+    // not-escaped. Reopening is idempotent.
+    let repo = ProcessLedgerRepo::open(&file).unwrap();
+    let rows = repo.rows_for_session("sess-old").unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(!rows[0].escaped_group, "v12 rows default to not-escaped");
+    drop(repo);
+    let repo = ProcessLedgerRepo::open(&file).unwrap();
+    assert_eq!(repo.rows_for_session("sess-old").unwrap().len(), 1);
 }
