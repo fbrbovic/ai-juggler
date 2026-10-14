@@ -36,6 +36,7 @@ function mk(overrides: Partial<InstanceInfo> = {}): InstanceInfo {
     started_at_ms: NOW - 42 * 60_000,
     last_activity_ms: NOW - 10_000,
     machine_id: "this-mac",
+    cwd: "/Users/dev/ai-juggler",
     kind: "terminal",
     project_id: "proj-1",
     conversation_id: null,

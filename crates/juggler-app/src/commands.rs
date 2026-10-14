@@ -276,6 +276,8 @@ pub struct InstanceInfo {
     pub last_activity_ms: Option<i64>,
     /// Fleet dimension (D-13): machine the Instance runs on.
     pub machine_id: String,
+    /// Working directory (AJ-E407 Overview: copyable project + cwd).
+    pub cwd: String,
     /// Instance kind: `terminal` | `desktop`.
     pub kind: String,
     /// Owning project id, when the cwd resolved to a tracked project.
@@ -1468,6 +1470,7 @@ fn session_infos(storage: &Storage, live: &LiveStatsMap) -> AppResult<Vec<Instan
                 started_at_ms: record.started_at.millis(),
                 last_activity_ms: record.last_activity.as_ref().map(|t| t.millis()),
                 machine_id: record.machine.to_string(),
+                cwd: record.cwd.to_string_lossy().into_owned(),
                 kind: record.kind.as_str().to_string(),
                 project_id: record
                     .project

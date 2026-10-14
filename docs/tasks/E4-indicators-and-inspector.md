@@ -161,7 +161,7 @@
 **Research basis**: decision-log D-06 (lines 60-68); pass2/04 §5 intro (lines 268-286) and §5.1-5.5; 00-executive-delta §1.2 item 7 (no Provider panel exists, SPEC.md:343).
 **Handover note**: Name the component `RightInspector`, not `SessionPanel`/`SnapshotPanel` (prior-report names) — one name everywhere. Trap: WorkPanels.tsx today hosts panel content; extract, do not duplicate, the shell.
 
-### AJ-E407 Inspector content for Instance and Session selections | Status: TODO | Priority P0 | Effort L | Depends: AJ-E406,AJ-E401
+### AJ-E407 Inspector content for Instance and Session selections | Status: DONE-EVIDENCED (zcode-primary, 2026-10-13) | Priority P0 | Effort L | Depends: AJ-E406,AJ-E401
 **Goal**: Fill all six tabs for the daily case (Instance) and for a conversation (Session), per pass2/04 §5.1-5.2, with honest empty states.
 **User story**: As Persona A mid-task, I want the selected Instance's quota forecast, lineage, and actions without leaving the terminal, so that switching is a glance-and-click.
 **Requirements**:
@@ -178,6 +178,10 @@
 **Evidence/validation proof**: UI tests `inspector-instance.test` + `inspector-session.test` asserting every field in reqs 1-5 by `data-testid`; pass = 100% fields present or honest-empty per fixture; live dogfood: launch fake harness, hand over, confirm lineage appears in both History tabs within 300 ms; screenshots + test log linked in PR.
 **Visual testing**: Screenshots 1440x900: Instance Overview (per §7.2 wireframe), Usage (hatched Estimated series), History (lineage), Actions (disabled-with-reason + Delete confirm), Session Overview (ended, immutable stamp), Session honest-empty (unparsed transcript); Playwright diff tolerance 1%; a11y axe 0 critical, all shortcuts operable keyboard-only. Pass = reviewer matches Overview against pass2/04 §7.2 field-by-field.
 **Files to touch**: `ui/src/screens/WorkPanels.tsx`, `ui/src/App.tsx`, `ui/src/components/primitives.tsx`, `ui/src/lib/bridge.ts:282,460`, `crates/juggler-app/src/commands.rs:641,722,1070`, `crates/juggler-core/src/model.rs:315,360,405`.
+*Implementation mapping (corrected in this task's PR per the claiming protocol)*:
+- Content lives in `RightInspector.tsx` (the E406 shell — extended, no new shell); `ui/src/lib/shortcuts.ts` (new) holds the ⌘./⌘⇧H predicates shared by App and tests; backend adds `InstanceInfo.cwd` (regenerated bindings).
+- Charts (tokens/min, cost, uPlot), the per-turn table, and lineage render their honest empties with owning tasks — no time-series/pricing/Switch-Graph sources exist yet (D-06 never-hidden rule); uPlot is intentionally NOT vendored for data that does not exist.
+- Live dogfood (hand-over → lineage in both History tabs) is E2-gated like lineage itself: lineage renders only from real Switch Graph edges; recorded in the manifest.
 **Research basis**: pass2/04 §5.1 (lines 288-302), §5.2 (304-320), §7.2 wireframe (465-480); SPEC.md:185,288-302,347,349; deep 02 §§7,10,11.3.
 **Handover note**: Lineage data depends on the Switch Graph (E2 epic); until it lands, render lineage only when edges exist and omit the section (per §5.1 empty rule) — do not fabricate A->B links from Profile history.
 

@@ -102,6 +102,10 @@ last_activity_ms: number | null,
  */
 machine_id: string, 
 /**
+ * Working directory (AJ-E407 Overview: copyable project + cwd).
+ */
+cwd: string, 
+/**
  * Instance kind: `terminal` | `desktop`.
  */
 kind: string, 
