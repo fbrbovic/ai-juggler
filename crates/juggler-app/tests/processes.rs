@@ -93,6 +93,7 @@ fn seed_instance(state: &Arc<AppState>, dir: &Path, id: &str) -> SessionId {
             last_activity: Some(Timestamp::now()),
             usage: Default::default(),
             attention: None,
+            running: None,
             transcript_ref: None,
         })
         .unwrap();

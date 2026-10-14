@@ -528,7 +528,35 @@ function InstanceOverview(props: PanelProps) {
               {props.profiles.find((r) => r.id === session.launch_recipe_id)?.name ?? "launch settings"}
             </Chip>
             <Chip tone="accent">{session.model ?? "default model"}</Chip>
+            {session.model_source === "launch" && session.launch_model !== null && (
+              <Chip tone="warning">not verified live</Chip>
+            )}
           </div>
+          {(() => {
+            // AJ-E412 Req.3/5: the observed running model line — drift
+            // shown in full, unobservable providers named honestly.
+            const drift =
+              session.running_model !== null &&
+              session.launch_model !== null &&
+              session.running_model !== session.launch_model
+                ? `Launched with ${session.launch_model} - now running ${session.running_model}`
+                : null;
+            if (drift) {
+              return (
+                <p data-testid="instance-model-line" className="text-[11px] text-ink">
+                  {drift} <span className="text-faint">(observed in transcript)</span>
+                </p>
+              );
+            }
+            if (session.running_model === null && session.launch_model === null) {
+              return (
+                <p data-testid="instance-model-line" className="text-[11px] text-muted">
+                  Model: not reported by {session.provider}
+                </p>
+              );
+            }
+            return null;
+          })()}
           <div className="flex flex-col gap-1 text-[11px] text-muted">
             {project ? (
               <CopyField testId="instance-project" label="project" value={project.name} onOpen={() => props.onOpenProject(project.id)} />

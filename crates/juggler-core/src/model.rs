@@ -467,10 +467,49 @@ pub struct InstanceRecord {
     /// Why this Instance needs its user (AJ-E405 heuristics); `None`
     /// while healthy. (Stored as its own JSON blob — see storage v6.)
     pub attention: Option<AttentionReason>,
+    /// The model this Instance is actually running, once OBSERVED from
+    /// the transcript feed (AJ-E412); `None` = not observed yet —
+    /// never filled from the launch overlay. (Storage v9 JSON blob.)
+    pub running: Option<RunningModel>,
 }
 
 /// ADR-0008: old name kept one minor version as a pure alias.
 pub type SessionRecord = InstanceRecord;
+
+/// What an Instance is actually running right now (AJ-E412) — an
+/// OBSERVED value from the transcript feed, never the launch intent
+/// (D-06 honest fields: `SettingsOverlay.model` stays intent).
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub struct RunningModel {
+    /// Verbatim vendor model identifier (never normalised).
+    pub model: String,
+    /// Where it was observed.
+    pub source: ModelSource,
+}
+
+/// The observation channel for a running model (wire vocabulary:
+/// `launch | in-session | transcript | unknown`; the `launch` and
+/// `unknown` classifications are computed at read time from absence —
+/// only real observations are stored).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub enum ModelSource {
+    /// Observed in the transcript and equal to the launch overlay.
+    Transcript,
+    /// Observed in the transcript and different from the launch
+    /// overlay (an in-session `/model` change).
+    InSession,
+}
+
+impl ModelSource {
+    /// Wire name.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Transcript => "transcript",
+            Self::InSession => "in-session",
+        }
+    }
+}
 
 impl InstanceRecord {
     /// Launch-settings accessor (field rename lands with AJ-E105).

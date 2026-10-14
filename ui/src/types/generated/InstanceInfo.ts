@@ -33,10 +33,25 @@ account_id: string | null,
  */
 account_label: string, 
 /**
- * I-03: preferred model from the launch settings overlay; `null`
- * means "default model", never a guessed model name.
+ * I-03 display value: the RUNNING model once observed, else the
+ * launch overlay, else `default model` — never a guessed name.
  */
 model: string | null, 
+/**
+ * The launch-overlay model (intent, not telemetry; AJ-E412).
+ */
+launch_model: string | null, 
+/**
+ * The transcript-OBSERVED running model; `null` until observed —
+ * never filled from the overlay.
+ */
+running_model: string | null, 
+/**
+ * How `model` is known: `launch` (overlay only, not verified
+ * live), `in-session` (observed, differs from the overlay),
+ * `transcript` (observed), `unknown` (neither).
+ */
+model_source: string, 
 /**
  * I-04: lifecycle status string (storage vocabulary).
  */

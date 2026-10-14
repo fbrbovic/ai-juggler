@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "16-onboarding-detect"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "16-onboarding-detect"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -592,6 +592,49 @@ test("renewal — Accounts row chip at <= 7 days (and none for unknown)", async 
   await page.getByRole("button", { name: "Accounts" }).click();
   await expect(page.getByText("Renews in 6 days").first()).toBeVisible();
   await page.screenshot({ path: resolve(GALLERY, "11-renewal/accounts-row-chip-1440x900.png") });
+});
+
+// AJ-E412 running-model captures: I-03 plain vs drift (sess-8 carries
+// the drift fixture: launched opus, observed sonnet-5), the Overview
+// dual-model line, and the not-reported inspector state.
+test("model — I-03 drift marker on the rail row", async ({ page }) => {
+  await seedInspectorPage(page, { width: 1440, height: 900 });
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  const marker = page.getByTestId("model-drift").first();
+  await expect(marker).toBeVisible();
+  await expect(marker).toHaveAttribute("aria-label", "Launched with opus - now running sonnet-5");
+  await marker.hover();
+  await page.screenshot({ path: resolve(GALLERY, "12-model/rail-drift-1440x900.png") });
+});
+
+test("model — I-03 plain (launch == running rows show no marker)", async ({ page }) => {
+  await seedInspectorPage(page, { width: 1440, height: 900 });
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  // The plain rows carry launch-only models; the marker count is exactly
+  // the drift rows (one), asserted before the screenshot.
+  expect(await page.getByTestId("model-drift").count()).toBe(1);
+  await page.screenshot({ path: resolve(GALLERY, "12-model/rail-plain-1440x900.png") });
+});
+
+test("model — Instance Overview dual-model line", async ({ page }) => {
+  await seedInspectorPage(page, { width: 1440, height: 900 });
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  await page.getByRole("button", { name: /Work Max/ }).first().click();
+  await expect(page.getByTestId("instance-model-line")).toBeVisible();
+  await expect(page.getByTestId("instance-model-line")).toContainText(
+    "Launched with opus - now running sonnet-5",
+  );
+  await page.screenshot({ path: resolve(GALLERY, "12-model/overview-drift-1440x900.png") });
+});
+
+test("model — not reported by Provider inspector state", async ({ page }) => {
+  await seedInspectorPage(page, { width: 1440, height: 900 });
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  await page.getByRole("button", { name: /Personal/ }).first().click();
+  await expect(page.getByTestId("instance-model-line")).toContainText(
+    "Model: not reported by claude-code",
+  );
+  await page.screenshot({ path: resolve(GALLERY, "12-model/not-reported-1440x900.png") });
 });
 
 // Determinism self-test (Req.4): same fixture twice → byte-identical PNG.

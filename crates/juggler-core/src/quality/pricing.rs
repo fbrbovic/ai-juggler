@@ -64,6 +64,36 @@ impl PricingTable {
     }
 }
 
+/// Per-turn cost in USD (AJ-E412 Req.4): prices each event by the
+/// model OBSERVED on that turn; turns without a recorded model are
+/// counted by the caller but never priced. Returns the summed USD and
+/// the distinct priced model identifiers — `None` cost when no turn
+/// carried a priceable model (the honest `tokens only` state).
+#[must_use]
+pub fn session_cost_per_turn(
+    table: &PricingTable,
+    provider: &str,
+    events: &[crate::quality::UsageEvent],
+) -> Option<(f64, Vec<String>)> {
+    let mut total = 0.0_f64;
+    let mut models: Vec<String> = Vec::new();
+    let mut any_priced = false;
+    for event in events {
+        let Some(model) = event.model.as_deref() else {
+            continue; // `unknown model`: tokens counted, excluded from $
+        };
+        let Some(cost) = session_cost(table, provider, model, event.tokens) else {
+            continue; // no pricing row: excluded from $ (never $0.00)
+        };
+        any_priced = true;
+        total += cost;
+        if !models.iter().any(|entry| entry == model) {
+            models.push(model.to_string());
+        }
+    }
+    any_priced.then_some((total, models))
+}
+
 /// Session cost in USD for the given token counts; `None` when the
 /// model has no pricing row (callers render tokens only).
 // Token counts are u64; crossing into f64 for USD math loses precision

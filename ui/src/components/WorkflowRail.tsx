@@ -891,6 +891,22 @@ const chipToneClasses: Record<StateChipTone, string> = {
  * Req.5) — the value keeps its colour (contrast-safe), the caption
  * carries the meaning.
  */
+/**
+ * I-03 drift (AJ-E412 Req.3): true when a running model was observed
+ * and differs from the launch overlay. The marker's text is the full
+ * `Launched with X - now running Y` (WCAG 1.3.1: text, not just a dot).
+ */
+export function modelDrift(session: InstanceInfo): string | null {
+  if (
+    session.running_model !== null &&
+    session.launch_model !== null &&
+    session.running_model !== session.launch_model
+  ) {
+    return `Launched with ${session.launch_model} - now running ${session.running_model}`;
+  }
+  return null;
+}
+
 export function SessionRow({
   session,
   selected,
@@ -1048,6 +1064,17 @@ export function SessionRow({
         <span className="min-w-0 shrink truncate text-[10.5px] text-muted" title={session.model ?? "default model"}>
           {session.model ?? <span className="text-faint">default model</span>}
         </span>
+        {modelDrift(session) && (
+          <span
+            title={modelDrift(session)!}
+            aria-label={modelDrift(session)!}
+            tabIndex={0}
+            data-testid="model-drift"
+            className="shrink-0 rounded-full border border-warning/25 bg-warning-soft px-1 text-[10px] font-medium text-warning outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+          >
+            ⇄
+          </span>
+        )}
         <span className="ml-auto inline-flex shrink-0 items-center gap-1">
           {badge ? (
             <span
