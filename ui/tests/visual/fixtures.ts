@@ -8,7 +8,7 @@ import type { FixtureSet, InstanceInfo } from "../../src/lib/bridge";
 const baseAccounts = [
   { id: "claude-work", provider: "claude-code", label: "Work Max", plan: "max-20x", login_state: "logged_in" },
   { id: "claude-personal", provider: "claude-code", label: "Personal", plan: null, login_state: "logged_in" },
-  { id: "fake-desk", provider: "fake-desktop", label: "Fake Desk", plan: null, login_state: "logged_in" },
+  { id: "fake-desk", provider: "fake-desktop", label: "Fake Desk", plan: null, login_state: "logged_in", preview_opt_in: true },
 ];
 
 const baseProfiles = [

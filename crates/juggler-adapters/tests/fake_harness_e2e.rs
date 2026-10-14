@@ -40,6 +40,7 @@ fn test_account(state_dir: &std::path::Path) -> juggler_core::model::Account {
         state_dir: state_dir.to_path_buf(),
         cleanup_opt_in: false,
         renewal_date: None,
+        preview_opt_in: false,
     }
 }
 

@@ -11,6 +11,8 @@ import type { InstanceResourcesInfo } from "../types/generated/InstanceResources
 import type { LaunchRecipeInfo } from "../types/generated/LaunchRecipeInfo";
 import type { OrphanVerifyInfo } from "../types/generated/OrphanVerifyInfo";
 import type { DesktopLaunchInfo } from "../types/generated/DesktopLaunchInfo";
+import type { PreviewFrameInfo } from "../types/generated/PreviewFrameInfo";
+import type { PreviewStateInfo } from "../types/generated/PreviewStateInfo";
 import type { FocusOutcomeInfo } from "../types/generated/FocusOutcomeInfo";
 import type { ProcessesInfo } from "../types/generated/ProcessesInfo";
 import type { StopOutcomeInfo } from "../types/generated/StopOutcomeInfo";
@@ -27,6 +29,8 @@ import type { TokenCountsInfo } from "../types/generated/TokenCountsInfo";
 export type {
   AppInfo,
   FocusOutcomeInfo,
+  PreviewFrameInfo,
+  PreviewStateInfo,
   QualitySignalsInfo,
   ProcessesInfo,
   StopOutcomeInfo,
@@ -63,6 +67,10 @@ export const EVENTS = {
   sessionsQuota: "session://quota",
   /** Global "Go to instance…" hotkey (AJ-E414). */
   goTo: "app://go-to",
+  /** Live-preview frame (AJ-E415). */
+  previewFrame: "preview://frame",
+  /** Live-preview phase change (AJ-E415). */
+  previewState: "preview://state",
 } as const;
 
 const hasBackend =
@@ -101,8 +109,8 @@ function renewalFixtureInDays(days: number): string {
 }
 
 const MOCK_ACCOUNTS: AccountInfo[] = [
-  { id: "claude-work", provider: "claude-code", label: "Work Max", plan: Some("max-20x"), login_state: "logged_in", cleanup_opt_in: false, renewal_date: Some(renewalFixtureInDays(6)) },
-  { id: "claude-personal", provider: "claude-code", label: "Personal", plan: None(), login_state: "logged_out", cleanup_opt_in: false, renewal_date: None() },
+  { id: "claude-work", provider: "claude-code", label: "Work Max", plan: Some("max-20x"), login_state: "logged_in", cleanup_opt_in: false, renewal_date: Some(renewalFixtureInDays(6)), preview_opt_in: false },
+  { id: "claude-personal", provider: "claude-code", label: "Personal", plan: None(), login_state: "logged_out", cleanup_opt_in: false, renewal_date: None(), preview_opt_in: false },
 ];
 
 const MOCK_PROFILES: LaunchRecipeInfo[] = [
@@ -368,6 +376,7 @@ export async function createAccount(
       login_state: "logged_out",
       cleanup_opt_in: false,
       renewal_date: null,
+      preview_opt_in: false,
     };
   }
   return invoke<AccountInfo>("account_create", { harness, label, plan });
@@ -428,6 +437,7 @@ export async function accountImport(
         login_state: "logged_out",
         cleanup_opt_in: false,
         renewal_date: null,
+        preview_opt_in: false,
       },
       files_copied: 128,
       bytes_copied: 46_000_000,
@@ -547,6 +557,109 @@ export async function desktopFocus(sessionId: string): Promise<FocusOutcomeInfo>
     );
   }
   return invoke<FocusOutcomeInfo>("desktop_focus", { sessionId });
+}
+
+
+/** AJ-E415: the deterministic mock preview frame (a rendered fake-app
+ * window; harness captures pin phases via __AIJ_PREVIEW_PHASE__). */
+const MOCK_PREVIEW_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAUAAAADICAIAAAAWZq/8AAACA0lEQVR42u3cMQqDQBCGUQ8hGEhY0SZ4hRSpQ4ocQSxzBk/vBazE5ncfvBMsfNXOTPN6f4FQjScAAQMCBgQMAgYEDAgYEDAIGBAwIGAQMCBgQMCAgEHAgIABAQMCBgEDAgYOB1yGCQglYEgOuO0KEErAIGBAwICAQcCAgAEBAwIGAQMCBgQMAgYEDAgYEDBcP+DlvwKhBAwCBgQMCBgEDAgYEDAgYBAwIGBAwFBzwMbBwTYSIGBAwCBgQMCAgAEBg4ABAQMCBgEDiQF/fjMQSsAgYEDAgIBBwICAAQEDewH7CgeTWICAAQGDgAEBAwIGBAwCBgQMCBgEDCQG/OifQCgBg4ABAQMCBgEDAgYEDAgYBAwIGBAw1Bzw7T4CoQQMAgYEDAgYBAwIGBAwIGAQMCBgQMBQc8DGwcE2EiBgQMAgYEDAgIABAYOAAQEDAgYBA+5CA7aRAAGDgAEBAwIGBAwCBgQMCBgEDAgYcBcasI0EAgYEDAgYEDAIGBAwIGAQMCBgQMCAu9BgGwkQMCBgELBXAAEDAgYEDAIGBAwIGBAwuAsN2EYCBAwCBvICbrsChBIwCBgQMCBgEDAgYEDAgIBBwICAAQGDgAEBAwIGBAwCBgQMCBgQMAgYEDAgYBAwIGBAwICAQcCAgAEBAwIGAQMCBgQMAgYEDAgYEDAIGBAwcIoN1C7gkSubCwYAAAAASUVORK5CYII=";
+
+/** AJ-E415: starts the read-only live preview for the selected desktop
+ * Instance (requires the Account's opt-in; one at a time). */
+export async function previewStart(sessionId: string): Promise<void> {
+  if (!hasBackend) {
+    return;
+  }
+  await invoke("preview_start", { sessionId });
+}
+
+/** AJ-E415: stops the live preview (bounded teardown <1 s). */
+export async function previewStop(): Promise<void> {
+  if (!hasBackend) {
+    return;
+  }
+  await invoke("preview_stop");
+}
+
+/** AJ-E415: sets the per-Account live-preview opt-in (the Screen
+ * Recording consent moment; off by default). */
+export async function accountSetPreviewOptIn(
+  accountId: string,
+  optIn: boolean,
+): Promise<AccountInfo> {
+  if (!hasBackend) {
+    return {
+      ...(MOCK_ACCOUNTS.find((a) => a.id === accountId) ?? MOCK_ACCOUNTS[0]!),
+      preview_opt_in: optIn,
+    };
+  }
+  return invoke<AccountInfo>("account_set_preview_opt_in", { accountId, optIn });
+}
+
+/** AJ-E415: live frames (filtered to one session by the caller). */
+export function onPreviewFrame(
+  handler: (frame: PreviewFrameInfo) => void,
+): () => void {
+  if (!hasBackend) {
+    // Harness mode: emit one deterministic frame immediately so the
+    // panel (and captures) render a real preview; the phase comes from
+    // onPreviewState below.
+    handler({
+      session_id: "sess-desktop-1",
+      png_b64: MOCK_PREVIEW_PNG_B64,
+      at_ms: Date.now(),
+      seq: 0,
+    });
+    return () => {};
+  }
+  let unlisten: (() => void) | null = null;
+  let disposed = false;
+  listen<PreviewFrameInfo>(EVENTS.previewFrame, (event) => handler(event.payload))
+    .then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    })
+    .catch(() => {
+      /* backend gone; the panel shows its paused state */
+    });
+  return () => {
+    disposed = true;
+    unlisten?.();
+  };
+}
+
+/** AJ-E415: phase changes (live | paused | denied | unsupported). */
+export function onPreviewState(
+  handler: (state: PreviewStateInfo) => void,
+): () => void {
+  if (!hasBackend) {
+    const w = window as unknown as { __AIJ_PREVIEW_PHASE__?: PreviewStateInfo };
+    const seeded = w.__AIJ_PREVIEW_PHASE__;
+    if (seeded) {
+      handler(seeded);
+    } else {
+      handler({
+        session_id: "sess-desktop-1",
+        phase: "live",
+        text: "",
+      });
+    }
+    return () => {};
+  }
+  let unlisten: (() => void) | null = null;
+  let disposed = false;
+  listen<PreviewStateInfo>(EVENTS.previewState, (event) => handler(event.payload))
+    .then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    })
+    .catch(() => {
+      /* backend gone */
+    });
+  return () => {
+    disposed = true;
+    unlisten?.();
+  };
 }
 
 /** Reads one app-level setting (schema v10 kv); null = never set. */

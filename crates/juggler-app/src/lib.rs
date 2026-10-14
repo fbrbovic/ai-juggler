@@ -14,6 +14,7 @@
 pub mod commands;
 pub mod error;
 pub mod focus;
+pub mod preview;
 pub mod state;
 pub mod terminal;
 
@@ -48,6 +49,14 @@ pub const GO_TO_HOTKEY_KEY: &str = "go_to_hotkey";
 /// Default "Go to instance…" hotkey (SPEC §9.2 / deep-review §4.17:
 /// `⌥Space`, rebindable).
 pub const DEFAULT_GO_TO_HOTKEY: &str = "Alt+Space";
+
+/// Name of the live-preview frame event (AJ-E415): payload
+/// `PreviewFrameInfo`.
+pub const EVENT_PREVIEW_FRAME: &str = "preview://frame";
+
+/// Name of the live-preview phase event (AJ-E415): payload
+/// `PreviewStateInfo`.
+pub const EVENT_PREVIEW_STATE: &str = "preview://state";
 
 /// Builds and runs the desktop application.
 pub fn run() {
@@ -133,6 +142,9 @@ pub fn run() {
             commands::app_setting_set,
             commands::go_to_hotkey_set,
             commands::open_accessibility_settings,
+            commands::preview_start,
+            commands::preview_stop,
+            commands::account_set_preview_opt_in,
         ])
         .setup(|app| {
             let _ = app.emit(EVENT_APP_READY, commands::AppInfo::current());

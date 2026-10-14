@@ -122,7 +122,12 @@ CREATE TABLE app_settings (
 );
 ";
 
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10];
+/// Schema version 11 (AJ-E415): the per-Account live-preview opt-in —
+/// additive column, default `0` = off (Screen Recording is consented
+/// only by an explicit enable).
+const V11: &str = "ALTER TABLE accounts ADD COLUMN preview_opt_in INTEGER NOT NULL DEFAULT 0;";
+
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11];
 
 /// An opened AI Juggler database with typed repositories.
 #[derive(Debug)]

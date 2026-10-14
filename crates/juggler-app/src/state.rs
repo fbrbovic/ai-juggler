@@ -29,6 +29,9 @@ pub struct AppState {
     /// Exit snapshots → confirmed orphans + stop states (AJ-E410).
     /// Interior-mutex: safe to read without the collector lock.
     pub orphans: OrphanTracker,
+    /// The one live preview session (AJ-E415 Req.5: one at a time).
+    /// Lock ordering: never held together with `storage`.
+    pub preview: Mutex<Option<crate::commands::PreviewSession>>,
     /// Per-Instance transcript parse offsets for running-model
     /// detection (AJ-E412): how many bytes each tail-scan has consumed,
     /// so the 2 s tick only ever parses NEW lines.
@@ -96,6 +99,7 @@ impl AppState {
             model_offsets: Mutex::new(std::collections::HashMap::new()),
             heuristics: HeuristicEngine::new(load_thresholds(&data_dir)),
             terminal_taps: Mutex::new(std::collections::HashSet::new()),
+            preview: Mutex::new(None),
             data_dir,
         })
     }

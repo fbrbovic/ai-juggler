@@ -32,4 +32,9 @@ cleanup_opt_in: boolean,
  * Optional user-entered renewal date, local calendar `YYYY-MM-DD`
  * (D-12); `null` renders `Expiry: unknown` — never inferred.
  */
-renewal_date: string | null, };
+renewal_date: string | null, 
+/**
+ * AJ-E415 per-Account live-preview switch (off by default; the
+ * enable is the Screen-Recording consent moment).
+ */
+preview_opt_in: boolean, };

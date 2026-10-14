@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "16-onboarding-detect"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -830,6 +830,112 @@ test("focus — Go to instance… palette (light 1024x680)", async ({ page }) =>
   await expect(palette).toBeVisible();
   await expect(palette.locator('[data-testid="goto-row-sess-desktop-1"]')).toBeVisible();
   await page.screenshot({ path: resolve(GALLERY, "14-focus/palette-1024x680-light.png") });
+});
+
+// AJ-E415 preview captures: the live mirror (indicator + frame age +
+// click-to-focus affordance), the paused (minimised) state, and the
+// permission-denied state — both themes. The harness seam
+// `__AIJ_PREVIEW_PHASE__` pins the phase each capture renders.
+async function seedPreviewPage(
+  page: import("@playwright/test").Page,
+  vp: { width: number; height: number },
+  theme: "dark" | "light",
+  phase: { phase: string; text: string } | null,
+) {
+  await page.addInitScript(
+    ({ fixture, t0, themeName, seededPhase }) => {
+      (window as never as { __AIJ_FIXTURE__: unknown }).__AIJ_FIXTURE__ = fixture;
+      if (seededPhase !== null) {
+        (window as never as { __AIJ_PREVIEW_PHASE__: unknown }).__AIJ_PREVIEW_PHASE__ = {
+          session_id: "sess-desktop-1",
+          ...seededPhase,
+        };
+      }
+      localStorage.setItem("aij.theme", themeName);
+      localStorage.setItem("aij.onboarding.dismissed", "1");
+      sessionStorage.setItem("aij.ready.skipped", "1");
+      Date.now = () => t0;
+    },
+    { fixture: allStatuses, t0: T0, themeName: theme, seededPhase: phase },
+  );
+  await page.emulateMedia({
+    reducedMotion: "reduce",
+    colorScheme: theme === "light" ? "light" : "dark",
+  });
+  await page.setViewportSize({ width: vp.width, height: vp.height });
+  await page.goto("/");
+}
+
+async function openRunningDesktopPanel(page: import("@playwright/test").Page) {
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  await page
+    .getByRole("button", { name: /Fake Desk/ })
+    .filter({ has: page.getByTestId("rail-app-chip") })
+    .filter({ hasText: /running/i })
+    .click();
+}
+
+test("preview — live mirror with indicator, frame age, click-to-focus (dark)", async ({ page }) => {
+  await seedPreviewPage(page, { width: 1280, height: 800 }, "dark", null);
+  await openRunningDesktopPanel(page);
+  const preview = page.getByTestId("desktop-preview");
+  await expect(preview).toBeVisible();
+  await expect(preview.locator('[data-testid="preview-live-indicator"]')).toContainText("Live preview");
+  await expect(preview.locator('[data-testid="preview-frame-age"]')).toContainText("frame age");
+  const frame = preview.locator('[data-testid="preview-frame"]');
+  await expect(frame).toBeVisible();
+  await expect(preview).toContainText("click to focus the real window");
+  await page.screenshot({ path: resolve(GALLERY, "15-preview/panel-live-1280x800.png") });
+});
+
+test("preview — live mirror at 1024x680 light", async ({ page }) => {
+  await seedPreviewPage(page, { width: 1024, height: 680 }, "light", null);
+  await openRunningDesktopPanel(page);
+  const preview = page.getByTestId("desktop-preview");
+  await expect(preview.locator('[data-testid="preview-frame"]')).toBeVisible();
+  await expect(preview.locator('[data-testid="preview-live-indicator"]')).toContainText("Live preview");
+  await page.screenshot({ path: resolve(GALLERY, "15-preview/panel-live-1024x680-light.png") });
+});
+
+test("preview — paused (window minimised) keeps the labelled last frame", async ({ page }) => {
+  await seedPreviewPage(page, { width: 1280, height: 800 }, "dark", {
+    phase: "paused",
+    text: "Preview paused — window not visible",
+  });
+  await openRunningDesktopPanel(page);
+  const preview = page.getByTestId("desktop-preview");
+  await expect(preview.locator('[data-testid="preview-paused"]')).toHaveText(
+    "Preview paused — window not visible",
+  );
+  await expect(preview.locator('[data-testid="preview-frame"]')).toBeVisible();
+  await page.screenshot({ path: resolve(GALLERY, "15-preview/panel-paused-1280x800.png") });
+});
+
+test("preview — permission denied renders guidance, no frame", async ({ page }) => {
+  await seedPreviewPage(page, { width: 1280, height: 800 }, "dark", {
+    phase: "denied",
+    text: "Screen Recording permission needed — grant it in System Settings, then re-enable preview",
+  });
+  await openRunningDesktopPanel(page);
+  const preview = page.getByTestId("desktop-preview");
+  await expect(preview.locator('[data-testid="preview-denied"]')).toContainText(
+    "Screen Recording permission needed",
+  );
+  await expect(preview.locator('[data-testid="preview-frame"]')).toHaveCount(0);
+  await page.screenshot({ path: resolve(GALLERY, "15-preview/panel-denied-1280x800.png") });
+});
+
+test("preview — exited instance renders no preview (status only)", async ({ page }) => {
+  await seedPreviewPage(page, { width: 1280, height: 800 }, "dark", null);
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  await page
+    .getByRole("button", { name: /Fake Desk/ })
+    .filter({ has: page.getByTestId("rail-app-chip") })
+    .filter({ hasText: /finished/i })
+    .click();
+  await expect(page.getByTestId("desktop-surface")).toContainText("app exited");
+  await expect(page.getByTestId("desktop-preview")).toHaveCount(0);
+  await page.screenshot({ path: resolve(GALLERY, "15-preview/panel-exited-1280x800.png") });
 });
 
 // Determinism self-test (Req.4): same fixture twice → byte-identical PNG.

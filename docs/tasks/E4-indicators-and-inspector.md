@@ -369,7 +369,7 @@
 - Outcomes (Req.5): copy-exact `Focused window` / `App opened — window not found` / `App not running — Relaunch?` as text on the Instance (+ targeted window title).
 - Evidence: `docs/qa/evidence/AJ-E414/` — 12/12 tier unit tests (two-window fixture 10/10 with trap-order asserts), 9/9 desktop integration, real two-window TextEdit record (this machine: degraded tier 10/10 in 118–189 ms; the granted-machine focused record awaits the maintainer's Accessibility toggle — same command re-run); gallery `_gallery/14-focus/` (4 captures, vision-verified).
 
-### AJ-E415 Desktop live preview — read-only window mirror in the panel | Status: TODO | Priority P1 | Effort L | Depends: AJ-E413, AJ-E414
+### AJ-E415 Desktop live preview — read-only window mirror in the panel | Status: BLOCKED — real capture needs one `unsafe` CoreGraphics init the workspace `unsafe_code = "forbid"` law forbids (binding gap; maintainer decision required — evidence: docs/qa/evidence/AJ-E415/manifest.md) | Priority P1 | Effort L | Depends: AJ-E413, AJ-E414
 **Goal**: Show a live, read-only ScreenCaptureKit preview of a desktop instance's window inside its panel, so its state is glanceable without switching away; clicking the preview focuses the real window.
 **User story**: As a user supervising a desktop agent, I want to see whether it is working, stuck or asking something, without leaving Juggler.
 **Requirements**:
@@ -385,6 +385,8 @@
 **Visual testing**: Capture live, paused (minimised), permission-denied and instance-exited panel states at 1280x800/1024x680 both themes; pass = live indicator + frame age readable, click-to-focus affordance obvious, no interactive-looking fake controls inside the preview (AJ-E803).
 **Files to touch**: new `crates/juggler-app/src/preview.rs` (ScreenCaptureKit via screencapturekit crate or objc2 — pin in PR), `ui/src/screens/WorkPanels.tsx`, `ui/src/App.tsx` (panel lifecycle), Settings surface (per-Account preview toggle).
 **Research basis**: External macOS evidence 2026-10-13: macOS does not permit reparenting a foreign NSWindow (window server isolation); ScreenCaptureKit per-window streams are the sanctioned mirror (one SCStream per window); SPEC.md:57-59 panel-as-surface; wireframe screens 08/24 pattern.
+**BLOCKED record (2026-10-14)**: the safe subset landed (schema v11 opt-in, driver/state machine + 8/8 scripted suites incl. teardown ×3 and revocation, wire events, panel states live/paused/denied/exited, account toggle, 5 captures, CLT Swift-link shim) — but the binding (`screencapturekit` v11) requires `unsafe { sc_initialize_core_graphics() }` at process start or the FIRST REAL CAPTURE SEGFAULTS (reproduced; log in evidence). The shipped app wires `ParkedSource` (honest unsupported state — no crash, no fake frame). Unblock options recorded in the manifest's decision section; then re-point at `ScreenshotSource`, re-run `tests/preview_real.rs`, and flip DONE-EVIDENCED.
+
 **Handover note**: Do not let preview grow input injection ("just one click-through") — that converts a supervision surface into remote control of another app, a different security decision requiring its own ADR. If the screencapturekit binding proves immature, ship AJ-E413/AJ-E414 and mark this task BLOCKED with the binding gap recorded, never hand-roll private APIs.
 
 ---

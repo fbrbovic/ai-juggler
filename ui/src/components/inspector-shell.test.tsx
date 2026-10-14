@@ -75,6 +75,7 @@ const account: AccountInfo = {
   plan: "max-20x",
   login_state: "logged_in", cleanup_opt_in: false,
   renewal_date: null,
+  preview_opt_in: false,
 };
 
 const recipe: LaunchRecipeInfo = {
