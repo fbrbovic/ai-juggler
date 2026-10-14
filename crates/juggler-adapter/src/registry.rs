@@ -142,6 +142,7 @@ mod tests {
             label: "Stub".into(),
             plan: None,
             state_dir: state.clone(),
+            cleanup_opt_in: false,
         };
         let profile = juggler_core::model::Profile {
             id: juggler_core::model::ProfileId::new("p"),

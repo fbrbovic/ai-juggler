@@ -15,6 +15,7 @@ pub mod error;
 pub mod heuristics;
 pub mod journal;
 pub mod lifecycle;
+pub mod orphans;
 pub mod ring;
 pub mod supervisor;
 
@@ -25,5 +26,11 @@ pub use heuristics::{
 };
 pub use journal::{AdoptedProcess, Journal};
 pub use lifecycle::{ExitKind, LifecycleEvent};
+pub use orphans::{
+    AUTO_CLEANUP_GRACE_MS, DescendantRow, ExitSnapshot, ORPHAN_GRACE_MS, Orphan, OrphanTracker,
+    OwnerState, StopOutcome, process_alive, stop_pid_ladder, verify_owner,
+};
 pub use ring::OutputRing;
-pub use supervisor::{LiveProcessStats, LiveStatsCollector, SpawnedProcess, Supervisor};
+pub use supervisor::{
+    LiveProcessStats, LiveStatsCollector, ProcessRow, SpawnedProcess, Supervisor, TreeSample,
+};

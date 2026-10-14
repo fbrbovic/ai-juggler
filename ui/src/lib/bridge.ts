@@ -9,6 +9,9 @@ import type { InstanceInfo } from "../types/generated/InstanceInfo";
 import type { InstanceQuotaInfo } from "../types/generated/InstanceQuotaInfo";
 import type { InstanceResourcesInfo } from "../types/generated/InstanceResourcesInfo";
 import type { LaunchRecipeInfo } from "../types/generated/LaunchRecipeInfo";
+import type { OrphanVerifyInfo } from "../types/generated/OrphanVerifyInfo";
+import type { ProcessesInfo } from "../types/generated/ProcessesInfo";
+import type { StopOutcomeInfo } from "../types/generated/StopOutcomeInfo";
 import type { LaunchResult } from "../types/generated/LaunchResult";
 import type { NeedsAttention } from "../types/generated/NeedsAttention";
 import type { ProjectInfo } from "../types/generated/ProjectInfo";
@@ -22,6 +25,9 @@ import type { TokenCountsInfo } from "../types/generated/TokenCountsInfo";
 export type {
   AppInfo,
   QualitySignalsInfo,
+  ProcessesInfo,
+  StopOutcomeInfo,
+  OrphanVerifyInfo,
   AccountInfo,
   DiscoveredInfo,
   ImportResult,
@@ -83,8 +89,8 @@ declare global {
 const seeded = (typeof window !== "undefined" && window.__AIJ_FIXTURE__) || {};
 
 const MOCK_ACCOUNTS: AccountInfo[] = [
-  { id: "claude-work", provider: "claude-code", label: "Work Max", plan: Some("max-20x"), login_state: "logged_in" },
-  { id: "claude-personal", provider: "claude-code", label: "Personal", plan: None(), login_state: "logged_out" },
+  { id: "claude-work", provider: "claude-code", label: "Work Max", plan: Some("max-20x"), login_state: "logged_in", cleanup_opt_in: false },
+  { id: "claude-personal", provider: "claude-code", label: "Personal", plan: None(), login_state: "logged_out", cleanup_opt_in: false },
 ];
 
 const MOCK_PROFILES: LaunchRecipeInfo[] = [
@@ -134,6 +140,40 @@ const MOCK_QUALITY: Record<string, QualitySignalsInfo> = {
     priced_model: "opus",
     quota_forecast: "not burning",
     stuck: null,
+  },
+};
+
+// AJ-E410 mock trees: a 3-level live tree (the §7.3 wireframe shape)
+// plus a 2-orphan section — one fresh, one already `gone`.
+const MOCK_PROCESSES: Record<string, ProcessesInfo> = {
+  "sess-8": {
+    rows: [
+      { pid: 41201, parent_pid: 40100, name: "claude", cpu_pct: 11.0, rss_bytes: 890_000_000, age_ms: 42 * 60_000, child_count: 2, depth: 0 },
+      { pid: 41233, parent_pid: 41201, name: "node (mcp)", cpu_pct: 1.0, rss_bytes: 96_000_000, age_ms: 40 * 60_000, child_count: 1, depth: 1 },
+      { pid: 41302, parent_pid: 41233, name: "rg (search)", cpu_pct: 4.0, rss_bytes: 120_000_000, age_ms: 12_000, child_count: 0, depth: 2 },
+    ],
+    spark: Array.from({ length: 24 }, (_, i) => ({
+      at_ms: Date.now() - (24 - i) * 2_000,
+      cpu_pct: 6 + ((i * 7) % 9),
+      rss_bytes: 980_000_000 + ((i * 13) % 5) * 20_000_000,
+    })),
+    orphans: [
+      { session_id: "sess-8", pid: 39871, name: "node dev-server", rss_bytes: 210_000_000, parent_label: "claude", age_since_parent_exit_ms: 18 * 60_000, stop_state: null },
+      { session_id: "sess-8", pid: 39890, name: "vite", rss_bytes: 88_000_000, parent_label: "claude", age_since_parent_exit_ms: 18 * 60_000, stop_state: "gone" },
+    ],
+    unavailable_reason: null,
+  },
+  "sess-2": {
+    rows: [
+      { pid: 51001, parent_pid: 50900, name: "claude", cpu_pct: 3.0, rss_bytes: 240_000_000, age_ms: 9 * 60_000, child_count: 0, depth: 0 },
+    ],
+    spark: Array.from({ length: 24 }, (_, i) => ({
+      at_ms: Date.now() - (24 - i) * 2_000,
+      cpu_pct: 2 + ((i * 3) % 4),
+      rss_bytes: 240_000_000,
+    })),
+    orphans: [],
+    unavailable_reason: null,
   },
 };
 
@@ -302,6 +342,7 @@ export async function createAccount(
       label,
       plan,
       login_state: "logged_out",
+      cleanup_opt_in: false,
     };
   }
   return invoke<AccountInfo>("account_create", { harness, label, plan });
@@ -360,6 +401,7 @@ export async function accountImport(
         label,
         plan,
         login_state: "logged_out",
+        cleanup_opt_in: false,
       },
       files_copied: 128,
       bytes_copied: 46_000_000,
@@ -456,6 +498,66 @@ export async function instanceQuality(sessionId: string): Promise<QualitySignals
     return MOCK_QUALITY[sessionId] ?? null;
   }
   return invoke<QualitySignalsInfo>("instance_quality", { sessionId });
+}
+
+/**
+ * AJ-E410: the Processes tab payload — live tree rows, the 2 s spark
+ * ring, and the confirmed orphans for one Instance.
+ */
+export async function instanceProcesses(sessionId: string): Promise<ProcessesInfo | null> {
+  if (!hasBackend) {
+    return MOCK_PROCESSES[sessionId] ?? null;
+  }
+  return invoke<ProcessesInfo>("instance_processes", { sessionId });
+}
+
+/** AJ-E410: stop one orphan (allow-list guarded, TERM→KILL ladder). */
+export async function orphanStop(sessionId: string, pid: number): Promise<StopOutcomeInfo> {
+  if (!hasBackend) {
+    // Mock: the allow-list guard refuses anything but fixture orphans.
+    const orphan = MOCK_PROCESSES[sessionId]?.orphans.find((row) => row.pid === pid);
+    const state = orphan
+      ? orphan.stop_state ?? "gone"
+      : "refused - not a recorded descendant";
+    return { pid, state };
+  }
+  return invoke<StopOutcomeInfo>("orphan_stop", { sessionId, pid });
+}
+
+/** AJ-E410: stop every confirmed orphan of one Instance. */
+export async function orphanStopAll(sessionId: string): Promise<StopOutcomeInfo[]> {
+  if (!hasBackend) {
+    const orphans = MOCK_PROCESSES[sessionId]?.orphans ?? [];
+    return orphans.map((orphan) => ({ pid: orphan.pid, state: orphan.stop_state ?? "gone" }));
+  }
+  return invoke<StopOutcomeInfo[]>("orphan_stop_all", { sessionId });
+}
+
+/** AJ-E410: re-check the ppid chain for one orphan pid. */
+export async function orphanVerify(sessionId: string, pid: number): Promise<OrphanVerifyInfo> {
+  if (!hasBackend) {
+    const orphan = MOCK_PROCESSES[sessionId]?.orphans.find((row) => row.pid === pid);
+    if (orphan) {
+      return {
+        pid,
+        alive: !orphan.stop_state,
+        parent_pid: 1,
+        note: "alive — re-parented to init/launchd (its parent exited)",
+      };
+    }
+    return { pid, alive: false, parent_pid: null, note: "process is gone" };
+  }
+  return invoke<OrphanVerifyInfo>("orphan_verify", { sessionId, pid });
+}
+
+/** AJ-E410 (D-08): set the per-Account Tier-1 cleanup opt-in. */
+export async function accountSetCleanup(accountId: string, optIn: boolean): Promise<AccountInfo> {
+  if (!hasBackend) {
+    const account = MOCK_ACCOUNTS.find((row) => row.id === accountId);
+    if (!account) throw new Error(`unknown account ${accountId}`);
+    return { ...account, cleanup_opt_in: optIn };
+  }
+  return invoke<AccountInfo>("account_set_cleanup", { accountId, optIn });
 }
 
 export async function stopSession(sessionId: string): Promise<void> {

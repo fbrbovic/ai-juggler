@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "16-onboarding-detect"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "16-onboarding-detect"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -470,6 +470,51 @@ test("inspector — Quality tab View as table", async ({ page }) => {
   await page.getByRole("button", { name: "View as table" }).click();
   await expect(page.getByTestId("quality-tokens").getByRole("table")).toBeVisible();
   await page.screenshot({ path: resolve(GALLERY, "09-quality/as-table-1440x900.png") });
+});
+
+// AJ-E410 processes-tab captures: live tree (3 levels), orphan section
+// with the PID-named confirm, the `gone` verification state, and the
+// good empty state.
+test("inspector — Processes tab live tree + orphans", async ({ page }) => {
+  await seedInspectorPage(page, { width: 1440, height: 900 });
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  await page.getByRole("button", { name: /Work Max/ }).first().click();
+  await page.getByRole("tab", { name: "Processes" }).click();
+  await expect(page.getByTestId("processes-spark")).toBeVisible();
+  await expect(page.getByTestId("orphan-row-39871")).toBeVisible();
+  await page.screenshot({ path: resolve(GALLERY, "10-processes/live-tree-1440x900.png") });
+});
+
+test("inspector — Processes tab Stop confirm popover (PID named)", async ({ page }) => {
+  await seedInspectorPage(page, { width: 1440, height: 900 });
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  await page.getByRole("button", { name: /Work Max/ }).first().click();
+  await page.getByRole("tab", { name: "Processes" }).click();
+  await expect(page.getByTestId("orphan-row-39871")).toBeVisible();
+  await page.getByRole("button", { name: "Stop process 39871" }).click();
+  await expect(page.getByTestId("orphan-confirm-39871")).toBeVisible();
+  await page.screenshot({ path: resolve(GALLERY, "10-processes/stop-confirm-1440x900.png") });
+});
+
+test("inspector — Processes tab gone verification state", async ({ page }) => {
+  await seedInspectorPage(page, { width: 1440, height: 900 });
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  await page.getByRole("button", { name: /Work Max/ }).first().click();
+  await page.getByRole("tab", { name: "Processes" }).click();
+  await expect(page.getByTestId("orphan-row-39871")).toBeVisible();
+  await page.getByRole("button", { name: "Stop process 39871" }).click();
+  await page.getByRole("button", { name: "Stop 39871" }).click();
+  await expect(page.getByTestId("orphan-state-39871")).toHaveText("gone ✓");
+  await page.screenshot({ path: resolve(GALLERY, "10-processes/gone-state-1440x900.png") });
+});
+
+test("inspector — Processes tab good empty state", async ({ page }) => {
+  await seedInspectorPage(page, { width: 1440, height: 900 });
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  await page.getByRole("button", { name: /Personal/ }).first().click();
+  await page.getByRole("tab", { name: "Processes" }).click();
+  await expect(page.getByTestId("processes-empty")).toBeVisible();
+  await page.screenshot({ path: resolve(GALLERY, "10-processes/empty-1440x900.png") });
 });
 
 // Determinism self-test (Req.4): same fixture twice → byte-identical PNG.

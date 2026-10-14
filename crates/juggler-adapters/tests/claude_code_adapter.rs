@@ -24,6 +24,7 @@ fn account(state_dir: &Path) -> juggler_core::model::Account {
         label: "Work Max".into(),
         plan: None,
         state_dir: state_dir.to_path_buf(),
+        cleanup_opt_in: false,
     }
 }
 

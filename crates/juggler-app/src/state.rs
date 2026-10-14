@@ -6,7 +6,9 @@ use std::sync::Mutex;
 
 use juggler_adapter::AdapterRegistry;
 use juggler_core::storage::Storage;
-use juggler_supervisor::{HeuristicEngine, HeuristicThresholds, LiveStatsCollector, Supervisor};
+use juggler_supervisor::{
+    HeuristicEngine, HeuristicThresholds, LiveStatsCollector, OrphanTracker, Supervisor,
+};
 
 /// Everything the commands operate on. `storage` is `Mutex`-wrapped:
 /// rusqlite connections are `Send` but not `Sync`.
@@ -23,6 +25,9 @@ pub struct AppState {
     /// owns the persistent process table so CPU% deltas survive ticks.
     /// Lock ordering: never held together with `storage`.
     pub resources: Mutex<LiveStatsCollector>,
+    /// Exit snapshots → confirmed orphans + stop states (AJ-E410).
+    /// Interior-mutex: safe to read without the collector lock.
+    pub orphans: OrphanTracker,
     /// Stuck/waiting/quota heuristics (AJ-E405); thresholds user-tunable
     /// via `heuristics.json`.
     pub heuristics: HeuristicEngine,
@@ -82,6 +87,7 @@ impl AppState {
             registry,
             storage: Mutex::new(storage),
             resources: Mutex::new(LiveStatsCollector::new()),
+            orphans: OrphanTracker::new(),
             heuristics: HeuristicEngine::new(load_thresholds(&data_dir)),
             terminal_taps: Mutex::new(std::collections::HashSet::new()),
             data_dir,

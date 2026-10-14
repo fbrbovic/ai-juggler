@@ -56,13 +56,79 @@ impl LiveProcessStats {
     }
 }
 
+/// One live process in a supervised tree (the Processes tab row,
+/// AJ-E410). `cpu_pct` stays `None` until the second table sample.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ProcessRow {
+    /// OS process id.
+    pub pid: u32,
+    /// Parent pid (`None` when unreadable); the root's own parent.
+    pub parent_pid: Option<u32>,
+    /// Process name.
+    pub name: String,
+    /// CPU utilization, percent; `None` before two samples.
+    pub cpu_pct: Option<f64>,
+    /// Resident memory, bytes.
+    pub rss_bytes: u64,
+    /// Process age, ms (from the kernel's start time).
+    pub age_ms: u64,
+    /// Direct children of this process (within the tree).
+    pub child_count: u32,
+    /// Tree depth (root = 0) — the UI's indent level.
+    pub depth: u8,
+}
+
+/// One point of the per-tree resource ring (the I-07 sparkline source).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TreeSample {
+    /// Sample time, epoch ms.
+    pub at_ms: i64,
+    /// Tree CPU%, percent; `None` before two table samples.
+    pub cpu_pct: Option<f64>,
+    /// Tree RSS sum, bytes.
+    pub rss_bytes: u64,
+}
+
+/// Per-session collector state: the 5-minute sample ring plus the
+/// freshest per-process rows.
+#[derive(Debug, Clone, Default)]
+pub struct TreeState {
+    /// 2 s samples retained 5 min (150/tree, the performance budget).
+    pub ring: std::collections::VecDeque<TreeSample>,
+    /// Latest rows (root first, then descendants breadth-first); frozen
+    /// at the last pre-exit tick for finished sessions (the orphan
+    /// snapshot source).
+    pub rows: Vec<ProcessRow>,
+}
+
+/// Ring capacity: 150 samples × 2 s = the 5-minute retention budget.
+const RING_CAPACITY: usize = 150;
+
+/// Full-table discovery cadence: every 5th tick (a full scan finds NEW
+/// descendants; the 2 s hot path refreshes only known pids). The first
+/// three ticks are full scans too (warmup: a fast-moving fixture's
+/// children must land in the table before it exits).
+const FULL_SCAN_EVERY: u32 = 5;
+/// Warmup full-scan ticks after collector creation.
+const WARMUP_FULL_TICKS: u32 = 3;
+
 /// Owns the persistent process table so per-process CPU% deltas survive
 /// between ticks (sysinfo computes usage between refreshes). One
-/// collector serves both the 5 s resource tick and `instances_list`.
+/// collector serves the 2 s per-tree tick (AJ-E410), the 5 s resource
+/// emission, and `instances_list`.
+///
+/// Refresh shape (staggered by design): the 2 s hot path refreshes ONLY
+/// the known supervised pids (one targeted batch — there is exactly one
+/// sampler thread, so the per-tree herd the stagger defends against
+/// cannot exist by construction); every 10th tick does one full-table
+/// refresh to discover newly spawned descendants.
 #[derive(Debug, Default)]
 pub struct LiveStatsCollector {
     system: sysinfo::System,
     sampled: bool,
+    ticks: u32,
+    trees: HashMap<SessionId, TreeState>,
+    stats: HashMap<SessionId, LiveProcessStats>,
 }
 
 impl LiveStatsCollector {
@@ -72,42 +138,226 @@ impl LiveStatsCollector {
         Self::default()
     }
 
-    /// Refreshes the process table once and returns batched stats for
-    /// every supervised session. The first ever call cannot measure CPU
-    /// deltas, so every `cpu_pct` is `None` on it — honest absence, not
-    /// a zero that would read as "idle".
-    pub fn refresh(&mut self, supervisor: &Supervisor) -> HashMap<SessionId, LiveProcessStats> {
+    /// One 2 s sampling tick (AJ-E410): targeted refresh of known pids
+    /// (full scan every 5th tick for discovery),
+    /// recompute per-tree rows + stats, append one ring sample per live
+    /// tree. Finished sessions keep their last rows frozen (the exit
+    /// snapshot source) and report definitive dead stats.
+    pub fn tick(&mut self, supervisor: &Supervisor, now_ms: i64) {
+        self.ticks = self.ticks.saturating_add(1);
+        let full = self.ticks <= WARMUP_FULL_TICKS || self.ticks.is_multiple_of(FULL_SCAN_EVERY);
+        let roots = supervisor.live_roots();
+        if full {
+            self.refresh_all();
+            let parents = parents_map(&self.system);
+            self.rebuild_trees(&roots, &parents, now_ms);
+        } else {
+            let known: Vec<u32> = self
+                .trees
+                .values()
+                .flat_map(|tree| tree.rows.iter().map(|row| row.pid))
+                .chain(roots.iter().map(|(_, pid, _)| *pid))
+                .collect();
+            self.refresh_pids(&known);
+            // Targeted refresh keeps parent edges of known pids fresh;
+            // brand-new children appear at the next full scan.
+            let parents = parents_map(&self.system);
+            self.rebuild_trees(&roots, &parents, now_ms);
+        }
+        let sampled = self.sampled;
+        self.sampled = true;
+        if !sampled {
+            // First-ever tick: CPU deltas do not exist yet — honest
+            // absence (None), never a zero that would read as "idle".
+            for tree in self.trees.values_mut() {
+                if let Some(last) = tree.ring.back_mut() {
+                    last.cpu_pct = None;
+                }
+                for row in &mut tree.rows {
+                    row.cpu_pct = None;
+                }
+            }
+            for stat in self.stats.values_mut() {
+                if stat.cpu_pct == Some(0.0_f64) {
+                    stat.cpu_pct = None;
+                }
+            }
+        }
+    }
+
+    fn refresh_all(&mut self) {
         use sysinfo::{ProcessRefreshKind, ProcessesToUpdate};
         self.system.refresh_processes_specifics(
             ProcessesToUpdate::All,
             true,
             ProcessRefreshKind::nothing().with_cpu().with_memory(),
         );
-        let stats = supervisor.live_stats(&self.system);
-        let sampled = self.sampled;
-        self.sampled = true;
-        if sampled {
-            stats
-        } else {
-            stats
-                .into_iter()
-                .map(|(session, stat)| {
-                    let masked = if stat.cpu_pct == Some(0.0_f64) {
-                        None
-                    } else {
-                        stat.cpu_pct
-                    };
-                    (
-                        session,
-                        LiveProcessStats {
-                            cpu_pct: masked,
-                            ..stat
-                        },
-                    )
-                })
-                .collect()
+    }
+
+    /// Targeted refresh of specific pids (orphan liveness probes).
+    pub fn refresh_pids(&mut self, pids: &[u32]) {
+        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate};
+        let targets: Vec<sysinfo::Pid> = pids
+            .iter()
+            .map(|pid| sysinfo::Pid::from_u32(*pid))
+            .collect();
+        self.system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&targets),
+            true,
+            ProcessRefreshKind::nothing().with_cpu().with_memory(),
+        );
+    }
+
+    /// Recomputes every tree's rows/stats/ring from the current table.
+    fn rebuild_trees(
+        &mut self,
+        roots: &[(SessionId, u32, bool)],
+        parents: &HashMap<u32, Vec<u32>>,
+        now_ms: i64,
+    ) {
+        // Drop state for sessions the supervisor no longer knows.
+        let live_ids: Vec<SessionId> = roots.iter().map(|(id, _, _)| id.clone()).collect();
+        self.trees.retain(|id, _| live_ids.contains(id));
+        self.stats.retain(|id, _| live_ids.contains(id));
+        for (session, root, finished) in roots {
+            let finished = *finished;
+            let tree = self.trees.entry(session.clone()).or_default();
+            if finished {
+                // Frozen: keep the last pre-exit rows (orphan snapshot
+                // source) and report definitive dead stats.
+                self.stats
+                    .insert((*session).clone(), LiveProcessStats::dead());
+                continue;
+            }
+            let (rows, stats) = tree_rows(&self.system, parents, *root);
+            tree.rows = rows;
+            tree.ring.push_back(TreeSample {
+                at_ms: now_ms,
+                cpu_pct: stats.cpu_pct,
+                rss_bytes: stats.rss_bytes,
+            });
+            tree.ring.truncate(RING_CAPACITY);
+            self.stats.insert((*session).clone(), stats);
         }
     }
+
+    /// Cached batched stats from the last tick (no refresh — the read
+    /// model must not trigger table refreshes per row, AJ-E401).
+    #[must_use]
+    pub fn stats_snapshot(&self) -> HashMap<SessionId, LiveProcessStats> {
+        self.stats.clone()
+    }
+
+    /// The latest per-process rows for one session (frozen at the last
+    /// pre-exit tick for finished sessions).
+    #[must_use]
+    pub fn rows(&self, session: &SessionId) -> Option<Vec<ProcessRow>> {
+        self.trees.get(session).map(|tree| tree.rows.clone())
+    }
+
+    /// The 5-minute sample ring for one session (the I-07 sparkline
+    /// source), oldest first.
+    #[must_use]
+    pub fn ring(&self, session: &SessionId) -> Vec<TreeSample> {
+        self.trees
+            .get(session)
+            .map(|tree| tree.ring.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// Live, non-zombie lookup against the current table: `(name, rss)`
+    /// or `None` when the pid is gone/zombie.
+    #[must_use]
+    pub fn lookup(&self, pid: u32) -> Option<(String, u64)> {
+        self.system
+            .process(sysinfo::Pid::from_u32(pid))
+            .filter(|process| {
+                !matches!(
+                    process.status(),
+                    sysinfo::ProcessStatus::Zombie | sysinfo::ProcessStatus::Dead
+                )
+            })
+            .map(|process| {
+                (
+                    process.name().to_string_lossy().into_owned(),
+                    process.memory(),
+                )
+            })
+    }
+
+    /// Refreshes the process table once and returns batched stats for
+    /// every supervised session (compat API for one-shot callers; the
+    /// steady state is [`LiveStatsCollector::tick`]).
+    pub fn refresh(&mut self, supervisor: &Supervisor) -> HashMap<SessionId, LiveProcessStats> {
+        let now = juggler_core::model::Timestamp::now().millis();
+        self.tick(supervisor, now);
+        self.stats.clone()
+    }
+}
+
+/// ppid → children map over the current table.
+fn parents_map(system: &sysinfo::System) -> HashMap<u32, Vec<u32>> {
+    let mut parents: HashMap<u32, Vec<u32>> = HashMap::new();
+    for (pid, process) in system.processes() {
+        if let Some(parent) = process.parent() {
+            parents
+                .entry(parent.as_u32())
+                .or_default()
+                .push(pid.as_u32());
+        }
+    }
+    parents
+}
+
+/// Per-process rows (root first, breadth-first over descendants) plus
+/// the tree aggregate, read from a table the caller already refreshed.
+fn tree_rows(
+    system: &sysinfo::System,
+    parents: &HashMap<u32, Vec<u32>>,
+    root: u32,
+) -> (Vec<ProcessRow>, LiveProcessStats) {
+    let mut rows = Vec::new();
+    let mut cpu = 0.0_f64;
+    let mut rss = 0_u64;
+    let mut child_count = 0_u32;
+    let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut queue: std::collections::VecDeque<(u32, u8)> =
+        std::collections::VecDeque::from([(root, 0)]);
+    while let Some((pid, depth)) = queue.pop_front() {
+        if !seen.insert(pid) {
+            continue; // ppid cycles must not loop forever
+        }
+        let children = parents.get(&pid).cloned().unwrap_or_default();
+        let Some(process) = system.process(sysinfo::Pid::from_u32(pid)) else {
+            queue.extend(children.into_iter().map(|child| (child, depth + 1)));
+            continue;
+        };
+        let age_ms = process.run_time().saturating_mul(1000);
+        rows.push(ProcessRow {
+            pid,
+            parent_pid: process.parent().map(sysinfo::Pid::as_u32),
+            name: process.name().to_string_lossy().into_owned(),
+            cpu_pct: Some(f64::from(process.cpu_usage())),
+            rss_bytes: process.memory(),
+            age_ms,
+            child_count: u32::try_from(children.len()).unwrap_or(u32::MAX),
+            depth,
+        });
+        cpu += f64::from(process.cpu_usage());
+        rss += process.memory();
+        if pid != root {
+            child_count += 1;
+        }
+        queue.extend(children.into_iter().map(|child| (child, depth + 1)));
+    }
+    (
+        rows,
+        LiveProcessStats {
+            child_count,
+            cpu_pct: Some(cpu),
+            rss_bytes: rss,
+        },
+    )
 }
 
 /// Caller-supplied handle extras (PTY writer + pre-created output
@@ -554,8 +804,25 @@ impl Supervisor {
     /// twice; [`LiveStatsCollector::refresh`] masks the first sample.
     #[must_use]
     pub fn live_stats(&self, system: &sysinfo::System) -> HashMap<SessionId, LiveProcessStats> {
-        let roots: Vec<(SessionId, u32, bool)> = self
-            .children
+        let parents = parents_map(system);
+        self.live_roots()
+            .into_iter()
+            .map(|(session, root, finished)| {
+                let stats = if finished {
+                    LiveProcessStats::dead()
+                } else {
+                    tree_stats(system, &parents, root)
+                };
+                (session, stats)
+            })
+            .collect()
+    }
+
+    /// Supervised roots as (session, root pid, finished) — the shared
+    /// enumeration for the collector and the read model.
+    #[must_use]
+    pub fn live_roots(&self) -> Vec<(SessionId, u32, bool)> {
+        self.children
             .lock()
             .map(|children| {
                 children
@@ -569,27 +836,7 @@ impl Supervisor {
                     })
                     .collect()
             })
-            .unwrap_or_default();
-        let mut parents: HashMap<u32, Vec<u32>> = HashMap::new();
-        for (pid, process) in system.processes() {
-            if let Some(parent) = process.parent() {
-                parents
-                    .entry(parent.as_u32())
-                    .or_default()
-                    .push(pid.as_u32());
-            }
-        }
-        roots
-            .into_iter()
-            .map(|(session, root, finished)| {
-                let stats = if finished {
-                    LiveProcessStats::dead()
-                } else {
-                    tree_stats(system, &parents, root)
-                };
-                (session, stats)
-            })
-            .collect()
+            .unwrap_or_default()
     }
 
     /// Feeds keyboard input to a PTY session's process.
@@ -674,6 +921,13 @@ impl Supervisor {
             .unwrap_or_default()
     }
 
+    /// The supervision journal, when one is open (descendant snapshots
+    /// and kill audit writes, AJ-E410).
+    #[must_use]
+    pub fn journal_ref(&self) -> Option<&Journal> {
+        self.journal.as_ref()
+    }
+
     /// True when the session was stopped through [`Supervisor::stop`]
     /// (user intent — not a crash), regardless of how the exit surfaces.
     #[must_use]
@@ -681,6 +935,15 @@ impl Supervisor {
         self.user_stopped
             .lock()
             .is_ok_and(|stopped| stopped.iter().any(|id| id == session))
+    }
+
+    /// True when this app's supervisor owns a handle for the session
+    /// (live or finished — adopted-from-journal sessions are not).
+    #[must_use]
+    pub fn is_supervised(&self, session: &SessionId) -> bool {
+        self.children
+            .lock()
+            .is_ok_and(|children| children.contains_key(session))
     }
 
     /// True when the session's process has exited.
