@@ -8,11 +8,13 @@ import type { FixtureSet, InstanceInfo } from "../../src/lib/bridge";
 const baseAccounts = [
   { id: "claude-work", provider: "claude-code", label: "Work Max", plan: "max-20x", login_state: "logged_in" },
   { id: "claude-personal", provider: "claude-code", label: "Personal", plan: null, login_state: "logged_in" },
+  { id: "fake-desk", provider: "fake-desktop", label: "Fake Desk", plan: null, login_state: "logged_in" },
 ];
 
 const baseProfiles = [
   { id: "p-1", name: "Main", account_id: "claude-work", account_label: "Work Max", provider: "claude-code", model: "opus", default_cwd: null },
   { id: "p-2", name: "Main", account_id: "claude-personal", account_label: "Personal", provider: "claude-code", model: null, default_cwd: null },
+  { id: "p-3", name: "App", account_id: "fake-desk", account_label: "Fake Desk", provider: "fake-desktop", model: null, default_cwd: null },
 ];
 
 // One session per SessionStatus (model.rs:188 + Stopped). Rows carry the
@@ -81,6 +83,7 @@ const mk = (n: number, status: InstanceInfo["status"], label: string): InstanceI
     last_activity_ms: T0 - n * 3_500_000,
     machine_id: "this-mac",
     kind: "terminal",
+    isolation_label: null,
     project_id: work ? "proj-1" : "proj-2",
     conversation_id: status === "running" ? "822e4125-e07d-4866-9954-ec9295efb079" : null,
   };
@@ -99,12 +102,90 @@ export const allStatuses: FixtureSet = {
     mk(7, "stopped", "Personal"),
     mk(8, "failed", "Work Max"),
     mk(9, "handed_over", "Personal"),
+    // AJ-E413: desktop-kind rows under the fake-desktop provider —
+    // running, exited, crashed. Desktop apps in this fixture have no
+    // transcript, quota feed, conversation, or model: those fields are
+    // null (D-06), resources only where measured.
+    {
+      ...mk(10, "running", "Personal"),
+      id: "sess-desktop-1",
+      launch_recipe_id: "p-3",
+      account_id: "fake-desk",
+      account_label: "Fake Desk",
+      provider: "fake-desktop",
+      kind: "desktop",
+      isolation_label: "Single-account app — Juggler tracks, cannot isolate",
+      model: null,
+      launch_model: null,
+      running_model: null,
+      model_source: "unknown",
+      quota: null,
+      tokens: null,
+      cpu_pct: 2.4,
+      rss_bytes: 88_000_000,
+      child_count: 1,
+      needs_attention: null,
+      attention: null,
+      git_branch: null,
+      project_id: "proj-3",
+      conversation_id: null,
+    },
+    {
+      ...mk(11, "finished", "Personal"),
+      id: "sess-desktop-2",
+      launch_recipe_id: "p-3",
+      account_id: "fake-desk",
+      account_label: "Fake Desk",
+      provider: "fake-desktop",
+      kind: "desktop",
+      isolation_label: "Single-account app — Juggler tracks, cannot isolate",
+      model: null,
+      launch_model: null,
+      running_model: null,
+      model_source: "unknown",
+      quota: null,
+      tokens: null,
+      cpu_pct: null,
+      rss_bytes: null,
+      child_count: 0,
+      needs_attention: null,
+      attention: null,
+      git_branch: null,
+      project_id: "proj-3",
+      conversation_id: null,
+    },
+    {
+      ...mk(12, "failed", "Personal"),
+      id: "sess-desktop-3",
+      launch_recipe_id: "p-3",
+      account_id: "fake-desk",
+      account_label: "Fake Desk",
+      provider: "fake-desktop",
+      kind: "desktop",
+      isolation_label: "Single-account app — Juggler tracks, cannot isolate",
+      model: null,
+      launch_model: null,
+      running_model: null,
+      model_source: "unknown",
+      quota: null,
+      tokens: null,
+      cpu_pct: null,
+      rss_bytes: null,
+      child_count: 0,
+      // Crashed (exit code 7): the failed badge comes from the status;
+      // no heuristic rule was recorded — attention stays null.
+      attention: null,
+      git_branch: null,
+      project_id: "proj-3",
+      conversation_id: null,
+    },
   ],
   projects: [
     { id: "proj-1", root: "/Users/dev/ai-juggler", name: "ai-juggler", last_activity_ms: T0 - 60_000, active_instance: null, accounts_used: ["Work Max"], instance_count: 5, history_sessions: 12 },
     { id: "proj-2", root: "/Users/dev/booknyx", name: "booknyx", last_activity_ms: T0 - 3_600_000, active_instance: null, accounts_used: ["Personal"], instance_count: 4, history_sessions: 7 },
+    { id: "proj-3", root: "/Users/dev/sacrificial", name: "sacrificial", last_activity_ms: T0 - 600_000, active_instance: null, accounts_used: ["Fake Desk"], instance_count: 3, history_sessions: 0 },
   ],
-  stats: { accounts: 2, profiles: 2, active_sessions: 2 },
+  stats: { accounts: 3, profiles: 3, active_sessions: 3 },
 };
 
 export const honestEmpty: FixtureSet = {

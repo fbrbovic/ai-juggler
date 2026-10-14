@@ -132,4 +132,11 @@ project_id: string | null,
  * The native conversation inside this Instance, once discovered
  * (AJ-E104: Instance row → conversation inside; None while Starting).
  */
-conversation_id: string | null, };
+conversation_id: string | null, 
+/**
+ * AJ-E413 Req.1: the per-Provider isolation claim for desktop
+ * Instances, verbatim (`Single-account app — Juggler tracks,
+ * cannot isolate` for single-account apps); `null` for terminal
+ * Instances and when the provider's adapter is not registered.
+ */
+isolation_label: string | null, };

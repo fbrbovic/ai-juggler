@@ -22,3 +22,5 @@ pub use claude_transcript::{
     MessageRole, ParsedMessage, ParsedTranscript, dedupe_messages, parse_transcript,
 };
 pub use fake::{FAKE_HARNESS_ID, FakeHarnessAdapter};
+pub mod fake_desktop;
+pub use fake_desktop::{FAKE_DESKTOP_ID, FakeDesktopAdapter, SINGLE_ACCOUNT_LABEL};

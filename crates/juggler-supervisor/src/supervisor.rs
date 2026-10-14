@@ -468,6 +468,87 @@ impl Supervisor {
         Ok(spawned)
     }
 
+    /// Spawns a desktop-class harness app (AJ-E413): tracked in the
+    /// SAME spawn ledger as terminal instances (journal + lifecycle
+    /// events + wait thread), with **no PTY and no output capture** —
+    /// the window is the surface; stdout/stderr/stdin are null so the
+    /// app can never hold our pipes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SupervisorError::Spawn`] when the process cannot start.
+    pub fn spawn_desktop(
+        &self,
+        session: &SessionId,
+        launch: &juggler_adapter::DesktopLaunch,
+    ) -> Result<SpawnedProcess, SupervisorError> {
+        use std::process::{Command, Stdio};
+
+        let mut command = Command::new(&launch.program);
+        command
+            .args(&launch.args)
+            .envs(&launch.env)
+            .current_dir(&launch.cwd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let child = command.spawn().map_err(|e| SupervisorError::Spawn {
+            program: launch.program.clone(),
+            message: e.to_string(),
+        })?;
+        let pid = child.id();
+        let ring = Arc::new(Mutex::new(OutputRing::new(DEFAULT_RING_CAPACITY)));
+        let child = Arc::new(Mutex::new(child));
+        let finished = Arc::new(AtomicBool::new(false));
+        let kill_child = Arc::clone(&child);
+        let force_kill: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = kill_child.lock().map(|mut c| c.kill());
+        });
+        self.register(
+            session.clone(),
+            pid,
+            ring,
+            Arc::clone(&finished),
+            force_kill,
+            ChildExtras {
+                pty: None,
+                last_output_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            },
+        );
+        if let Some(journal) = &self.journal {
+            journal.record_spawned(session, pid, &launch.program)?;
+        }
+        let _ = self.events_tx.send(LifecycleEvent::Started {
+            session: session.clone(),
+            pid,
+        });
+
+        let session_for_thread = session.clone();
+        let journal = self.journal.clone();
+        let events = self.events_tx.clone();
+        let done = Arc::clone(&finished);
+        std::thread::spawn(move || {
+            let status = child.lock().ok().and_then(|mut c| c.wait().ok());
+            if let Some(status) = status {
+                emit_exit(
+                    &session_for_thread,
+                    pid,
+                    exit_kind_std(status),
+                    &done,
+                    journal.as_ref(),
+                    &events,
+                );
+            } else {
+                done.store(true, Ordering::Release);
+            }
+        });
+
+        Ok(SpawnedProcess {
+            session: session.clone(),
+            pid,
+        })
+    }
+
     fn spawn_piped(
         &self,
         session: &SessionId,

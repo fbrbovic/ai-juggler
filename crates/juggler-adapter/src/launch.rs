@@ -71,6 +71,29 @@ pub fn interactive_spec(
     }
 }
 
+/// A desktop-class harness launch (AJ-E413): a windowed application
+/// tracked as an Instance in the same spawn ledger as terminal
+/// instances — **no PTY, no output capture** (the window is the
+/// surface; the terminal card must not render for this kind).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DesktopLaunch {
+    /// Executable to spawn (the real, unmodified app binary).
+    pub program: PathBuf,
+    /// Bundle identifier when the platform has one (macOS).
+    pub bundle_id: Option<String>,
+    /// Argument vector.
+    pub args: Vec<String>,
+    /// Environment overlay (isolation vars where the vendor supports
+    /// them — see `isolation_label` for the honest limits statement).
+    pub env: EnvMap,
+    /// Working directory.
+    pub cwd: PathBuf,
+    /// The per-Provider isolation claim, shown verbatim on the Instance
+    /// (Req.1): e.g. `Single-account app — Juggler tracks, cannot
+    /// isolate` for apps Juggler cannot partition.
+    pub isolation_label: &'static str,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{EnvMap, headless_spec, interactive_spec};

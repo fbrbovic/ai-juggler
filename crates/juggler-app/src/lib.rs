@@ -112,6 +112,8 @@ pub fn run() {
             commands::orphan_verify,
             commands::account_set_cleanup,
             commands::account_set_renewal,
+            commands::desktop_launch,
+            commands::desktop_focus,
         ])
         .setup(|app| {
             let _ = app.emit(EVENT_APP_READY, commands::AppInfo::current());

@@ -1061,6 +1061,15 @@ export function SessionRow({
           <span className="truncate">{mark.abbrev}</span>
         </span>
         <AccountDisc accountId={session.account_id} label={session.account_label} />
+        {session.kind === "desktop" && (
+          <span
+            title="desktop app instance"
+            className="shrink-0 rounded-full border border-accent/25 bg-accent-soft px-1 text-[9.5px] font-medium text-accent-hi"
+            data-testid="rail-app-chip"
+          >
+            app
+          </span>
+        )}
         <span className="min-w-0 shrink truncate text-[10.5px] text-muted" title={session.model ?? "default model"}>
           {session.model ?? <span className="text-faint">default model</span>}
         </span>

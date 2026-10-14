@@ -317,7 +317,7 @@
 - UI: `modelDrift` helper + keyboard-focusable `⇄` marker (aria = full drift text) in the rail; Overview renders the dual-model line, `not verified live` chip, or `Model: not reported by {Provider}`.
 - Live `/model` dogfood against a real Claude session remains maintainer-side validation (same class as prior live-dogfood items); the deterministic fixture→detection→wire→UI path is fully evidenced.
 
-### AJ-E413 Desktop adapter contract — launch and track a windowed harness | Status: TODO | Priority P0 | Effort L | Depends: AJ-E406
+### AJ-E413 Desktop adapter contract — launch and track a windowed harness | Status: DONE-EVIDENCED (evidence: docs/qa/evidence/AJ-E413/manifest.md) | Priority P0 | Effort L | Depends: AJ-E406
 **Goal**: Make `InstanceKind::Desktop` real: a desktop-class harness can be launched under an Account, tracked as an Instance, and stopped, without pretending it has a terminal.
 **User story**: As a user of a desktop AI app, I want Juggler to start it under the right account, show it beside my terminal instances, and stop it cleanly.
 **Requirements**:
@@ -333,6 +333,14 @@
 **Files to touch**: `crates/juggler-adapter/src/adapter.rs`, `crates/juggler-adapter/src/launch.rs`, `crates/juggler-supervisor/src/supervisor.rs`, `ui/src/screens/WorkPanels.tsx:116-126` (replace placeholder), `crates/juggler-core/src/model.rs:325-355`.
 **Research basis**: model.rs:330-332 Desktop kind; SPEC.md:321,332-335,347,351; ADR-0007 decisions 4-5; WorkPanels.tsx:122-123 placeholder text.
 **Handover note**: True window embedding is impossible on macOS (no public reparenting API) — do not attempt it. The panel is the surface; the window is reached via AJ-E414.
+
+*Implementation mapping (corrected in this task's PR per the claiming protocol)*:
+- Adapter (Req.1): `juggler-adapter` gains `DesktopLaunch { program, bundle_id, args, env, cwd, isolation_label }` + trait `desktop_launch` (default `Unsupported`) and `desktop_isolation_label` (default `None`); capability bits `DESKTOP_APP`/`DESKTOP_SINGLE_ACCOUNT`. Reference implementation: `juggler-adapters` `FakeDesktopAdapter` + the scriptable `fake-desktop` binary (`--marker/--exit-after-secs/--crash/--spawn-child`).
+- Wire (Req.1): `commands.rs` `DesktopLaunchInfo { session_id, pid, bundle_id, isolation_label }` and `InstanceInfo.isolation_label` (registry-resolved at read time; `null` for terminal rows and unregistered providers — unit-tested).
+- Supervisor (Req.2): `Supervisor::spawn_desktop` — same spawn ledger, null stdio (no PTY), journal `spawned`/`exited`, kernel wait thread → `LifecycleEvent::Exited`; stop through the shared TERM→KILL ladder; crash surfaces `ExitKind::Code(n)`.
+- Panel (Req.3): `RightInspector.tsx` `InstanceOverview` desktop branch — `desktop-surface` card with status/`app` chip/provider/account·project/resources/tokens, primary `Open / Focus window` (injected `focusBridge` seam), amber `desktop-isolation` callout (copy-exact label), focus-outcome tier text, exited/crashed state lines; terminal card and hand-over section NOT rendered (asserted). `desktop_focus` = opener app-activation tier with honest outcomes (`App not running — Relaunch?` / `App opened — exact-window focus lands with AJ-E414`).
+- Req.4: capability-gated both ways (`ships no desktop app` refusal test; fake-desktop `launch_spec` refuses CLI). No dual-capability provider ships in the default registry yet — the Add-time dual offer renders when one does (ZCode, SPEC.md:134); the seam is the capability bits + both launch paths.
+- Evidence: `docs/qa/evidence/AJ-E413/` (fake-desktop e2e log, real TextEdit launch record incl. journal lines, manifest); gallery `_gallery/13-desktop/` (6 captures, states running/exited/crashed/single-account warning, dark+light).
 
 ### AJ-E414 Focus Window service — go to that exact instance's window | Status: TODO | Priority P0 | Effort M | Depends: AJ-E413
 **Goal**: One click (or hotkey) from any desktop Instance raises that application's exact window, even when the app holds several windows or sits on another Space or minimised.
