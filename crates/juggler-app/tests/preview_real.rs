@@ -1,5 +1,5 @@
 //! AJ-E415 real-capture evidence: drives the REAL `ScreenshotSource`
-//! (ScreenCaptureKit) once. On a machine without the Screen Recording
+//! (`ScreenCaptureKit`) once. On a machine without the Screen Recording
 //! grant this records the honest DENIED path end to end (no prompt:
 //! content listing errors cleanly). With the grant (maintainer
 //! machine), it captures one real window, prints frame sizes/timings
