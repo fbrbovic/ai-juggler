@@ -76,6 +76,7 @@ fn seed_instance(state: &Arc<AppState>, dir: &Path, id: &str, transcript: &Path)
             }),
             attention: None,
             running: None,
+            window: None,
         })
         .unwrap();
     session

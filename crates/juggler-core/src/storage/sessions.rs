@@ -8,7 +8,7 @@ use serde::de::Error as _;
 use crate::error::CoreError;
 use crate::model::{
     ConversationId, InstanceKind, InstanceRecord, MachineId, ProfileId, ProjectId, SessionId,
-    SessionStatus, Timestamp, TranscriptRef,
+    SessionStatus, Timestamp, TranscriptRef, WindowIdentity,
 };
 
 /// Converts a stored-JSON parse failure into a row-mapping failure.
@@ -40,8 +40,8 @@ impl SessionsRepo<'_> {
             "INSERT INTO instances
                  (id, conversation_id, launch_recipe_id, machine, kind, project, cwd, status,
                   started_at, last_activity, usage_json, transcript_ref_json, attention_json,
-                  running_model_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                  running_model_json, window_identity_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 session.id.as_str(),
                 session.conversation.as_ref().map(ConversationId::as_str),
@@ -64,6 +64,7 @@ impl SessionsRepo<'_> {
                     .transpose()?,
                 serde_json::to_string(&session.attention).ok(),
                 serde_json::to_string(&session.running).ok(),
+                serde_json::to_string(&session.window).ok(),
             ],
         )?;
         Ok(())
@@ -81,7 +82,8 @@ impl SessionsRepo<'_> {
             "UPDATE instances SET
                  conversation_id = ?2, status = ?3, last_activity = ?4,
                  usage_json = ?5, transcript_ref_json = ?6, project = ?7,
-                 attention_json = ?8, running_model_json = ?9
+                 attention_json = ?8, running_model_json = ?9,
+                 window_identity_json = ?10
              WHERE id = ?1",
             params![
                 session.id.as_str(),
@@ -100,6 +102,7 @@ impl SessionsRepo<'_> {
                     .map(crate::model::ProjectId::as_str),
                 serde_json::to_string(&session.attention).ok(),
                 serde_json::to_string(&session.running).ok(),
+                serde_json::to_string(&session.window).ok(),
             ],
         )?;
         super::accounts::require_changed(changed, "session", session.id.as_str())
@@ -159,6 +162,7 @@ fn map_session(row: &Row<'_>) -> rusqlite::Result<InstanceRecord> {
     let transcript_json: Option<String> = row.get("transcript_ref_json")?;
     let attention_json: Option<String> = row.get("attention_json")?;
     let running_json: Option<String> = row.get("running_model_json")?;
+    let window_json: Option<String> = row.get("window_identity_json")?;
     Ok(InstanceRecord {
         id: SessionId::new(row.get::<_, String>("id")?),
         conversation: row
@@ -211,6 +215,14 @@ fn map_session(row: &Row<'_>) -> rusqlite::Result<InstanceRecord> {
         running: running_json
             .as_deref()
             .map(serde_json::from_str::<crate::model::RunningModel>)
+            .transpose()
+            .ok()
+            .flatten(),
+        // Same degrade rule for the window identity (AJ-E414): advisory
+        // targeting state, never a row-breaking value.
+        window: window_json
+            .as_deref()
+            .map(serde_json::from_str::<WindowIdentity>)
             .transpose()
             .ok()
             .flatten(),

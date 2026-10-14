@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RightInspector } from "./RightInspector";
 import type {
   AccountInfo,
+  FocusOutcomeInfo,
   InstanceInfo,
   LaunchRecipeInfo,
   ProjectInfo,
@@ -31,11 +32,17 @@ beforeEach(() => {
 
 // AJ-E413 seam (E410 pattern): the focus source is injected, so the
 // statically-imported bridge never needs mocking.
+const FOCUSED: FocusOutcomeInfo = {
+  outcome: "Focused window",
+  permission_missing: false,
+  window_title: "notes-a",
+};
 const focus = {
   calls: [] as string[],
+  next: FOCUSED as FocusOutcomeInfo,
   bridge: async (id: string) => {
     focus.calls.push(id);
-    return "App opened — exact-window focus lands with AJ-E414";
+    return focus.next;
   },
 };
 
@@ -151,13 +158,56 @@ describe("AJ-E413 desktop Instance surface (Req.3)", () => {
   });
 
   it("focus click calls the bridge and reports the outcome tier verbatim", async () => {
+    focus.next = { outcome: "Focused window", permission_missing: false, window_title: "notes-a" };
     const { container } = shell(mk());
     fireEvent.click(container.querySelector('[data-testid="desktop-focus"]')!);
     await vi.waitFor(() =>
       expect(container.querySelector('[data-testid="desktop-focus-outcome"]')?.textContent)
-        .toContain("App opened — exact-window focus lands with AJ-E414"),
+        .toContain("Focused window"),
     );
+    expect(container.querySelector('[data-testid="desktop-focus-outcome"]')?.textContent)
+      .toContain("notes-a");
     expect(focus.calls).toEqual(["sess-desktop-1"]);
+  });
+
+  it("missing permission shows the one-time dismissible explainer (AJ-E414 Req.3)", async () => {
+    localStorage.removeItem("aij.a11y-explainer.dismissed");
+    focus.next = { outcome: "App opened — window not found", permission_missing: true, window_title: null };
+    const { container } = shell(mk());
+    fireEvent.click(container.querySelector('[data-testid="desktop-focus"]')!);
+    const explainer = await vi.waitFor(() => {
+      const node = container.querySelector('[data-testid="desktop-a11y-explainer"]');
+      expect(node).not.toBeNull();
+      return node!;
+    });
+    expect(explainer.textContent).toContain(
+      "Juggler can open the app; exact-window focus needs Accessibility permission",
+    );
+    // Copy-exact explainer + a deep-link button; dismissal persists and
+    // the next degraded attempt stays quiet.
+    expect(explainer.querySelector('[data-testid="open-a11y-settings"]')).not.toBeNull();
+    fireEvent.click(explainer.querySelector("button:not([data-testid])")!);
+    expect(localStorage.getItem("aij.a11y-explainer.dismissed")).toBe("1");
+    await vi.waitFor(() =>
+      expect(container.querySelector('[data-testid="desktop-a11y-explainer"]')).toBeNull(),
+    );
+    fireEvent.click(container.querySelector('[data-testid="desktop-focus"]')!);
+    await vi.waitFor(() =>
+      expect(container.querySelector('[data-testid="desktop-focus-outcome"]')?.textContent)
+        .toContain("App opened — window not found"),
+    );
+    expect(container.querySelector('[data-testid="desktop-a11y-explainer"]')).toBeNull();
+  });
+
+  it("an earlier dismissal keeps the explainer hidden across mounts", async () => {
+    localStorage.setItem("aij.a11y-explainer.dismissed", "1");
+    focus.next = { outcome: "App opened — window not found", permission_missing: true, window_title: null };
+    const { container } = shell(mk());
+    fireEvent.click(container.querySelector('[data-testid="desktop-focus"]')!);
+    await vi.waitFor(() =>
+      expect(container.querySelector('[data-testid="desktop-focus-outcome"]')).not.toBeNull(),
+    );
+    expect(container.querySelector('[data-testid="desktop-a11y-explainer"]')).toBeNull();
   });
 
   it("no hand-over section on a desktop Instance (there is no terminal context to move)", () => {

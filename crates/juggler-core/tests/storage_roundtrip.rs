@@ -140,6 +140,7 @@ fn arb_session(profile: ProfileId) -> impl Strategy<Value = SessionRecord> {
                 }),
                 attention: None,
                 running: None,
+                window: None,
             },
         )
 }
@@ -276,6 +277,7 @@ fn deleting_account_cascades() {
         usage: UsageSnapshot::default(),
         attention: None,
         running: None,
+        window: None,
         transcript_ref: None,
     };
     storage.sessions().insert(&session).unwrap();
@@ -419,6 +421,7 @@ fn session_list_without_filter_returns_all() {
         usage: UsageSnapshot::default(),
         attention: None,
         running: None,
+        window: None,
         transcript_ref: None,
     };
     storage.sessions().insert(&session).unwrap();
@@ -479,6 +482,7 @@ fn sessions_carry_instance_kind_and_project_link() {
         usage: UsageSnapshot::default(),
         attention: None,
         running: None,
+        window: None,
         transcript_ref: None,
     };
     storage.sessions().insert(&session).unwrap();
@@ -537,8 +541,8 @@ fn v4_database_upgrades_in_place_to_v5_with_identical_values() {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     assert_eq!(
-        version, 9,
-        "v4 → current (v9, AJ-E412 running model) exactly once, on open"
+        version, 10,
+        "v4 → current (v10, AJ-E414 window identity + app settings) exactly once, on open"
     );
 
     let account = storage.accounts().get(&AccountId::new("acc-1")).unwrap();
@@ -565,7 +569,7 @@ fn v4_database_upgrades_in_place_to_v5_with_identical_values() {
         .raw_conn()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 9);
+    assert_eq!(version, 10);
     assert!(storage.sessions().get(&SessionId::new("sess-1")).is_ok());
 }
 
@@ -668,6 +672,7 @@ fn session_running_model_roundtrip_and_default_none() {
         transcript_ref: None,
         attention: None,
         running: None,
+        window: None,
     };
     storage.sessions().insert(&session).unwrap();
     // Stored without the field: loads as None (never the launch overlay).
@@ -689,4 +694,97 @@ fn session_running_model_roundtrip_and_default_none() {
     session.running = None;
     storage.sessions().update(&session).unwrap();
     assert_eq!(storage.sessions().get(&session.id).unwrap().running, None);
+}
+
+/// AJ-E414 (schema v10): the window identity blob round-trips, defaults
+/// to None, and a malformed blob degrades to None — never a
+/// row-breaking value, never a guessed identity.
+#[test]
+fn session_window_identity_roundtrip_and_degrade() {
+    use juggler_core::model::{
+        InstanceKind, InstanceRecord, MachineId, ProfileId, SessionStatus, Timestamp,
+        WindowIdentity,
+    };
+    let storage = Storage::open_in_memory().unwrap();
+    seed_chain(&storage);
+    let mut session = InstanceRecord {
+        id: SessionId::new("sess-window"),
+        conversation: None,
+        profile: ProfileId::new("seed-profile"),
+        machine: MachineId::new("this-mac"),
+        kind: InstanceKind::Desktop,
+        project: None,
+        cwd: PathBuf::from("/tmp/window"),
+        status: SessionStatus::Running,
+        started_at: Timestamp::from_millis(1),
+        last_activity: None,
+        usage: Default::default(),
+        transcript_ref: None,
+        attention: None,
+        running: None,
+        window: None,
+    };
+    storage.sessions().insert(&session).unwrap();
+    // Terminal-era rows (no field): None, never fabricated.
+    assert_eq!(storage.sessions().get(&session.id).unwrap().window, None);
+
+    session.window = Some(WindowIdentity {
+        pid: 29340,
+        bundle_id: Some("com.apple.TextEdit".into()),
+        title: Some("aij-e414-a.txt".into()),
+        cgwindow_id: None,
+    });
+    storage.sessions().update(&session).unwrap();
+    assert_eq!(
+        storage.sessions().get(&session.id).unwrap().window,
+        Some(WindowIdentity {
+            pid: 29340,
+            bundle_id: Some("com.apple.TextEdit".into()),
+            title: Some("aij-e414-a.txt".into()),
+            cgwindow_id: None,
+        })
+    );
+
+    // Malformed blob: degrade to None, row still loads.
+    storage
+        .raw_conn()
+        .execute(
+            "UPDATE instances SET window_identity_json = '{not-json' WHERE id = 'sess-window'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(storage.sessions().get(&session.id).unwrap().window, None);
+}
+
+/// AJ-E414 (schema v10): the app-settings kv — get/set/upsert, empty
+/// value deletes (reset is a real state), list is ordered.
+#[test]
+fn app_settings_kv_roundtrip() {
+    let storage = Storage::open_in_memory().unwrap();
+    assert_eq!(
+        storage.app_settings().get("go_to_hotkey").unwrap(),
+        None,
+        "unset keys read as None — the caller applies its default"
+    );
+    storage
+        .app_settings()
+        .set("go_to_hotkey", "Alt+Space")
+        .unwrap();
+    assert_eq!(
+        storage.app_settings().get("go_to_hotkey").unwrap(),
+        Some("Alt+Space".to_string())
+    );
+    // Upsert, not duplicate.
+    storage
+        .app_settings()
+        .set("go_to_hotkey", "CmdOrCtrl+G")
+        .unwrap();
+    assert_eq!(
+        storage.app_settings().get("go_to_hotkey").unwrap(),
+        Some("CmdOrCtrl+G".to_string())
+    );
+    // Empty value = reset (row deleted).
+    storage.app_settings().set("go_to_hotkey", "").unwrap();
+    assert_eq!(storage.app_settings().get("go_to_hotkey").unwrap(), None);
+    assert!(storage.app_settings().list().unwrap().is_empty());
 }

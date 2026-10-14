@@ -12,6 +12,7 @@ mod profiles;
 mod sessions;
 
 mod projects;
+mod settings;
 
 use std::path::Path;
 
@@ -21,6 +22,7 @@ pub use accounts::AccountsRepo;
 pub use profiles::ProfilesRepo;
 pub use projects::ProjectsRepo;
 pub use sessions::SessionsRepo;
+pub use settings::AppSettingsRepo;
 
 use crate::error::CoreError;
 
@@ -107,7 +109,20 @@ const V8: &str = "ALTER TABLE accounts ADD COLUMN renewal_date TEXT;";
 /// observed (never the launch overlay).
 const V9: &str = "ALTER TABLE instances ADD COLUMN running_model_json TEXT;";
 
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9];
+/// Schema version 10 (AJ-E414): the desktop window identity — additive
+/// nullable JSON blob (`{pid, bundle_id, title, cgwindow_id}`); `NULL`
+/// for terminal Instances — plus the app-level settings kv (hotkey
+/// bindings and future user preferences; values are strings, namespaced
+/// by feature).
+const V10: &str = "
+ALTER TABLE instances ADD COLUMN window_identity_json TEXT;
+CREATE TABLE app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+";
+
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10];
 
 /// An opened AI Juggler database with typed repositories.
 #[derive(Debug)]
@@ -204,6 +219,12 @@ impl Storage {
     #[must_use]
     pub fn projects(&self) -> ProjectsRepo<'_> {
         ProjectsRepo::new(&self.conn)
+    }
+
+    /// Repository for app-level settings (schema v10 kv).
+    #[must_use]
+    pub fn app_settings(&self) -> AppSettingsRepo<'_> {
+        AppSettingsRepo::new(&self.conn)
     }
 
     /// Raw connection access for migrations/fixture tooling (tests,

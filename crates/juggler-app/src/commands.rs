@@ -23,6 +23,7 @@ use juggler_core::storage::Storage;
 use juggler_supervisor::{ExitKind, LifecycleEvent};
 
 use crate::error::{AppError, AppResult};
+use crate::focus;
 use crate::state::AppState;
 
 /// Static application information served to the UI at startup.
@@ -953,6 +954,8 @@ pub fn launch_profile(
             usage: juggler_core::model::UsageSnapshot::default(),
             attention: None,
             running: None,
+            // Terminal Instances own no window identity (AJ-E414).
+            window: None,
             transcript_ref: None,
         })?;
     };
@@ -1046,6 +1049,15 @@ pub fn desktop_launch_arc(state: &Arc<AppState>, account_id: &str) -> AppResult<
             usage: juggler_core::model::UsageSnapshot::default(),
             attention: None,
             running: None,
+            // Window identity recorded at launch (AJ-E414 Req.2): the
+            // owning PID + bundle id; the title is adopted at first
+            // sight (first focus attempt) and re-discovered thereafter.
+            window: Some(juggler_core::model::WindowIdentity {
+                pid: spawned.pid,
+                bundle_id: launch.bundle_id.clone(),
+                title: None,
+                cgwindow_id: None,
+            }),
             transcript_ref: None,
         })?;
     }
@@ -1057,40 +1069,224 @@ pub fn desktop_launch_arc(state: &Arc<AppState>, account_id: &str) -> AppResult<
     })
 }
 
-/// Opens/activates the desktop app for one Instance (AJ-E413's tier:
-/// app activation via the OS opener). Exact-window focus —
-/// `AXUIElement` raise across Spaces/minimised windows — lands with
-/// AJ-E414; the returned outcome label says exactly which tier ran
-/// (never overstated).
+/// A focus attempt's honest result (AJ-E414 Req.5): the copy-exact
+/// outcome label, whether the Accessibility grant was missing (the
+/// attempt degraded to app activation), and the window title the
+/// attempt targeted (after first-sight adoption / re-discovery).
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct FocusOutcomeInfo {
+    /// `Focused window` | `App opened — window not found` |
+    /// `App not running — Relaunch?` | platform-unavailable note.
+    pub outcome: String,
+    /// True when tiers (b)/(c) were impossible without the
+    /// Accessibility permission — the UI shows its explainer.
+    pub permission_missing: bool,
+    /// The window title this attempt targeted, once known.
+    pub window_title: Option<String>,
+}
+
+/// Runs the AJ-E414 focus tiers for one desktop Instance: activate the
+/// app, match the recorded window identity, clear `AXMinimized`, then
+/// `AXRaise` (see `focus.rs` for the mechanism pin). The outcome says
+/// exactly which tier ran — app activation alone is never reported as
+/// window focus success.
+#[tauri::command]
 ///
 /// # Errors
 ///
-/// Returns the typed [`AppError`] message when the Instance is unknown.
-#[tauri::command]
+/// Returns the typed [`AppError`] message when the Instance is unknown
+/// or not desktop-kind (focus owns windows, terminals own panels).
 pub fn desktop_focus(
-    app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     session_id: String,
-) -> AppResult<String> {
-    use tauri_plugin_opener::OpenerExt;
-    let (live, cwd) = {
-        let storage = lock_storage(&state)?;
-        let record = storage.sessions().get(&SessionId::new(session_id))?;
-        (!is_terminal(record.status), record.cwd.clone())
+) -> AppResult<FocusOutcomeInfo> {
+    desktop_focus_with(
+        state.inner(),
+        &session_id,
+        std::sync::Arc::new(focus::OsascriptRunner),
+    )
+}
+
+/// The testable core (tests inject a scripted runner).
+///
+/// # Errors
+///
+/// Same as [`desktop_focus`].
+pub fn desktop_focus_with(
+    state: &Arc<AppState>,
+    session_id: &str,
+    runner: std::sync::Arc<dyn focus::ScriptRunner>,
+) -> AppResult<FocusOutcomeInfo> {
+    let mut record = {
+        let storage = lock_storage_arc(state)?;
+        storage
+            .sessions()
+            .get(&SessionId::new(session_id.to_string()))?
     };
-    if !live {
-        return Ok("App not running — Relaunch?".to_string());
+    if record.kind != juggler_core::model::InstanceKind::Desktop {
+        return Err(AppError::Validation {
+            subject: "desktop focus",
+            message: "window focus applies to desktop instances".into(),
+        });
     }
-    // App-level activation (the E413 tier): the opener reveals the app's
-    // context; window-level targeting (`AXUIElement` raise) is AJ-E414's
-    // contract and is never claimed here.
+    if is_terminal(record.status) {
+        return Ok(FocusOutcomeInfo {
+            outcome: focus::OUTCOME_NOT_RUNNING.to_string(),
+            permission_missing: false,
+            window_title: record.window.as_ref().and_then(|w| w.title.clone()),
+        });
+    }
+    // Window identity at launch, or synthesized for pre-v10 rows (the
+    // bundle id from the adapter spec; pid 0 forces re-discovery).
+    let identity = if let Some(identity) = record.window.clone() {
+        identity
+    } else {
+        {
+            let bundle_id = {
+                let storage = lock_storage_arc(state)?;
+                let account = storage
+                    .accounts()
+                    .get(&storage.profiles().get(&record.profile)?.account)?;
+                state
+                    .registry
+                    .get(&account.harness)
+                    .and_then(|adapter| adapter.desktop_launch(&account).ok())
+                    .and_then(|launch| launch.bundle_id)
+            };
+            juggler_core::model::WindowIdentity {
+                pid: 0,
+                bundle_id,
+                title: None,
+                cgwindow_id: None,
+            }
+        }
+    };
+    let attempt = focus::focus(runner, &identity);
+    // Persist the (possibly enriched) identity — first-sight titles and
+    // re-discovered PIDs survive the attempt (Req.2).
+    if attempt.identity != record.window {
+        record.window.clone_from(&attempt.identity);
+        let storage = lock_storage_arc(state)?;
+        storage.sessions().update(&record)?;
+    }
+    Ok(FocusOutcomeInfo {
+        outcome: attempt.outcome.to_string(),
+        permission_missing: attempt.permission_missing,
+        window_title: attempt
+            .identity
+            .as_ref()
+            .and_then(|identity| identity.title.clone()),
+    })
+}
+
+/// Reads one app-level setting (schema v10 kv); `None` = never set.
+#[tauri::command]
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on storage failures.
+pub fn app_setting_get(
+    state: tauri::State<'_, Arc<AppState>>,
+    key: String,
+) -> AppResult<Option<String>> {
+    let storage = lock_storage(&state)?;
+    storage.app_settings().get(&key).map_err(AppError::from)
+}
+
+/// Writes one app-level setting (empty value = reset to default).
+#[tauri::command]
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on storage failures.
+pub fn app_setting_set(
+    state: tauri::State<'_, Arc<AppState>>,
+    key: String,
+    value: String,
+) -> AppResult<()> {
+    let storage = lock_storage(&state)?;
+    storage
+        .app_settings()
+        .set(&key, &value)
+        .map_err(AppError::from)
+}
+
+/// Opens the system Accessibility privacy pane (the deep link behind
+/// the AJ-E414 permission explainer; the link is fixed — never a
+/// caller-supplied URL).
+#[tauri::command]
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message when the pane cannot open.
+pub fn open_accessibility_settings(app: tauri::AppHandle) -> AppResult<()> {
+    use tauri_plugin_opener::OpenerExt;
     app.opener()
-        .open_path(cwd.to_string_lossy(), None::<&str>)
+        .open_url(
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+            None::<&str>,
+        )
         .map_err(|e| AppError::Io {
-            context: "open desktop app",
+            context: "open Accessibility settings",
             message: e.to_string(),
-        })?;
-    Ok("App opened — exact-window focus lands with AJ-E414".to_string())
+        })
+}
+
+/// Rebinds the global "Go to instance…" hotkey (AJ-E414 Req.4). The
+/// new binding is registered with the OS FIRST; only a successful
+/// registration persists it — and a failed registration restores the
+/// previous one, so the user is never left without a hotkey.
+#[tauri::command]
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message for an empty binding or an
+/// OS registration failure (conflict, unparseable accelerator).
+pub fn go_to_hotkey_set(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    hotkey: String,
+) -> AppResult<()> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    let hotkey = hotkey.trim().to_string();
+    if hotkey.is_empty() {
+        return Err(AppError::Validation {
+            subject: "hotkey",
+            message: "empty binding — the default is restored by setting it explicitly".into(),
+        });
+    }
+    let previous = {
+        let storage = lock_storage(&state)?;
+        storage
+            .app_settings()
+            .get(crate::GO_TO_HOTKEY_KEY)
+            .map_err(AppError::from)?
+    };
+    let shortcuts = app.global_shortcut();
+    if let Some(previous) = &previous {
+        let _ = shortcuts.unregister(previous.as_str());
+    }
+    match shortcuts.register(hotkey.as_str()) {
+        Ok(()) => {
+            let storage = lock_storage(&state)?;
+            storage
+                .app_settings()
+                .set(crate::GO_TO_HOTKEY_KEY, &hotkey)
+                .map_err(AppError::from)?;
+            Ok(())
+        }
+        Err(error) => {
+            // Best-effort restore of the previous binding.
+            if let Some(previous) = &previous {
+                let _ = shortcuts.register(previous.as_str());
+            }
+            Err(AppError::Io {
+                context: "register hotkey",
+                message: format!("{hotkey}: {error}"),
+            })
+        }
+    }
 }
 
 /// Lists Instances (board feed), newest first (canonical name
@@ -2210,6 +2406,7 @@ pub fn session_handover_impl(
             usage: juggler_core::model::UsageSnapshot::default(),
             attention: None,
             running: None,
+            window: None,
             transcript_ref: Some(juggler_core::model::TranscriptRef {
                 path: dest,
                 native_id: None,
@@ -3096,6 +3293,7 @@ mod tests {
             usage: UsageSnapshot::default(),
             attention: None,
             running: None,
+            window: None,
             transcript_ref: None,
         }
     }

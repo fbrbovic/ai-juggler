@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "16-onboarding-detect"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "16-onboarding-detect"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -727,6 +727,109 @@ test("desktop — rail app chip", async ({ page }) => {
   await page.getByRole("tab", { name: "Sessions" }).click();
   await expect(page.getByTestId("rail-app-chip").first()).toBeVisible();
   await page.screenshot({ path: resolve(GALLERY, "13-desktop/rail-app-chip-1280x800.png") });
+});
+
+// AJ-E414 focus captures: the outcome text after a focus attempt, the
+// permission explainer (degraded tier), and the "Go to instance…"
+// palette at both themes. The harness seam `__AIJ_FOCUS_OUTCOME__`
+// pins the mocked tier result each capture renders.
+async function seedFocusPage(
+  page: import("@playwright/test").Page,
+  outcome: { outcome: string; permission_missing: boolean; window_title: string | null },
+) {
+  await page.addInitScript(
+    ({ fixture, t0, pinned }) => {
+      (window as never as { __AIJ_FIXTURE__: unknown }).__AIJ_FIXTURE__ = fixture;
+      (window as never as { __AIJ_FOCUS_OUTCOME__: unknown }).__AIJ_FOCUS_OUTCOME__ = pinned;
+      localStorage.setItem("aij.theme", "dark");
+      localStorage.setItem("aij.onboarding.dismissed", "1");
+      sessionStorage.setItem("aij.ready.skipped", "1");
+      Date.now = () => t0;
+    },
+    {
+      fixture: allStatuses,
+      t0: T0,
+      pinned: outcome,
+    },
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/");
+}
+
+test("focus — panel outcome after focus (Focused window, dark)", async ({ page }) => {
+  await seedFocusPage(page, {
+    outcome: "Focused window",
+    permission_missing: false,
+    window_title: "aij-e414-a.txt",
+  });
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  await page
+    .getByRole("button", { name: /Fake Desk/ })
+    .filter({ has: page.getByTestId("rail-app-chip") })
+    .filter({ hasText: /running/i })
+    .click();
+  await page.getByTestId("desktop-focus").click();
+  await expect(page.getByTestId("desktop-focus-outcome")).toContainText("Focused window");
+  await expect(page.getByTestId("desktop-focus-outcome")).toContainText("aij-e414-a.txt");
+  await expect(page.getByTestId("desktop-a11y-explainer")).toHaveCount(0);
+  await page.screenshot({ path: resolve(GALLERY, "14-focus/panel-outcome-1280x800.png") });
+});
+
+test("focus — permission explainer on the degraded tier", async ({ page }) => {
+  await seedFocusPage(page, {
+    outcome: "App opened — window not found",
+    permission_missing: true,
+    window_title: null,
+  });
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  await page
+    .getByRole("button", { name: /Fake Desk/ })
+    .filter({ has: page.getByTestId("rail-app-chip") })
+    .filter({ hasText: /running/i })
+    .click();
+  await page.getByTestId("desktop-focus").click();
+  const explainer = page.getByTestId("desktop-a11y-explainer");
+  await expect(explainer).toBeVisible();
+  await expect(explainer).toContainText(
+    "Juggler can open the app; exact-window focus needs Accessibility permission",
+  );
+  await page.screenshot({ path: resolve(GALLERY, "14-focus/permission-explainer-1280x800.png") });
+});
+
+test("focus — Go to instance… palette (dark 1280x800)", async ({ page }) => {
+  await seedInspectorPage(page, { width: 1280, height: 800 });
+  await page.keyboard.press("Meta+k");
+  const palette = page.getByTestId("goto-palette");
+  await expect(palette).toBeVisible();
+  // Live instances only, desktop first; the footer names the binding.
+  await expect(palette.locator('[data-testid="goto-row-sess-desktop-1"]')).toBeVisible();
+  await expect(palette.locator('[data-testid="goto-row-sess-2"]')).toBeVisible();
+  await expect(palette.locator('[data-testid="goto-row-sess-desktop-3"]')).toHaveCount(0);
+  await expect(palette.locator('[data-testid="goto-row-sess-6"]')).toHaveCount(0);
+  await expect(palette).toContainText("Alt+Space");
+  await page.screenshot({ path: resolve(GALLERY, "14-focus/palette-1280x800.png") });
+});
+
+test("focus — Go to instance… palette (light 1024x680)", async ({ page }) => {
+  await page.addInitScript(
+    ({ fixture, t0 }) => {
+      (window as never as { __AIJ_FIXTURE__: unknown }).__AIJ_FIXTURE__ = fixture;
+      localStorage.setItem("aij.theme", "light");
+      localStorage.setItem("aij.onboarding.dismissed", "1");
+      sessionStorage.setItem("aij.ready.skipped", "1");
+      Date.now = () => t0;
+    },
+    { fixture: allStatuses, t0: T0 },
+  );
+  await page.emulateMedia({ reducedMotion: "reduce", colorScheme: "light" });
+  await page.setViewportSize({ width: 1024, height: 680 });
+  await page.goto("/");
+  await page.keyboard.press("Meta+k");
+  const palette = page.getByTestId("goto-palette");
+  await expect(palette).toBeVisible();
+  await expect(palette.locator('[data-testid="goto-row-sess-desktop-1"]')).toBeVisible();
+  await page.screenshot({ path: resolve(GALLERY, "14-focus/palette-1024x680-light.png") });
 });
 
 // Determinism self-test (Req.4): same fixture twice → byte-identical PNG.
