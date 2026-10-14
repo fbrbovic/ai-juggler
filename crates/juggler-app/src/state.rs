@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use juggler_adapter::AdapterRegistry;
+use juggler_core::model::SessionId;
 use juggler_core::storage::Storage;
 use juggler_supervisor::{
     HeuristicEngine, HeuristicThresholds, LiveStatsCollector, OrphanTracker, Supervisor,
@@ -28,6 +29,10 @@ pub struct AppState {
     /// Exit snapshots → confirmed orphans + stop states (AJ-E410).
     /// Interior-mutex: safe to read without the collector lock.
     pub orphans: OrphanTracker,
+    /// Per-Instance transcript parse offsets for running-model
+    /// detection (AJ-E412): how many bytes each tail-scan has consumed,
+    /// so the 2 s tick only ever parses NEW lines.
+    pub model_offsets: Mutex<std::collections::HashMap<SessionId, u64>>,
     /// Stuck/waiting/quota heuristics (AJ-E405); thresholds user-tunable
     /// via `heuristics.json`.
     pub heuristics: HeuristicEngine,
@@ -88,6 +93,7 @@ impl AppState {
             storage: Mutex::new(storage),
             resources: Mutex::new(LiveStatsCollector::new()),
             orphans: OrphanTracker::new(),
+            model_offsets: Mutex::new(std::collections::HashMap::new()),
             heuristics: HeuristicEngine::new(load_thresholds(&data_dir)),
             terminal_taps: Mutex::new(std::collections::HashSet::new()),
             data_dir,

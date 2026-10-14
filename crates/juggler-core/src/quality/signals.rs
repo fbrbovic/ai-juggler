@@ -27,12 +27,16 @@ impl Tier {
 }
 
 /// One transcript usage event (input+output tokens at a timestamp).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageEvent {
     /// Epoch milliseconds of the turn.
     pub at_ms: i64,
     /// Tokens reported by the provider for this turn.
     pub tokens: TokenCounts,
+    /// The model this turn actually ran (verbatim vendor string), when
+    /// the transcript records one — the per-turn pricing key (AJ-E412
+    /// Req.4); `None` turns are counted but never priced.
+    pub model: Option<String>,
 }
 
 /// Tokens/min over the trailing 5 minutes: 1-minute bars (oldest →

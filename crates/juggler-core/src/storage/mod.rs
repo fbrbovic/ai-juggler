@@ -102,7 +102,12 @@ const V7: &str = "ALTER TABLE accounts ADD COLUMN cleanup_opt_in INTEGER NOT NUL
 /// date — additive nullable column; `NULL` = `Expiry: unknown`.
 const V8: &str = "ALTER TABLE accounts ADD COLUMN renewal_date TEXT;";
 
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8];
+/// Schema version 9 (AJ-E412): the transcript-observed running model —
+/// additive nullable JSON blob (`{model, source}`); `NULL` = not
+/// observed (never the launch overlay).
+const V9: &str = "ALTER TABLE instances ADD COLUMN running_model_json TEXT;";
+
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9];
 
 /// An opened AI Juggler database with typed repositories.
 #[derive(Debug)]

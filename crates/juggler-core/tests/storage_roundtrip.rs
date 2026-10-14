@@ -139,6 +139,7 @@ fn arb_session(profile: ProfileId) -> impl Strategy<Value = SessionRecord> {
                     native_id: native,
                 }),
                 attention: None,
+                running: None,
             },
         )
 }
@@ -274,6 +275,7 @@ fn deleting_account_cascades() {
         last_activity: None,
         usage: UsageSnapshot::default(),
         attention: None,
+        running: None,
         transcript_ref: None,
     };
     storage.sessions().insert(&session).unwrap();
@@ -416,6 +418,7 @@ fn session_list_without_filter_returns_all() {
         last_activity: Some(Timestamp::from_millis(9)),
         usage: UsageSnapshot::default(),
         attention: None,
+        running: None,
         transcript_ref: None,
     };
     storage.sessions().insert(&session).unwrap();
@@ -475,6 +478,7 @@ fn sessions_carry_instance_kind_and_project_link() {
         last_activity: None,
         usage: UsageSnapshot::default(),
         attention: None,
+        running: None,
         transcript_ref: None,
     };
     storage.sessions().insert(&session).unwrap();
@@ -533,8 +537,8 @@ fn v4_database_upgrades_in_place_to_v5_with_identical_values() {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     assert_eq!(
-        version, 8,
-        "v4 → current (v8, AJ-E411 renewal date) exactly once, on open"
+        version, 9,
+        "v4 → current (v9, AJ-E412 running model) exactly once, on open"
     );
 
     let account = storage.accounts().get(&AccountId::new("acc-1")).unwrap();
@@ -561,7 +565,7 @@ fn v4_database_upgrades_in_place_to_v5_with_identical_values() {
         .raw_conn()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 8);
+    assert_eq!(version, 9);
     assert!(storage.sessions().get(&SessionId::new("sess-1")).is_ok());
 }
 
@@ -639,4 +643,50 @@ fn account_renewal_date_roundtrip_and_default_none() {
             .renewal_date,
         None
     );
+}
+
+#[test]
+fn session_running_model_roundtrip_and_default_none() {
+    use juggler_core::model::{
+        InstanceKind, InstanceRecord, MachineId, ModelSource, ProfileId, RunningModel,
+        SessionStatus, Timestamp,
+    };
+    let storage = Storage::open_in_memory().unwrap();
+    seed_chain(&storage);
+    let mut session = InstanceRecord {
+        id: SessionId::new("sess-running"),
+        conversation: None,
+        profile: ProfileId::new("seed-profile"),
+        machine: MachineId::new("this-mac"),
+        kind: InstanceKind::Terminal,
+        project: None,
+        cwd: PathBuf::from("/tmp/running"),
+        status: SessionStatus::Running,
+        started_at: Timestamp::from_millis(1),
+        last_activity: None,
+        usage: Default::default(),
+        transcript_ref: None,
+        attention: None,
+        running: None,
+    };
+    storage.sessions().insert(&session).unwrap();
+    // Stored without the field: loads as None (never the launch overlay).
+    assert_eq!(storage.sessions().get(&session.id).unwrap().running, None);
+
+    session.running = Some(RunningModel {
+        model: "sonnet-5".into(),
+        source: ModelSource::InSession,
+    });
+    storage.sessions().update(&session).unwrap();
+    assert_eq!(
+        storage.sessions().get(&session.id).unwrap().running,
+        Some(RunningModel {
+            model: "sonnet-5".into(),
+            source: ModelSource::InSession,
+        })
+    );
+
+    session.running = None;
+    storage.sessions().update(&session).unwrap();
+    assert_eq!(storage.sessions().get(&session.id).unwrap().running, None);
 }

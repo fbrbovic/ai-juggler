@@ -146,7 +146,9 @@ fn spawn_read_model_ticks(
     processes_state: Arc<state::AppState>,
 ) {
     // Event-driven recovery (AJ-E405 Req.5): drain fresh-output signals
-    // at 200 ms — well inside the 300 ms budget.
+    // at 200 ms — well inside the 300 ms budget. The drain also feeds
+    // running-model detection for the freshly-active Instances (AJ-E412
+    // Req.2: transcript-tail parse, emitted within the same budget).
     {
         let attention_app = app.clone();
         std::thread::spawn(move || {
@@ -168,6 +170,7 @@ fn spawn_read_model_ticks(
         });
     }
     let quota_app = app.clone();
+    let processes_app = app.clone();
     std::thread::spawn(move || {
         loop {
             std::thread::sleep(std::time::Duration::from_secs(5));
@@ -176,11 +179,14 @@ fn spawn_read_model_ticks(
     });
     // The 2 s per-tree sampling tick (AJ-E410): collector rings/rows,
     // orphan grace poll, and the opted-in Tier-1 auto-cleanup sweep.
+    // Also the running-model safety net (AJ-E412): offset-tracked tail
+    // scans skip unchanged transcripts with one metadata read.
     // UI emissions stay on their own coalesced cadences above.
     std::thread::spawn(move || {
         loop {
             std::thread::sleep(std::time::Duration::from_secs(2));
             commands::processes_tick(&processes_state);
+            commands::detect_running_models(&processes_app, &processes_state, None);
         }
     });
     std::thread::spawn(move || {

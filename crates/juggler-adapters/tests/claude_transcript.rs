@@ -174,3 +174,70 @@ fn notify_watcher_emits_discovered_then_appended() {
         "watcher should report transcript growth"
     );
 }
+
+// AJ-E412: the per-turn model observation — ParsedMessage.model from
+// top-level `model` or nested `message.model`, across the four fixture
+// shapes (launch-only, /model change, per-turn mixed, no-model).
+mod running_model_fixtures {
+    use juggler_adapters::claude_transcript::parse_transcript;
+
+    fn fixture(name: &str) -> Vec<u8> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name);
+        std::fs::read(&path).unwrap_or_else(|error| panic!("{name}: {error}"))
+    }
+
+    fn assistant_models(bytes: &[u8]) -> Vec<Option<String>> {
+        parse_transcript(bytes)
+            .messages
+            .into_iter()
+            .filter(|message| {
+                message.role == juggler_adapters::claude_transcript::MessageRole::Assistant
+            })
+            .map(|message| message.model)
+            .collect()
+    }
+
+    #[test]
+    fn launch_only_transcript_records_no_model() {
+        let models = assistant_models(&fixture("model_launch_only.jsonl"));
+        assert!(models.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn model_change_mid_transcript_is_observed_per_turn() {
+        let models = assistant_models(&fixture("model_change_mid_transcript.jsonl"));
+        assert_eq!(
+            models,
+            vec![
+                Some("opus-4.8".into()),
+                Some("sonnet-5".into()),
+                Some("sonnet-5".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn per_turn_mixed_session_reads_top_level_and_nested_shapes() {
+        let models = assistant_models(&fixture("model_per_turn_mixed.jsonl"));
+        // The fourth line carries the model NESTED under message.model —
+        // both shapes ship in the wild, both must read.
+        assert_eq!(
+            models,
+            vec![
+                Some("opus-4.8".into()),
+                None,
+                Some("sonnet-5".into()),
+                Some("opus-4.8".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn no_model_provider_records_none_everywhere() {
+        let models = assistant_models(&fixture("model_none.jsonl"));
+        assert!(!models.is_empty());
+        assert!(models.iter().all(Option::is_none));
+    }
+}

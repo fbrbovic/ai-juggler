@@ -290,7 +290,7 @@
 - The once-per-day polite announcement ships as `RenewalAnnouncer` (aria-live polite, localStorage last-announced date per account).
 - Research deliverable: `docs/research/subscription-expiry-sources.md` — the D-12 gate, candidate audit (all unsanctioned/prohibited), and the new-task revisit trigger.
 
-### AJ-E412 Running-model telemetry (what the Instance is actually running) | Status: TODO | Priority P1 | Effort M | Depends: AJ-E401,AJ-E407
+### AJ-E412 Running-model telemetry (what the Instance is actually running) | Status: DONE-EVIDENCED (zcode-primary, 2026-10-14) | Priority P1 | Effort M | Depends: AJ-E401,AJ-E407
 **Goal**: Report the model an Instance is actually running now — launch overlay, in-session `/model` changes, and transcript-observed model — with source labelling and drift surfacing.
 **User story**: As Persona A who switched models mid-session, I want the row to show the model in use right now (not what I launched with), so that cost and quota judgements use the truth.
 **Requirements**:
@@ -309,6 +309,13 @@
 **Files to touch**: `crates/juggler-core/src/model.rs:161-168,299-321`, `crates/juggler-adapters/src/claude_transcript.rs`, `crates/juggler-app/src/commands.rs:911`, `ui/src/types/generated/SessionInfo.ts` (generated, via AJ-E401), `ui/src/components/WorkflowRail.tsx:397`, `ui/src/screens/WorkPanels.tsx`, `docs/SPEC.md:190` (read only).
 **Research basis**: pass2/04 §3 I-03 (line 177: launch + `/model`-change via transcript watch, SPEC.md:190); pass2/04 §6 cost row (416); decision-log D-06 honest-fields rule; expected-worfklow.md:13 ("models currently running").
 **Handover note**: Trap: `SettingsOverlay.model` (model.rs:164) is intent, not telemetry — never label it as running. If a Provider exposes the model only at launch flags, `model_source=launch` + `not verified live` is the honest end state, not a bug.
+*Implementation mapping (corrected in this task's PR per the claiming protocol)*:
+- Read model: `InstanceRecord.running: Option<RunningModel{model, source}>` (schema v9 additive JSON blob — same pattern as attention v6); wire `InstanceInfo` gains `launch_model`/`running_model`/`model_source` and `model` stays the computed display value so existing I-03 consumers hold.
+- Detection (Req.2): rides the EXISTING 200 ms activity drain (event path) + the 2 s tick as safety net — incremental byte-offset transcript tail scans (seek-based; one metadata read when unchanged). No new watcher thread, no Provider config polling, no network. `detect_running_models_core` (storage) is test-separable from the emit wrapper.
+- Cost (Req.4): `session_cost_per_turn` prices each turn by its observed model; unrecorded/unpriced turns are excluded from $ but kept in token totals — this REPLACES E409's launch-overlay fallback in `instance_quality` (overlay = intent, never priced as fact).
+- Parser: `ParsedMessage.model` reads both shapes (top-level `model` and nested `message.model`); fixtures at `crates/juggler-adapters/tests/fixtures/model_*.jsonl` beside the parser tests.
+- UI: `modelDrift` helper + keyboard-focusable `⇄` marker (aria = full drift text) in the rail; Overview renders the dual-model line, `not verified live` chip, or `Model: not reported by {Provider}`.
+- Live `/model` dogfood against a real Claude session remains maintainer-side validation (same class as prior live-dogfood items); the deterministic fixture→detection→wire→UI path is fully evidenced.
 
 ### AJ-E413 Desktop adapter contract — launch and track a windowed harness | Status: TODO | Priority P0 | Effort L | Depends: AJ-E406
 **Goal**: Make `InstanceKind::Desktop` real: a desktop-class harness can be launched under an Account, tracked as an Instance, and stopped, without pretending it has a terminal.

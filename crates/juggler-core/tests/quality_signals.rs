@@ -7,7 +7,8 @@
 
 use juggler_core::model::TokenCounts;
 use juggler_core::quality::{
-    UsageEvent, load_pricing_table, pricing::session_cost, quota_forecast_label, signals,
+    UsageEvent, load_pricing_table, pricing::session_cost, pricing::session_cost_per_turn,
+    quota_forecast_label, signals,
 };
 
 const T0: i64 = 1_728_800_000_000;
@@ -33,6 +34,7 @@ fn load_fixture(name: &str) -> (Vec<UsageEvent>, u64, u64) {
         events.push(UsageEvent {
             at_ms: value["at"].as_i64().unwrap_or(T0),
             tokens,
+            model: None,
         });
         if value.get("error").is_some() {
             errors += 1;
@@ -64,6 +66,7 @@ fn idle_renders_real_zero_distinct_from_no_data() {
             output: 50,
             ..TokenCounts::default()
         },
+        model: None,
     }];
     let idle = signals::tokens_per_min(&old, T0);
     assert!(idle.has_window());
@@ -174,6 +177,38 @@ fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 
 /// Per-Instance compute budget at 100k events: single pass stays fast.
 #[test]
+fn per_turn_pricing_prices_only_turns_with_a_recorded_model() {
+    let table = load_pricing_table();
+    let event = |model: Option<&str>, input: u64, output: u64| UsageEvent {
+        at_ms: T0,
+        tokens: TokenCounts {
+            input,
+            output,
+            ..TokenCounts::default()
+        },
+        model: model.map(str::to_string),
+    };
+    // Mixed session: opus turn + unrecorded turn + sonnet turn.
+    let events = vec![
+        event(Some("opus"), 1_000, 500),
+        event(None, 2_000, 1_000),
+        event(Some("sonnet"), 10_000, 5_000),
+    ];
+    let (cost, models) = session_cost_per_turn(&table, "claude-code", &events).unwrap();
+    // opus: 1.0*0.015 + 0.5*0.075 = 0.0525; sonnet: 10*0.003 + 5*0.015 = 0.105.
+    assert!((cost - 0.1575).abs() < 1e-9);
+    assert_eq!(models, vec!["opus".to_string(), "sonnet".to_string()]);
+
+    // No turn records a model: no $ (the honest tokens-only state).
+    let unrecorded = vec![event(None, 5_000, 5_000)];
+    assert!(session_cost_per_turn(&table, "claude-code", &unrecorded).is_none());
+
+    // Recorded but unpriced model: also excluded, never $0.00.
+    let unpriced = vec![event(Some("gpt-5-codex"), 5_000, 5_000)];
+    assert!(session_cost_per_turn(&table, "claude-code", &unpriced).is_none());
+}
+
+#[test]
 fn tokens_per_min_100k_events_under_budget() {
     let events: Vec<UsageEvent> = (0..100_000)
         .map(|i| UsageEvent {
@@ -183,6 +218,7 @@ fn tokens_per_min_100k_events_under_budget() {
                 output: 50,
                 ..TokenCounts::default()
             },
+            model: None,
         })
         .collect();
     let start = std::time::Instant::now();

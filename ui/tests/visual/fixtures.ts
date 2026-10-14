@@ -44,7 +44,13 @@ const mk = (n: number, status: InstanceInfo["status"], label: string): InstanceI
     provider: "claude-code",
     account_id: work ? "claude-work" : "claude-personal",
     account_label: label,
-    model: work ? "opus" : null,
+    // AJ-E412: sess-8 carries the drift fixture (launched opus, observed
+    // running sonnet-5 via an in-session /model change); other Work rows
+    // are launch-only (not verified live); Personal rows have neither.
+    model: n === 8 ? "sonnet-5" : work ? "opus" : null,
+    launch_model: work ? "opus" : null,
+    running_model: n === 8 ? "sonnet-5" : null,
+    model_source: n === 8 ? "in-session" : work ? "launch" : "unknown",
     status,
     quota,
     tokens:

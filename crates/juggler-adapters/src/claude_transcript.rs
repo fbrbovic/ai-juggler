@@ -42,6 +42,10 @@ pub struct ParsedMessage {
     pub text: String,
     /// Token usage carried by this line, if any.
     pub usage: Option<TokenCounts>,
+    /// The model this assistant turn actually ran (verbatim vendor
+    /// string; top-level `model` or `message.model`). `None` on lines
+    /// that do not record one — the honest per-turn source (AJ-E412).
+    pub model: Option<String>,
     /// True for sidechain (subagent) lines.
     pub sidechain: bool,
 }
@@ -96,6 +100,7 @@ fn extract_message(value: &serde_json::Value, kind: &str) -> Option<ParsedMessag
         _ if kind == "assistant" => MessageRole::Assistant,
         _ => MessageRole::Other,
     };
+    let model = string_field(value, "model").or_else(|| string_field(message, "model"));
     Some(ParsedMessage {
         uuid: string_field(value, "uuid"),
         parent_uuid: string_field(value, "parentUuid"),
@@ -103,6 +108,7 @@ fn extract_message(value: &serde_json::Value, kind: &str) -> Option<ParsedMessag
         role,
         text: extract_text(message.get("content")),
         usage: extract_usage(message.get("usage")),
+        model,
         sidechain: value
             .get("isSidechain")
             .and_then(serde_json::Value::as_bool)

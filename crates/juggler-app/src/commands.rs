@@ -274,9 +274,18 @@ pub struct InstanceInfo {
     /// version); `unknown` when unresolvable — never blank.
     #[serde(alias = "label")]
     pub account_label: String,
-    /// I-03: preferred model from the launch settings overlay; `null`
-    /// means "default model", never a guessed model name.
+    /// I-03 display value: the RUNNING model once observed, else the
+    /// launch overlay, else `default model` — never a guessed name.
     pub model: Option<String>,
+    /// The launch-overlay model (intent, not telemetry; AJ-E412).
+    pub launch_model: Option<String>,
+    /// The transcript-OBSERVED running model; `null` until observed —
+    /// never filled from the overlay.
+    pub running_model: Option<String>,
+    /// How `model` is known: `launch` (overlay only, not verified
+    /// live), `in-session` (observed, differs from the overlay),
+    /// `transcript` (observed), `unknown` (neither).
+    pub model_source: String,
     /// I-04: lifecycle status string (storage vocabulary).
     pub status: String,
     /// I-05: quota window snapshot; `null` when no feed exists.
@@ -922,6 +931,7 @@ pub fn launch_profile(
             last_activity: None,
             usage: juggler_core::model::UsageSnapshot::default(),
             attention: None,
+            running: None,
             transcript_ref: None,
         })?;
     };
@@ -1134,12 +1144,13 @@ pub fn heuristic_tick(app: &tauri::AppHandle, state: &Arc<AppState>) -> AppResul
 /// Returns the typed [`AppError`] message on failure.
 pub fn attention_recovery_drain(app: &tauri::AppHandle, state: &Arc<AppState>) -> AppResult<()> {
     let mut changed = false;
-    for session in state.supervisor.drain_activity() {
-        if let Some(running) = state.heuristics.recover(&session) {
+    let drained: Vec<SessionId> = state.supervisor.drain_activity();
+    for session in &drained {
+        if let Some(running) = state.heuristics.recover(session) {
             debug_assert_eq!(running, SessionStatus::Running);
             {
                 let storage = state.storage.lock().map_err(|_| AppError::StatePoisoned)?;
-                if apply_attention_recovery(&storage, &session).is_some() {
+                if apply_attention_recovery(&storage, session).is_some() {
                     changed = true;
                 }
             }
@@ -1148,7 +1159,29 @@ pub fn attention_recovery_drain(app: &tauri::AppHandle, state: &Arc<AppState>) -
     if changed {
         emit_sessions(app, state)?;
     }
+    // AJ-E412 Req.2: the same fresh-output signal drives transcript
+    // tail-scans for the running model (only the active Instances) —
+    // the event path keeps the <300 ms budget; `detect_running_models`
+    // emits `sessions_updated` itself when a model changed.
+    if !drained.is_empty() {
+        detect_running_models(app, state, Some(&drained));
+    }
     Ok(())
+}
+
+/// The model a transcript line records for its turn — top-level
+/// `model` or nested `message.model` (both shapes ship in the wild).
+fn line_model(value: &serde_json::Value) -> Option<String> {
+    value
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            value
+                .get("message")
+                .and_then(|message| message.get("model"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(str::to_string)
 }
 
 /// Aggregated transcript facts feeding the quality signals.
@@ -1202,8 +1235,11 @@ fn scan_transcript(record: &SessionRecord, now: i64) -> TranscriptScan {
             .as_str()
             .and_then(chrono_like_ms)
             .unwrap_or(now);
-        scan.events
-            .push(juggler_core::quality::UsageEvent { at_ms, tokens });
+        scan.events.push(juggler_core::quality::UsageEvent {
+            at_ms,
+            tokens,
+            model: line_model(&value),
+        });
         if value.get("error").is_some() {
             scan.errors += 1;
         }
@@ -1243,12 +1279,7 @@ pub fn instance_quality(
         format!("{} errors / {} turns", scan.errors, scan.turns)
     };
     let table = juggler_core::quality::load_pricing_table();
-    // Price against the launch-settings model when set (the honest
-    // per-Instance running-model feed lands with AJ-E412).
     let recipe = storage.profiles().get(&record.profile).ok();
-    let model = recipe
-        .as_ref()
-        .and_then(|r| r.settings_overlay.model.clone());
     let provider = storage
         .accounts()
         .list()
@@ -1260,9 +1291,19 @@ pub fn instance_quality(
                 .map(|a| a.harness.to_string())
         })
         .unwrap_or_default();
-    let cost = model.as_deref().and_then(|model| {
-        juggler_core::quality::pricing::session_cost(&table, &provider, model, record.usage.tokens)
-    });
+    // AJ-E412 Req.4: price per turn where the transcript records the
+    // model; turns without one stay in the token totals but are
+    // excluded from $. Falls back to tokens-only when no turn was
+    // priceable (never to the launch overlay — that is intent, not
+    // telemetry).
+    let (cost, priced_model) = match juggler_core::quality::pricing::session_cost_per_turn(
+        &table,
+        &provider,
+        &scan.events,
+    ) {
+        Some((total, models)) => (Some(total), Some(models.join(", "))),
+        None => (None, None),
+    };
     // Forecast: from quota deltas — none are observable yet, so idle
     // honestly until the usage engine (AJ-E606+) feeds burn rates.
     let forecast = juggler_core::quality::quota_forecast_label(
@@ -1288,7 +1329,7 @@ pub fn instance_quality(
             reasoning: record.usage.tokens.reasoning,
         },
         session_cost_usd: cost,
-        priced_model: model.filter(|_| cost.is_some()),
+        priced_model: priced_model.filter(|_| cost.is_some()),
         quota_forecast: forecast,
         stuck: record.attention.as_ref().map(|reason| AttentionInfo {
             rule: reason.rule.clone(),
@@ -1610,10 +1651,36 @@ fn resolved_join(
     )
 }
 
+/// AJ-E412 Req.1 classification: the I-03 display model prefers the
+/// OBSERVED running model over the launch intent; the source names how
+/// it is known (`in-session` = observed drift from the overlay).
+fn display_model(
+    running: Option<&juggler_core::model::RunningModel>,
+    launch: Option<&String>,
+) -> (Option<String>, String) {
+    let observed = running.map(|entry| entry.model.clone());
+    let source = match (&observed, launch) {
+        (Some(running_model), Some(launch_model)) if running_model != launch_model => "in-session",
+        (Some(_), _) => "transcript",
+        (None, Some(_)) => "launch",
+        (None, None) => "unknown",
+    };
+    (observed.or_else(|| launch.cloned()), source.to_string())
+}
+
 /// Session rows with denormalized account/provider joins and the full
 /// I-01..I-11 read model (AJ-E401). One storage pass per collection
 /// (accounts, launch settings, instances) joined in memory — no per-row
 /// storage reads; absent values serialise as `null`, never `0` or `""`.
+/// Test/inspection surface: session rows with an empty live-stats map.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on storage failures.
+pub fn session_infos_snapshot(storage: &Storage) -> AppResult<Vec<InstanceInfo>> {
+    session_infos(storage, &LiveStatsMap::new())
+}
+
 fn session_infos(storage: &Storage, live: &LiveStatsMap) -> AppResult<Vec<InstanceInfo>> {
     // account id → (label, provider)
     let account_index: std::collections::BTreeMap<String, (String, String)> = storage
@@ -1650,8 +1717,10 @@ fn session_infos(storage: &Storage, live: &LiveStatsMap) -> AppResult<Vec<Instan
         .list(None)?
         .into_iter()
         .map(|record| {
-            let (account_id, account_label, provider, model) =
+            let (account_id, account_label, provider, launch_model) =
                 resolved_join(&recipe_index, &account_index, &record.profile.to_string());
+            let (model, model_source) =
+                display_model(record.running.as_ref(), launch_model.as_ref());
             let terminal = is_terminal(record.status);
             let stats = if terminal {
                 None
@@ -1665,6 +1734,12 @@ fn session_infos(storage: &Storage, live: &LiveStatsMap) -> AppResult<Vec<Instan
                 account_id,
                 account_label,
                 model,
+                launch_model,
+                running_model: record
+                    .running
+                    .as_ref()
+                    .map(|observed| observed.model.clone()),
+                model_source,
                 status: record.status.as_str().to_string(),
                 quota: quota_snapshot_of(&record.usage),
                 tokens: if record.usage.tokens == juggler_core::model::TokenCounts::default() {
@@ -1935,6 +2010,7 @@ pub fn session_handover_impl(
             last_activity: None,
             usage: juggler_core::model::UsageSnapshot::default(),
             attention: None,
+            running: None,
             transcript_ref: Some(juggler_core::model::TranscriptRef {
                 path: dest,
                 native_id: None,
@@ -2606,6 +2682,157 @@ fn account_cleanup_opt_in(state: &Arc<AppState>, session: &SessionId) -> bool {
         .is_ok_and(|account| account.cleanup_opt_in)
 }
 
+// ---------------------------------------------------------------------------
+// AJ-E412: running-model telemetry — the transcript-observed model.
+// ---------------------------------------------------------------------------
+
+/// Scans NEW transcript bytes (tracked per-Instance parse offset) for
+/// the newest recorded turn model, and persists + classifies it on
+/// change (`transcript` when it matches the launch overlay,
+/// `in-session` when it differs — an observed `/model` change). Only
+/// transcript lines are read: no Provider config files, no network
+/// (Req.2/Req.7 — local-only by construction).
+///
+/// Returns true when any Instance's model changed (the caller emits
+/// `sessions_updated`).
+pub fn detect_running_models(
+    app: &tauri::AppHandle,
+    state: &Arc<AppState>,
+    only: Option<&[SessionId]>,
+) -> bool {
+    let changed = detect_running_models_core(state, only);
+    if changed {
+        let _ = emit_sessions(app, state);
+    }
+    changed
+}
+
+/// The storage-side core (tests call this directly — no app handle).
+pub fn detect_running_models_core(state: &Arc<AppState>, only: Option<&[SessionId]>) -> bool {
+    let sessions: Vec<(SessionId, Option<String>, std::path::PathBuf)> = {
+        let Ok(storage) = state.storage.lock() else {
+            return false;
+        };
+        storage
+            .sessions()
+            .list(None)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|record| !is_terminal(record.status))
+            .filter(|record| only.is_none_or(|ids| ids.contains(&record.id)))
+            .filter_map(|record| {
+                let overlay = storage
+                    .profiles()
+                    .get(&record.profile)
+                    .ok()
+                    .and_then(|recipe| recipe.settings_overlay.model);
+                let path = record.transcript_ref.as_ref()?.path.clone();
+                Some((record.id, overlay, path))
+            })
+            .collect()
+    };
+    let mut changed = false;
+    for (session, launch_model, path) in sessions {
+        if scan_one_transcript(state, &session, launch_model.as_ref(), &path) {
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Tail-scans one Instance's transcript for the newest observed model;
+/// true when the stored observation changed. Incremental by byte offset
+/// (truncation resets to zero — re-parse, never assume).
+fn scan_one_transcript(
+    state: &Arc<AppState>,
+    session: &SessionId,
+    launch_model: Option<&String>,
+    path: &std::path::Path,
+) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false; // no transcript yet: not observed, never guessed
+    };
+    let len = metadata.len();
+    let offset = state
+        .model_offsets
+        .lock()
+        .ok()
+        .and_then(|offsets| offsets.get(session).copied())
+        .unwrap_or(0);
+    if len < offset {
+        // Truncated/rotated: reset and re-parse from the start.
+        if let Ok(mut offsets) = state.model_offsets.lock() {
+            offsets.insert(session.clone(), 0);
+        }
+        return scan_one_transcript(state, session, launch_model, path);
+    }
+    if len == offset {
+        return false; // nothing new — one metadata read, no parse
+    }
+    // Read only the NEW bytes (plus a carry for the half-parsed line):
+    // seek past the consumed prefix, never re-parse the head.
+    let read_from = offset.saturating_sub(1);
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    if file.seek(SeekFrom::Start(read_from)).is_err() {
+        return false;
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(len - read_from).unwrap_or(0));
+    if file
+        .by_ref()
+        .take(len - read_from)
+        .read_to_end(&mut bytes)
+        .is_err()
+    {
+        return false;
+    }
+    if let Ok(mut offsets) = state.model_offsets.lock() {
+        offsets.insert(session.clone(), len);
+    }
+    // The newest model recorded on a complete line wins.
+    let mut observed: Option<String> = None;
+    for line in String::from_utf8_lossy(&bytes).lines() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if let Some(model) = line_model(&value) {
+            observed = Some(model);
+        }
+    }
+    let Some(model) = observed else {
+        return false;
+    };
+    let source = if launch_model == Some(&model) {
+        juggler_core::model::ModelSource::Transcript
+    } else {
+        juggler_core::model::ModelSource::InSession
+    };
+    let next = juggler_core::model::RunningModel { model, source };
+    persist_running_model(state, session, &next)
+}
+
+/// Persists an observed running model; false when unchanged (no write,
+/// no emit) or when the row is gone.
+fn persist_running_model(
+    state: &Arc<AppState>,
+    session: &SessionId,
+    next: &juggler_core::model::RunningModel,
+) -> bool {
+    let Ok(storage) = state.storage.lock() else {
+        return false;
+    };
+    let Ok(mut record) = storage.sessions().get(session) else {
+        return false;
+    };
+    if record.running.as_ref() == Some(next) {
+        return false; // unchanged: no write, no emit
+    }
+    record.running = Some(next.clone());
+    storage.sessions().update(&record).is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -2665,6 +2892,7 @@ mod tests {
             last_activity: Some(Timestamp::from_millis(1_700_000_060_000)),
             usage: UsageSnapshot::default(),
             attention: None,
+            running: None,
             transcript_ref: None,
         }
     }
