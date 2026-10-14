@@ -12,5 +12,7 @@ description = "Vendored, audited ScreenCaptureKit init shim (D-17) — the one u
 # true`, `unsafe_code = "forbid"` does not apply here — everything
 # else in the workspace keeps the absolute law. The crate contains
 # exactly ONE unsafe block, audited in D-17 and pinned below.
-[dependencies]
+# macOS-only: the binding does not build elsewhere; the crate itself
+# is an empty lib on non-macOS (see lib.rs cfg).
+[target.'cfg(target_os = "macos")'.dependencies]
 screencapturekit = { version = "11.0.0", features = ["macos_14_0"] }
