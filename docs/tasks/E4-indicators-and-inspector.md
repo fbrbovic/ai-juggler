@@ -263,7 +263,7 @@
 - `Stop all` ships guarded by the recorded-descendant allow-list only; PID-identity verification (pid reuse, port re-probe) stays the E5/AJ-E503 seam per the handover note — no tree-kill safety claimed beyond recorded descendants.
 - Fixtures: fake-harness gains `--spawn-child PROG --child-args "…" [--child-ignore-term]` (stdio null; the ignore-term variant wraps in `bash -c "trap '' TERM; exec …"` — SIG_IGN survives exec; workspace forbids unsafe code so no pre_exec).
 
-### AJ-E411 Subscription-expiry warning hook (manual renewal date, D-12) | Status: TODO | Priority P1 | Effort M | Depends: AJ-E401,AJ-E408
+### AJ-E411 Subscription-expiry warning hook (manual renewal date, D-12) | Status: DONE-EVIDENCED (zcode-primary, 2026-10-14) | Priority P1 | Effort M | Depends: AJ-E401,AJ-E408
 **Goal**: Add the optional user-entered renewal date per Account, its approaching-expiry warning on row + Account inspector, and the gated research hook for any future sanctioned source.
 **User story**: As Persona A juggling three subscriptions, I want `Renews in 6 days` on the Account that is about to lapse, so that I plan the switch before the wall, not after.
 **Requirements**:
@@ -282,6 +282,13 @@
 **Files to touch**: `crates/juggler-core/src/model.rs:145-157`, `crates/juggler-app/src/commands.rs:249,265,310`, `ui/src/types/generated/AccountInfo.ts` (generated), `ui/src/screens/WorkPanels.tsx`, `ui/src/lib/bridge.ts:149,156`, storage migration in `crates/juggler-app/src/state.rs:34` (or repo storage layer it calls).
 **Research basis**: decision-log D-12 (lines 113-124, incl. mandatory billing-API research); pass2 00 §1.2 item 11 (plan/subscription expiry was ownerless — this task owns it); expected-worfklow.md:3 (quota/subscription expiry motivation).
 **Handover note**: Do NOT scrape Provider dashboards or infer from `PlanTier` (model.rs:120) — D-12 explicitly forbids it and pass2 proved no verified source. If the research finds a sanctioned API, it is a NEW task; this hook only reserves the seam.
+*Implementation mapping (corrected in this task's PR per the claiming protocol)*:
+- Engine: new `crates/juggler-core/src/renewal.rs` — `CalendarDate` (strict leap-aware `YYYY-MM-DD` parsing), `renewal_label` (pure, fixed-clock threshold tests), `is_row_visible`, and the D-12 `RenewalSource` seam (only `UnknownRenewalSource` ships). `Account.renewal_date: Option<String>` via schema v8 (additive nullable column).
+- Storage lives in juggler-core's repo layer (not the app state file the task text guessed); the command surface is `account_set_renewal` (validation via `AppError::Validation`, first user-input validation surface) + `AccountInfo.renewal_date` on the wire.
+- Threshold labels are computed in TS (`ui/src/lib/renewal.ts`) against the machine's LOCAL calendar date (Req.7's local-date rule is exact in JS; the Rust fn is the canonical seam + research hook and both boundary suites assert identical copy — they change together).
+- Needs-me tie-break threads App → WorkflowRail → InstanceBoard → `sortSessions(…, accounts)`; expiry ranks only after `severityRank || snoozed || waiting`, so it never outranks a live blocked agent.
+- The once-per-day polite announcement ships as `RenewalAnnouncer` (aria-live polite, localStorage last-announced date per account).
+- Research deliverable: `docs/research/subscription-expiry-sources.md` — the D-12 gate, candidate audit (all unsanctioned/prohibited), and the new-task revisit trigger.
 
 ### AJ-E412 Running-model telemetry (what the Instance is actually running) | Status: TODO | Priority P1 | Effort M | Depends: AJ-E401,AJ-E407
 **Goal**: Report the model an Instance is actually running now — launch overlay, in-session `/model` changes, and transcript-observed model — with source labelling and drift surfacing.

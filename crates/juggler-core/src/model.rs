@@ -179,6 +179,9 @@ pub struct Account {
     /// the Instance ends (every kill audit-logged). Off by default —
     /// the default tier is notify-only.
     pub cleanup_opt_in: bool,
+    /// Optional user-entered renewal date, local calendar `YYYY-MM-DD`
+    /// (D-12: never inferred; `None` renders `Expiry: unknown`).
+    pub renewal_date: Option<String>,
 }
 
 /// Settings applied on top of an account's defaults when launching a profile.

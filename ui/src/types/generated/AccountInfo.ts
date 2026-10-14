@@ -27,4 +27,9 @@ login_state: string,
 /**
  * D-08 Tier-1 cleanup opt-in (off by default — notify-only tier).
  */
-cleanup_opt_in: boolean, };
+cleanup_opt_in: boolean, 
+/**
+ * Optional user-entered renewal date, local calendar `YYYY-MM-DD`
+ * (D-12); `null` renders `Expiry: unknown` — never inferred.
+ */
+renewal_date: string | null, };

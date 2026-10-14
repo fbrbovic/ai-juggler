@@ -10,6 +10,7 @@ import {
   IconTerminal,
 } from "./icons";
 import type { AccountInfo, InstanceInfo, LaunchRecipeInfo, ProjectInfo } from "../lib/bridge";
+import { renewalLabel } from "../lib/renewal";
 import { QuotaBar, formatCountdown, quotaTierTag, QuotaRing } from "./primitives";
 import { formatBytes, stateChip } from "./indicator";
 
@@ -196,6 +197,16 @@ export function RightInspector({
     };
     window.addEventListener("aij:focus-handover", focusHandover);
     return () => window.removeEventListener("aij:focus-handover", focusHandover);
+  });
+
+  // AJ-E411: `Edit renewal date...` (Account Actions) jumps to Overview;
+  // RenewalEditor's own listener opens the date picker.
+  useEffect(() => {
+    const editRenewal = () => {
+      if (kind === "account") chooseTab("overview");
+    };
+    window.addEventListener("aij:edit-renewal", editRenewal);
+    return () => window.removeEventListener("aij:edit-renewal", editRenewal);
   });
 
   // Cmd/Ctrl+1..6 switches tabs (Req.6). Focus rings stay visible; the
@@ -1319,9 +1330,22 @@ function AccountOverview(props: PanelProps) {
             <Chip tone="success">signed in</Chip>
             <span className="text-muted">plan: <span className="text-ink">{account.plan ?? "unknown"}</span></span>
           </span>
-          <span data-testid="account-renewal" className="text-muted">
-            renewal date: <span className="text-faint">not set (optional, D-12 — field lands with AJ-E411)</span>
+          <span data-testid="account-renewal" className="flex flex-wrap items-center gap-1.5">
+            {(() => {
+              const label = renewalLabel(account.renewal_date, props.now);
+              if (account.renewal_date === null) {
+                return <span className="text-muted">Expiry: unknown</span>;
+              }
+              if (label?.tier === "warning") {
+                return <Chip tone="warning">⚠ {label.text}</Chip>;
+              }
+              if (label?.tier === "danger") {
+                return <Chip tone="danger">⛔ {label.text}</Chip>;
+              }
+              return <span className="text-muted">{label?.text ?? "Expiry: unknown"}</span>;
+            })()}
           </span>
+          <RenewalEditor account={account} />
           <label data-testid="account-cleanup-toggle" className="flex items-center gap-1.5">
             <input
               type="checkbox"
@@ -1406,6 +1430,11 @@ function AccountActions(props: PanelProps) {
         reason={first ? undefined : "no launch settings on this account yet"}
       />
       <ActionRow label={account.login_state === "logged_in" ? "Re-check login" : "Sign in"} onClick={() => window.dispatchEvent(new Event("aij:open-accounts"))} reason="opens Accounts" />
+      <ActionRow
+        label="Edit renewal date..."
+        onClick={() => window.dispatchEvent(new Event("aij:edit-renewal"))}
+        reason="jumps to the Overview editor"
+      />
       <ActionRow label="New launch settings…" onClick={undefined} reason="launch-settings editor lands with E3+" />
       <ActionRow label="Rename" onClick={undefined} reason="account settings land with E3+" />
       <ActionRow label="Delete account…" danger onClick={undefined} reason="danger — the managed isolated directory is kept (confirm flow lands with E3+)" />
@@ -1587,6 +1616,55 @@ function TierTag({ tier }: { tier: "Measured" | "Computed" | "Estimated" }) {
   return (
     <span className="rounded border border-hairline px-1 text-[9px] font-medium uppercase tracking-wide text-muted">
       {tier}
+    </span>
+  );
+}
+
+/// The `Renewal date (optional)` editor (AJ-E411 Req.4): date input +
+/// Clear, helper text `Entered by you - Juggler does not read billing`,
+/// and focus hand-off from Account Actions (`aij:edit-renewal`).
+function RenewalEditor({ account }: { account: AccountInfo }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const focus = () => {
+      if (inputRef.current?.showPicker) {
+        inputRef.current.showPicker();
+      } else {
+        inputRef.current?.focus();
+      }
+    };
+    window.addEventListener("aij:edit-renewal", focus);
+    return () => window.removeEventListener("aij:edit-renewal", focus);
+  }, []);
+  const commit = (next: string | null) => {
+    void import("../lib/bridge")
+      .then((bridge) => bridge.accountSetRenewal(account.id, next))
+      .catch(() => {
+        /* invalid input is rejected server-side; the next list refresh restores truth */
+      });
+  };
+  return (
+    <span className="flex flex-wrap items-center gap-1.5 text-[11px]" data-testid="renewal-editor">
+      <label htmlFor={`renewal-${account.id}`} className="text-muted">
+        Renewal date (optional)
+      </label>
+      <input
+        ref={inputRef}
+        id={`renewal-${account.id}`}
+        type="date"
+        value={account.renewal_date ?? ""}
+        onChange={(event) => commit(event.target.value === "" ? null : event.target.value)}
+        className="rounded-lg border border-hairline bg-surface px-1.5 py-0.5 text-[11px] text-ink outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+      />
+      <Button
+        size="sm"
+        variant="secondary"
+        onClick={() => commit(null)}
+        disabled={account.renewal_date === null}
+      >
+        Clear
+      </Button>
+      <span className="text-[10px] text-faint">Entered by you - Juggler does not read billing</span>
     </span>
   );
 }

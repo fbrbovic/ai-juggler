@@ -98,7 +98,11 @@ const V6: &str = "ALTER TABLE instances ADD COLUMN attention_json TEXT;";
 /// opt-in — additive column, default `0` = notify-only (the default tier).
 const V7: &str = "ALTER TABLE accounts ADD COLUMN cleanup_opt_in INTEGER NOT NULL DEFAULT 0;";
 
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7];
+/// Schema version 8 (AJ-E411, D-12): the optional user-entered renewal
+/// date — additive nullable column; `NULL` = `Expiry: unknown`.
+const V8: &str = "ALTER TABLE accounts ADD COLUMN renewal_date TEXT;";
+
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8];
 
 /// An opened AI Juggler database with typed repositories.
 #[derive(Debug)]

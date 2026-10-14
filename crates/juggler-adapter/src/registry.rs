@@ -143,6 +143,7 @@ mod tests {
             plan: None,
             state_dir: state.clone(),
             cleanup_opt_in: false,
+            renewal_date: None,
         };
         let profile = juggler_core::model::Profile {
             id: juggler_core::model::ProfileId::new("p"),

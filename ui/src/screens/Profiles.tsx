@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button, Card, Chip, type ChipTone } from "../components/primitives";
+import { renewalLabel, renewalRowVisible } from "../lib/renewal";
 import { Field, Input, Modal } from "../components/form";
 import { IconProfiles, IconTerminal } from "../components/icons";
 import { OnboardingWizard } from "./OnboardingWizard";
@@ -176,6 +177,7 @@ function EmptyAccounts({ onAdd }: { onAdd: () => void }) {
 
 function AccountCard({
   account,
+  now = Date.now(),
   profiles,
   onLaunch,
   onDeleteProfile,
@@ -185,6 +187,8 @@ function AccountCard({
   onInspect,
 }: {
   account: AccountInfo;
+  /** Local clock for the expiry tiers (AJ-E411). */
+  now?: number;
   profiles: LaunchRecipeInfo[];
   onLaunch: (recipe: LaunchRecipeInfo) => void;
   onDeleteProfile: (id: string) => Promise<void>;
@@ -209,6 +213,12 @@ function AccountCard({
           <span className="font-mono text-[11px] text-faint">{account.provider}</span>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          {renewalRowVisible(renewalLabel(account.renewal_date, now)) && (
+            <Chip tone={renewalLabel(account.renewal_date, now)!.tier === "danger" ? "danger" : "warning"}>
+              {renewalLabel(account.renewal_date, now)!.tier === "danger" ? "⛔" : "⚠"}{" "}
+              {renewalLabel(account.renewal_date, now)!.text}
+            </Chip>
+          )}
           <Chip tone={loginTone} dot breathing={!loggedIn}>
             {loggedIn ? "Logged in" : "Needs login"}
           </Chip>

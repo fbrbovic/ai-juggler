@@ -26,8 +26,8 @@ impl AccountsRepo<'_> {
     /// (e.g. a duplicate id).
     pub fn insert(&self, account: &Account) -> Result<(), CoreError> {
         self.conn.execute(
-            "INSERT INTO accounts (id, provider_id, label, plan, state_dir, created_at, cleanup_opt_in)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO accounts (id, provider_id, label, plan, state_dir, created_at, cleanup_opt_in, renewal_date)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 account.id.as_str(),
                 account.harness.as_str(),
@@ -36,6 +36,7 @@ impl AccountsRepo<'_> {
                 account.state_dir.to_string_lossy(),
                 crate::model::Timestamp::now().millis(),
                 i64::from(account.cleanup_opt_in),
+                account.renewal_date,
             ],
         )?;
         Ok(())
@@ -50,7 +51,7 @@ impl AccountsRepo<'_> {
     pub fn update(&self, account: &Account) -> Result<(), CoreError> {
         let changed = self.conn.execute(
             "UPDATE accounts SET provider_id = ?2, label = ?3, plan = ?4, state_dir = ?5,
-             cleanup_opt_in = ?6
+             cleanup_opt_in = ?6, renewal_date = ?7
              WHERE id = ?1",
             params![
                 account.id.as_str(),
@@ -59,6 +60,7 @@ impl AccountsRepo<'_> {
                 account.plan.as_ref().map(PlanTier::as_str),
                 account.state_dir.to_string_lossy(),
                 i64::from(account.cleanup_opt_in),
+                account.renewal_date,
             ],
         )?;
         require_changed(changed, "account", account.id.as_str())
@@ -142,5 +144,6 @@ fn map_account(row: &Row<'_>) -> rusqlite::Result<Account> {
         plan: row.get::<_, Option<String>>("plan")?.map(PlanTier::new),
         state_dir: row.get::<_, String>("state_dir")?.into(),
         cleanup_opt_in: row.get::<_, i64>("cleanup_opt_in")? != 0,
+        renewal_date: row.get("renewal_date")?,
     })
 }

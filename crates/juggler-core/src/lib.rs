@@ -16,6 +16,7 @@ pub mod error;
 pub mod fs;
 pub mod model;
 pub mod quality;
+pub mod renewal;
 pub mod storage;
 
 pub use error::CoreError;
