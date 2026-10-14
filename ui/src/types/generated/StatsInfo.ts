@@ -15,4 +15,9 @@ profiles: number,
 /**
  * Sessions not in a terminal state.
  */
-active_sessions: number, };
+active_sessions: number, 
+/**
+ * AJ-E501: a configured process ledger failed — cleanup is
+ * read-only until restart (the degraded banner's data).
+ */
+ledger_degraded: boolean, };

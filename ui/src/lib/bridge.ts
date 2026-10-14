@@ -198,7 +198,12 @@ const MOCK_PROCESSES: Record<string, ProcessesInfo> = {
 };
 
 const MOCK_STATS: StatsInfo =
-  seeded.stats ?? { accounts: 2, profiles: 3, active_sessions: 0 };
+  seeded.stats ?? {
+    accounts: 2,
+    profiles: 3,
+    active_sessions: 0,
+    ledger_degraded: false,
+  };
 
 // Mock rows mirror the AJ-E401 read-model fixtures: one full row, one
 // quota-less row, one model-less/terminal row — nulls where the backend

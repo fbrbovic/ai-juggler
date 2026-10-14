@@ -393,6 +393,9 @@ pub struct StatsInfo {
     /// Sessions not in a terminal state.
     #[ts(type = "number")]
     pub active_sessions: u64,
+    /// AJ-E501: a configured process ledger failed — cleanup is
+    /// read-only until restart (the degraded banner's data).
+    pub ledger_degraded: bool,
 }
 
 /// Result of launching a session.
@@ -589,6 +592,42 @@ pub fn account_login_command(
 #[must_use]
 pub fn environment_scan(state: tauri::State<'_, Arc<AppState>>) -> Vec<DiscoveredInfo> {
     environment_scan_impl(state.inner())
+}
+
+/// The stable LOCAL machine id (AJ-E501 Req.6, D-13): generated once,
+/// persisted in app settings — never a hard-coded `"this-mac"` literal
+/// at call sites.
+pub fn local_machine_id(state: &Arc<AppState>) -> MachineId {
+    let stored = {
+        let storage = lock_storage_arc(state);
+        storage
+            .ok()
+            .and_then(|storage| storage.app_settings().get("local_machine_id").ok())
+            .flatten()
+    };
+    if let Some(id) = stored {
+        return MachineId::new(id);
+    }
+    let generated = format!("machine-{}", unique_suffix());
+    if let Ok(storage) = lock_storage_arc(state) {
+        let _ = storage.app_settings().set("local_machine_id", &generated);
+    }
+    MachineId::new(generated)
+}
+
+/// The ledger spawn context for an account launch (root role).
+fn ledger_ctx(
+    state: &Arc<AppState>,
+    account: &Account,
+    project_id: Option<String>,
+) -> juggler_supervisor::tree::SpawnContext {
+    juggler_supervisor::tree::SpawnContext {
+        provider: account.harness.to_string(),
+        account_id: Some(account.id.to_string()),
+        project_id,
+        machine: local_machine_id(state),
+        role: juggler_core::storage::ROLE_ROOT,
+    }
 }
 
 /// Core implementation shared with integration tests.
@@ -938,10 +977,23 @@ pub fn launch_profile(
         .map_or_else(std::env::temp_dir, std::path::PathBuf::from);
     let spec = adapter.launch_spec(&account, &profile, &effective_cwd, &LaunchMode::Interactive)?;
     let session_id = SessionId::new(format!("sess-{}", unique_suffix()));
-    let spawned = state.supervisor.spawn(&session_id, &spec)?;
     // The juggling anchor: this launch's cwd becomes (or refreshes) the
     // tracked project, and the session is linked to it (ADR-0007).
+    // Resolved BEFORE spawn so the ledger Intent row is attributable.
     let canonical_cwd = spec.cwd.canonicalize().unwrap_or_else(|_| spec.cwd.clone());
+    let project_id = {
+        let storage = lock_storage_arc(state)?;
+        storage
+            .projects()
+            .touch(&canonical_cwd, None)?
+            .id
+            .to_string()
+    };
+    let spawned = state.supervisor.spawn(
+        &session_id,
+        &spec,
+        &ledger_ctx(state, &account, Some(project_id.clone())),
+    )?;
     {
         let storage = lock_storage_arc(state)?;
         let project = storage.projects().touch(&canonical_cwd, None)?;
@@ -1036,7 +1088,15 @@ pub fn desktop_launch_arc(state: &Arc<AppState>, account_id: &str) -> AppResult<
     adapter.prepare_account(&account.state_dir)?;
     let launch = adapter.desktop_launch(&account)?;
     let session_id = SessionId::new(format!("sess-{}", unique_suffix()));
-    let spawned = state.supervisor.spawn_desktop(&session_id, &launch)?;
+    let project_id = {
+        let storage = lock_storage_arc(state)?;
+        storage.projects().touch(&launch.cwd, None)?.id.to_string()
+    };
+    let spawned = state.supervisor.spawn_desktop(
+        &session_id,
+        &launch,
+        &ledger_ctx(state, &account, Some(project_id)),
+    )?;
     {
         let storage = lock_storage_arc(state)?;
         let project = storage.projects().touch(&launch.cwd, None)?;
@@ -1588,6 +1648,7 @@ pub fn stop_session(
 ///
 /// Returns the typed [`AppError`] message on failure.
 pub fn dashboard_stats(state: tauri::State<'_, Arc<AppState>>) -> AppResult<StatsInfo> {
+    let ledger_degraded = state.supervisor.ledger_degraded();
     let storage = lock_storage(&state)?;
     let accounts = storage.accounts().list()?;
     let mut profiles = 0_u64;
@@ -1610,6 +1671,7 @@ pub fn dashboard_stats(state: tauri::State<'_, Arc<AppState>>) -> AppResult<Stat
         accounts: u64::try_from(accounts.len()).unwrap_or_default(),
         profiles,
         active_sessions: u64::try_from(active).unwrap_or_default(),
+        ledger_degraded,
     })
 }
 
@@ -2565,6 +2627,39 @@ pub fn session_handover(
 ///
 /// # Errors
 ///
+/// The hand-over source row + its owning account (the read-side
+/// preamble of [`session_handover_impl`]).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message when the source session or
+/// its account cannot be resolved.
+fn handover_source(
+    state: &Arc<AppState>,
+    session_id: &str,
+) -> AppResult<(juggler_core::model::InstanceRecord, Account)> {
+    let storage = lock_storage_arc(state)?;
+    let source = storage
+        .sessions()
+        .get(&SessionId::new(session_id))
+        .map_err(|error| not_found_or_core(error, "session", session_id))?;
+    let source_profile = storage
+        .profiles()
+        .get(&source.profile)
+        .map_err(|error| not_found_or_core(error, "profile", &source.profile.to_string()))?;
+    let account_a = storage
+        .accounts()
+        .get(&source_profile.account)
+        .map_err(|error| {
+            not_found_or_core(error, "account", &source_profile.account.to_string())
+        })?;
+    Ok((source, account_a))
+}
+
+/// Resumes the session under the target account (see the module docs).
+///
+/// # Errors
+///
 /// Returns the typed [`AppError`] message when the source session, its
 /// transcript, or the target profile cannot be resolved, or on copy or
 /// launch failure.
@@ -2574,25 +2669,7 @@ pub fn session_handover_impl(
     target_profile_id: &str,
 ) -> AppResult<LaunchResult> {
     let (profile_b, account_b) = find_profile_with_account_arc(state, target_profile_id)?;
-
-    let (source, account_a) = {
-        let storage = lock_storage_arc(state)?;
-        let source = storage
-            .sessions()
-            .get(&SessionId::new(session_id))
-            .map_err(|error| not_found_or_core(error, "session", session_id))?;
-        let source_profile = storage
-            .profiles()
-            .get(&source.profile)
-            .map_err(|error| not_found_or_core(error, "profile", &source.profile.to_string()))?;
-        let account_a = storage
-            .accounts()
-            .get(&source_profile.account)
-            .map_err(|error| {
-                not_found_or_core(error, "account", &source_profile.account.to_string())
-            })?;
-        (source, account_a)
-    };
+    let (source, account_a) = handover_source(state, session_id)?;
     if source.project.is_none() {
         return Err(AppError::Io {
             context: "hand over",
@@ -2642,7 +2719,18 @@ pub fn session_handover_impl(
         },
     )?;
     let new_session = SessionId::new(format!("sess-{}", unique_suffix()));
-    let spawned = state.supervisor.spawn(&new_session, &spec)?;
+    let spawned = state.supervisor.spawn(
+        &new_session,
+        &spec,
+        &ledger_ctx(
+            state,
+            &account_b,
+            source
+                .project
+                .as_ref()
+                .map(std::string::ToString::to_string),
+        ),
+    )?;
 
     {
         let storage = lock_storage_arc(state)?;

@@ -129,6 +129,9 @@ pub struct LiveStatsCollector {
     ticks: u32,
     trees: HashMap<SessionId, TreeState>,
     stats: HashMap<SessionId, LiveProcessStats>,
+    /// Per-session ledger upsert throttle (AJ-E501 Req.4: at most one
+    /// batched helper upsert per 2 s per Instance).
+    last_ledger_upsert: HashMap<SessionId, i64>,
 }
 
 impl LiveStatsCollector {
@@ -164,6 +167,7 @@ impl LiveStatsCollector {
             let parents = parents_map(&self.system);
             self.rebuild_trees(&roots, &parents, now_ms);
         }
+        self.ledger_upserts(supervisor, now_ms);
         let sampled = self.sampled;
         self.sampled = true;
         if !sampled {
@@ -182,6 +186,79 @@ impl LiveStatsCollector {
                     stat.cpu_pct = None;
                 }
             }
+        }
+    }
+
+    /// One batched helper upsert per live session per 2 s (AJ-E501
+    /// Req.4): rows come from the freshly rebuilt trees; the root's
+    /// own row was patched at spawn and is owned by the exit patch.
+    fn ledger_upserts(&mut self, supervisor: &Supervisor, now_ms: i64) {
+        let Some(ledger) = supervisor.ledger.clone() else {
+            return;
+        };
+        let contexts = supervisor
+            .spawn_contexts
+            .lock()
+            .map(|contexts| contexts.clone())
+            .unwrap_or_default();
+        let boot_id = ledger.boot_id();
+        for (session, tree) in &self.trees {
+            let Some(root_row) = tree.rows.first() else {
+                continue;
+            };
+            let last = self.last_ledger_upsert.get(session).copied().unwrap_or(0);
+            if now_ms - last < 2_000 {
+                continue;
+            }
+            let Some(ctx) = contexts.get(session) else {
+                continue;
+            };
+            let mut helpers = Vec::new();
+            for row in tree.rows.iter().skip(1) {
+                let started_at = now_ms
+                    .checked_sub(i64::try_from(row.age_ms).unwrap_or(0))
+                    .map(|ms| ms.div_euclid(1000));
+                helpers.push(juggler_core::storage::LedgerRow {
+                    pid: Some(row.pid),
+                    pgid: None,
+                    started_at,
+                    exe_path: row.name.clone(),
+                    cmdline_hash: format!("name:{}", row.name),
+                    cmdline_trunc: row.name.clone(),
+                    boot_id: boot_id.clone(),
+                    session_id: session.as_str().to_string(),
+                    instance_id: None,
+                    provider: ctx.provider.clone(),
+                    account_id: ctx.account_id.clone(),
+                    project_id: ctx.project_id.clone(),
+                    machine_id: ctx.machine.as_str().to_string(),
+                    root_pid: Some(root_row.pid),
+                    parent_pid: row.parent_pid,
+                    depth: 1,
+                    role: juggler_core::storage::ROLE_HELPER.to_string(),
+                    state: String::new(),
+                    listens_on: None,
+                    cwd: String::new(),
+                    peak_rss: Some(i64::try_from(row.rss_bytes).unwrap_or(0)),
+                    peak_cpu: row.cpu_pct,
+                    exit_kind: None,
+                    reaped_by_us: None,
+                    first_seen: now_ms,
+                    last_seen: now_ms,
+                });
+            }
+            if helpers.is_empty() {
+                // Nothing to write this tick; keep the throttle open so
+                // the first helper appearance is not delayed by 2 s.
+                continue;
+            }
+            if ledger.upsert_helpers(session, &helpers).is_err() {
+                supervisor
+                    .ledger_degraded
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                eprintln!("ai-juggler: process ledger degraded at helper upsert");
+            }
+            self.last_ledger_upsert.insert(session.clone(), now_ms);
         }
     }
 
@@ -393,6 +470,13 @@ struct PtyHandle {
 /// [`Journal::adopt_orphans`].
 pub struct Supervisor {
     journal: Option<Journal>,
+    /// Persistent spawn ledger (AJ-E501): intent rows before spawn,
+    /// helper upserts per tick — survives app exit and reboot. `None`
+    /// = unconfigured (no degraded flag; journal still records roots).
+    ledger: Option<crate::tree::SharedLedger>,
+    /// Set when a CONFIGURED ledger fails: spawns never fail because
+    /// of it — cleanup turns read-only until restart (the banner).
+    ledger_degraded: std::sync::atomic::AtomicBool,
     children: Mutex<HashMap<SessionId, Arc<ChildHandle>>>,
     /// Sessions stopped via [`Supervisor::stop`] — PTY children surface
     /// user kills as plain non-zero exit codes, so the stop intent is the
@@ -400,6 +484,9 @@ pub struct Supervisor {
     user_stopped: Mutex<Vec<SessionId>>,
     events_tx: std::sync::mpsc::Sender<LifecycleEvent>,
     events_rx: Mutex<std::sync::mpsc::Receiver<LifecycleEvent>>,
+    /// Spawn contexts (AJ-E501): helper rows inherit the root's
+    /// provider/account/project/machine; kept for the ledger tick.
+    spawn_contexts: Mutex<HashMap<SessionId, crate::tree::SpawnContext>>,
     /// Sessions with fresh output since the last drain (throttled per
     /// session) — the recovery signal (AJ-E405 Req.5, <300 ms).
     activity_tx: std::sync::mpsc::SyncSender<SessionId>,
@@ -412,6 +499,9 @@ impl Default for Supervisor {
         let (activity_tx, activity_rx) = std::sync::mpsc::sync_channel(256);
         Self {
             journal: None,
+            ledger: None,
+            ledger_degraded: std::sync::atomic::AtomicBool::new(false),
+            spawn_contexts: Mutex::new(HashMap::new()),
             children: Mutex::new(HashMap::new()),
             user_stopped: Mutex::new(Vec::new()),
             events_tx,
@@ -442,6 +532,96 @@ impl Supervisor {
         })
     }
 
+    /// Attaches the persistent spawn ledger (AJ-E501). Without it the
+    /// supervisor still runs — the ledger is additive.
+    #[must_use]
+    pub fn with_ledger(mut self, ledger: crate::tree::SharedLedger) -> Self {
+        self.ledger = Some(ledger);
+        self
+    }
+
+    /// True when a configured ledger failed (Req.3): cleanup is
+    /// read-only until restart — surfaced as the degraded banner.
+    #[must_use]
+    pub fn ledger_degraded(&self) -> bool {
+        self.ledger_degraded
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Best-effort ledger write: a failure degrades health, never the
+    /// spawn (Req.3).
+    fn ledger_write(
+        &self,
+        write: impl FnOnce(&crate::tree::SharedLedger) -> Result<(), crate::tree::LedgerError>,
+    ) {
+        if let Some(ledger) = &self.ledger
+            && let Err(error) = write(ledger)
+        {
+            self.ledger_degraded
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            eprintln!("ai-juggler: process ledger degraded: {error}");
+        }
+    }
+
+    /// Builds the Intent row for a spawn context.
+    fn intent_row(
+        ctx: &crate::tree::SpawnContext,
+        session: &SessionId,
+        program: &std::path::Path,
+        args: &[String],
+        cwd: &std::path::Path,
+        boot_id: &str,
+    ) -> juggler_core::storage::LedgerRow {
+        let (cmdline_hash, cmdline_trunc) = crate::tree::cmdline_fields(program, args);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+        juggler_core::storage::LedgerRow {
+            pid: None,
+            pgid: None,
+            started_at: None,
+            exe_path: program.to_string_lossy().into_owned(),
+            cmdline_hash,
+            cmdline_trunc,
+            boot_id: boot_id.to_string(),
+            session_id: session.as_str().to_string(),
+            instance_id: None,
+            provider: ctx.provider.clone(),
+            account_id: ctx.account_id.clone(),
+            project_id: ctx.project_id.clone(),
+            machine_id: ctx.machine.as_str().to_string(),
+            root_pid: None,
+            parent_pid: None,
+            depth: 0,
+            role: ctx.role.to_string(),
+            state: String::new(),
+            listens_on: None,
+            cwd: cwd.to_string_lossy().into_owned(),
+            peak_rss: None,
+            peak_cpu: None,
+            exit_kind: None,
+            reaped_by_us: None,
+            first_seen: now,
+            last_seen: now,
+        }
+    }
+
+    /// The OS start time (epoch s) of a just-spawned pid, via a
+    /// one-shot table probe; `None` when the table has not caught up
+    /// (patched later by the reconciler tick).
+    fn os_start_time(pid: u32) -> Option<i64> {
+        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate};
+        let mut system = sysinfo::System::new();
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]),
+            true,
+            ProcessRefreshKind::nothing(),
+        );
+        system
+            .process(sysinfo::Pid::from_u32(pid))
+            .and_then(|p| i64::try_from(p.start_time()).ok())
+    }
+
     /// Spawns one session per the launch spec. Interactive specs get a real
     /// PTY; headless specs run with piped output.
     ///
@@ -452,12 +632,35 @@ impl Supervisor {
         &self,
         session: &SessionId,
         spec: &LaunchSpec,
+        ctx: &crate::tree::SpawnContext,
     ) -> Result<SpawnedProcess, SupervisorError> {
+        // Intent BEFORE spawn (AJ-E501 Req.3): the ownership record
+        // exists even if the spawn or the app dies mid-breath. Ledger
+        // failure degrades health, never the spawn.
+        let boot_id = self
+            .ledger
+            .as_ref()
+            .map_or_else(|| "boot-unconfigured".to_string(), |l| l.boot_id());
+        self.ledger_write(|ledger| {
+            ledger.intent(&Self::intent_row(
+                ctx,
+                session,
+                &spec.program,
+                &spec.args,
+                &spec.cwd,
+                &boot_id,
+            ))
+        });
+        if let Ok(mut contexts) = self.spawn_contexts.lock() {
+            contexts.insert(session.clone(), ctx.clone());
+        }
         let spawned = if spec.needs_pty {
             self.spawn_pty(session, spec)?
         } else {
             self.spawn_piped(session, spec)?
         };
+        let started_at = Self::os_start_time(spawned.pid);
+        self.ledger_write(|ledger| ledger.spawned(session, spawned.pid, None, started_at));
         if let Some(journal) = &self.journal {
             journal.record_spawned(session, spawned.pid, &spec.program)?;
         }
@@ -481,8 +684,27 @@ impl Supervisor {
         &self,
         session: &SessionId,
         launch: &juggler_adapter::DesktopLaunch,
+        ctx: &crate::tree::SpawnContext,
     ) -> Result<SpawnedProcess, SupervisorError> {
         use std::process::{Command, Stdio};
+
+        let boot_id = self
+            .ledger
+            .as_ref()
+            .map_or_else(|| "boot-unconfigured".to_string(), |l| l.boot_id());
+        self.ledger_write(|ledger| {
+            ledger.intent(&Self::intent_row(
+                ctx,
+                session,
+                &launch.program,
+                &launch.args,
+                &launch.cwd,
+                &boot_id,
+            ))
+        });
+        if let Ok(mut contexts) = self.spawn_contexts.lock() {
+            contexts.insert(session.clone(), ctx.clone());
+        }
 
         let mut command = Command::new(&launch.program);
         command
@@ -497,6 +719,8 @@ impl Supervisor {
             message: e.to_string(),
         })?;
         let pid = child.id();
+        let started_at = Self::os_start_time(pid);
+        self.ledger_write(|ledger| ledger.spawned(session, pid, None, started_at));
         let ring = Arc::new(Mutex::new(OutputRing::new(DEFAULT_RING_CAPACITY)));
         let child = Arc::new(Mutex::new(child));
         let finished = Arc::new(AtomicBool::new(false));
@@ -525,6 +749,7 @@ impl Supervisor {
 
         let session_for_thread = session.clone();
         let journal = self.journal.clone();
+        let ledger = self.ledger.clone();
         let events = self.events_tx.clone();
         let done = Arc::clone(&finished);
         std::thread::spawn(move || {
@@ -536,6 +761,7 @@ impl Supervisor {
                     exit_kind_std(status),
                     &done,
                     journal.as_ref(),
+                    ledger.as_ref(),
                     &events,
                 );
             } else {
@@ -612,6 +838,7 @@ impl Supervisor {
 
         let session_for_thread = session.clone();
         let journal = self.journal.clone();
+        let ledger = self.ledger.clone();
         let events = self.events_tx.clone();
         let done = Arc::clone(&finished);
         std::thread::spawn(move || {
@@ -623,6 +850,7 @@ impl Supervisor {
                     exit_kind_std(status),
                     &done,
                     journal.as_ref(),
+                    ledger.as_ref(),
                     &events,
                 );
             } else {
@@ -705,6 +933,7 @@ impl Supervisor {
 
         let session_for_thread = session.clone();
         let journal = self.journal.clone();
+        let ledger = self.ledger.clone();
         let events = self.events_tx.clone();
         let done = Arc::clone(&finished);
         std::thread::spawn(move || {
@@ -719,6 +948,7 @@ impl Supervisor {
                     kind,
                     &done,
                     journal.as_ref(),
+                    ledger.as_ref(),
                     &events,
                 );
             } else {
@@ -1121,11 +1351,32 @@ fn emit_exit(
     kind: ExitKind,
     done: &AtomicBool,
     journal: Option<&Journal>,
+    ledger: Option<&crate::tree::SharedLedger>,
     events: &std::sync::mpsc::Sender<LifecycleEvent>,
 ) {
     done.store(true, Ordering::Release);
     if let Some(journal) = journal {
         let _ = journal.record_exited(session, pid, kind);
+    }
+    // The ledger exit patch (AJ-E501): roots are reaped by us; a
+    // failure degrades health on the next supervisor touch (the flag
+    // lives on the shared supervisor, mirrored here best-effort).
+    if let Some(ledger) = ledger {
+        let exit_kind = match kind {
+            ExitKind::Code(code) => format!("code:{code}"),
+            ExitKind::Signaled(signal) => {
+                format!(
+                    "signal:{}",
+                    signal.map_or_else(|| "unknown".into(), |s| s.to_string())
+                )
+            }
+        };
+        if ledger
+            .mark_exited(pid, &ledger.boot_id(), &exit_kind, true)
+            .is_err()
+        {
+            eprintln!("ai-juggler: process ledger degraded at exit patch (pid {pid})");
+        }
     }
     let _ = events.send(LifecycleEvent::Exited {
         session: session.clone(),

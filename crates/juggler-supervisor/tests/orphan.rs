@@ -52,6 +52,16 @@ fn now_ms() -> i64 {
 /// The full contract against real processes: harness spawns a `sleep`
 /// child, exits non-clean, the child surfaces as an orphan after the
 /// 10 s grace, and `Stop process` yields `gone` on re-read.
+fn ledger_test_ctx() -> juggler_supervisor::tree::SpawnContext {
+    juggler_supervisor::tree::SpawnContext {
+        provider: "claude-code".into(),
+        account_id: Some("acc-test".into()),
+        project_id: Some("proj-test".into()),
+        machine: juggler_core::model::MachineId::new("machine-test"),
+        role: "root",
+    }
+}
+
 #[test]
 fn orphan_detected_after_grace_and_stopped_gone() {
     let dir = tempfile::tempdir().unwrap();
@@ -78,6 +88,7 @@ fn orphan_detected_after_grace_and_stopped_gone() {
                 ],
                 dir.path(),
             ),
+            &ledger_test_ctx(),
         )
         .unwrap();
 
@@ -219,6 +230,7 @@ fn stop_ladder_escalates_when_sigterm_ignored() {
                 ],
                 dir.path(),
             ),
+            &ledger_test_ctx(),
         )
         .unwrap();
     // One collector for the whole test so the tree state persists: tick
@@ -320,6 +332,7 @@ fn collector_targeted_tick_overhead_under_budget() {
                     ],
                     dir.path(),
                 ),
+                &ledger_test_ctx(),
             )
             .unwrap();
         sessions.push(session);

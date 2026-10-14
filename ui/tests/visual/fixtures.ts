@@ -185,7 +185,7 @@ export const allStatuses: FixtureSet = {
     { id: "proj-2", root: "/Users/dev/booknyx", name: "booknyx", last_activity_ms: T0 - 3_600_000, active_instance: null, accounts_used: ["Personal"], instance_count: 4, history_sessions: 7 },
     { id: "proj-3", root: "/Users/dev/sacrificial", name: "sacrificial", last_activity_ms: T0 - 600_000, active_instance: null, accounts_used: ["Fake Desk"], instance_count: 3, history_sessions: 0 },
   ],
-  stats: { accounts: 3, profiles: 3, active_sessions: 3 },
+  stats: { accounts: 3, profiles: 3, active_sessions: 3, ledger_degraded: false },
 };
 
 export const honestEmpty: FixtureSet = {
@@ -193,7 +193,7 @@ export const honestEmpty: FixtureSet = {
   profiles: [],
   sessions: [],
   projects: [],
-  stats: { accounts: 0, profiles: 0, active_sessions: 0 },
+  stats: { accounts: 0, profiles: 0, active_sessions: 0, ledger_degraded: false },
 };
 
 export const readyHome: FixtureSet = {
@@ -204,5 +204,5 @@ export const readyHome: FixtureSet = {
   profiles: [],
   sessions: [],
   projects: [],
-  stats: { accounts: 2, profiles: 0, active_sessions: 0 },
+  stats: { accounts: 2, profiles: 0, active_sessions: 0, ledger_degraded: false },
 };

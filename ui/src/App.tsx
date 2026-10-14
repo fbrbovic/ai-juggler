@@ -766,6 +766,18 @@ function Overview({
 
   return (
     <div className="flex flex-col gap-6">
+      {/* AJ-E501: the ledger-degraded banner (the Cleanup Centre stub's
+          only surface until AJ-E506 builds the Centre). */}
+      {stats?.ledger_degraded === true && (
+        <div
+          role="alert"
+          data-testid="ledger-degraded-banner"
+          className="flex items-center gap-2.5 rounded-lg border border-warning/25 bg-warning-soft px-4 py-3 text-[12.5px] text-ink"
+        >
+          <span aria-hidden>⚠</span>
+          Process tracking degraded — cleanup is read-only until restart.
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
         <StatCard
           label="Live instances"

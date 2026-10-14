@@ -139,6 +139,7 @@ fn drive_orphan_fixture(state: &Arc<AppState>, dir: &Path, id: &str) -> (Session
                 ],
                 dir,
             ),
+            &ctx(),
         )
         .unwrap();
 
@@ -171,6 +172,16 @@ fn drive_orphan_fixture(state: &Arc<AppState>, dir: &Path, id: &str) -> (Session
     }
     assert!(exited, "fixture harness never exited");
     (session, child_pid)
+}
+
+fn ctx() -> juggler_supervisor::tree::SpawnContext {
+    juggler_supervisor::tree::SpawnContext {
+        provider: "fake-harness".into(),
+        account_id: Some("acc-fake".into()),
+        project_id: Some("proj-fake".into()),
+        machine: juggler_core::model::MachineId::new("machine-test"),
+        role: "root",
+    }
 }
 
 #[test]

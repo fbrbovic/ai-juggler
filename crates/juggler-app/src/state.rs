@@ -7,6 +7,7 @@ use std::sync::Mutex;
 use juggler_adapter::AdapterRegistry;
 use juggler_core::model::SessionId;
 use juggler_core::storage::Storage;
+use juggler_supervisor::tree::LedgerStore as _;
 use juggler_supervisor::{
     HeuristicEngine, HeuristicThresholds, LiveStatsCollector, OrphanTracker, Supervisor,
 };
@@ -29,6 +30,8 @@ pub struct AppState {
     /// Exit snapshots → confirmed orphans + stop states (AJ-E410).
     /// Interior-mutex: safe to read without the collector lock.
     pub orphans: OrphanTracker,
+    /// The persistent spawn ledger handle (AJ-E501): queries + prune.
+    pub ledger: std::sync::Arc<juggler_supervisor::tree::CoreLedgerStore>,
     /// The one live preview session (AJ-E415 Req.5: one at a time).
     /// Lock ordering: never held together with `storage`.
     pub preview: Mutex<Option<crate::commands::PreviewSession>>,
@@ -69,7 +72,20 @@ impl AppState {
         std::fs::create_dir_all(&data_dir)
             .map_err(|error| crate::error::AppError::io("create app data dir", &error))?;
         let storage = Storage::open(&data_dir.join("juggler.sqlite"))?;
-        let supervisor = Supervisor::with_journal(&data_dir.join("supervision"))?;
+        // AJ-E501: the persistent spawn ledger — its OWN connection to
+        // the same WAL store (spawn threads + reconciler ticks write
+        // without the app's storage mutex), attached to the supervisor
+        // (intent-before-spawn, helper upserts, exit patches).
+        let ledger = std::sync::Arc::new(juggler_supervisor::tree::CoreLedgerStore::new(
+            juggler_core::storage::ProcessLedgerRepo::open(&data_dir.join("juggler.sqlite"))?,
+        ));
+        // Retention (Req.5): exited rows older than 7 days at startup;
+        // running rows are never pruned. The recurring job rides the
+        // E504 reconciler tick.
+        let cutoff = juggler_core::model::Timestamp::now().millis() - 7 * 24 * 3_600_000;
+        let _ = ledger.prune(cutoff);
+        let supervisor =
+            Supervisor::with_journal(&data_dir.join("supervision"))?.with_ledger(ledger.clone());
         // Crash/restart reconciliation: sessions recorded running whose
         // processes did not survive the restart are marked stopped —
         // never a permanently fake "live" dot (survivors stay running).
@@ -92,6 +108,7 @@ impl AppState {
         }
         Ok(Self {
             supervisor,
+            ledger,
             registry,
             storage: Mutex::new(storage),
             resources: Mutex::new(LiveStatsCollector::new()),

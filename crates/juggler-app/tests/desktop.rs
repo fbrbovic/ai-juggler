@@ -72,6 +72,16 @@ fn desktop_state(dir: &Path) -> Arc<AppState> {
     state
 }
 
+fn ctx() -> juggler_supervisor::tree::SpawnContext {
+    juggler_supervisor::tree::SpawnContext {
+        provider: "fake-harness".into(),
+        account_id: Some("acc-fake".into()),
+        project_id: Some("proj-fake".into()),
+        machine: juggler_core::model::MachineId::new("machine-test"),
+        role: "root",
+    }
+}
+
 #[test]
 fn desktop_launch_tracks_in_the_same_ledger_without_a_pty() {
     let dir = tempfile::tempdir().unwrap();
@@ -150,7 +160,7 @@ fn desktop_crash_surfaces_as_failed_state() {
     let session = juggler_core::model::SessionId::new("sess-desktop-crash");
     let spawned = state_ref
         .supervisor
-        .spawn_desktop(&session, &launch)
+        .spawn_desktop(&session, &launch, &ctx())
         .unwrap();
     assert!(spawned.pid != 0);
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -289,7 +299,10 @@ fn real_desktop_launch_record_textedit() {
     let session = juggler_core::model::SessionId::new("sess-textedit-record");
 
     let started = Instant::now();
-    let spawned = state.supervisor.spawn_desktop(&session, &launch).unwrap();
+    let spawned = state
+        .supervisor
+        .spawn_desktop(&session, &launch, &ctx())
+        .unwrap();
     let tracked_in = started.elapsed();
     println!(
         "[record] spawned pid={} bundle=com.apple.TextEdit tracked_in={tracked_in:?}",

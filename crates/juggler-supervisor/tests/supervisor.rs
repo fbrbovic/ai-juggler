@@ -41,6 +41,16 @@ fn wait_for_exit(supervisor: &Supervisor, session: &SessionId) -> LifecycleEvent
     panic!("no exit event within deadline");
 }
 
+fn ledger_test_ctx() -> juggler_supervisor::tree::SpawnContext {
+    juggler_supervisor::tree::SpawnContext {
+        provider: "claude-code".into(),
+        account_id: Some("acc-test".into()),
+        project_id: Some("proj-test".into()),
+        machine: juggler_core::model::MachineId::new("machine-test"),
+        role: "root",
+    }
+}
+
 #[test]
 fn spawn_capture_and_stop_cleanly() {
     let workdir = tempfile::tempdir().unwrap();
@@ -51,6 +61,7 @@ fn spawn_capture_and_stop_cleanly() {
         .spawn(
             &session,
             &sh_spec("echo hello-juggler; sleep 60", workdir.path()),
+            &ledger_test_ctx(),
         )
         .unwrap();
     assert_eq!(spawned.session, session);
@@ -90,7 +101,11 @@ fn external_sigkill_is_journaled_as_exit() {
     let session = SessionId::new("s-killed");
 
     let spawned = supervisor
-        .spawn(&session, &sh_spec("sleep 300", workdir.path()))
+        .spawn(
+            &session,
+            &sh_spec("sleep 300", workdir.path()),
+            &ledger_test_ctx(),
+        )
         .unwrap();
 
     // Kill -9 from outside (simulating the OS OOM killer).
@@ -124,7 +139,11 @@ fn children_survive_drop_and_are_readopted_from_journal() {
     let pid = {
         let supervisor = Supervisor::with_journal(&state).unwrap();
         let spawned = supervisor
-            .spawn(&session, &sh_spec("sleep 300", workdir.path()))
+            .spawn(
+                &session,
+                &sh_spec("sleep 300", workdir.path()),
+                &ledger_test_ctx(),
+            )
             .unwrap();
         spawned.pid
         // Supervisor dropped here; the child must survive (spec §5.3).
@@ -158,7 +177,11 @@ fn process_tree_descendants_are_tracked() {
 
     // sh spawns a child; the supervisor must see the whole tree.
     supervisor
-        .spawn(&session, &sh_spec("sleep 300 & sleep 300", workdir.path()))
+        .spawn(
+            &session,
+            &sh_spec("sleep 300 & sleep 300", workdir.path()),
+            &ledger_test_ctx(),
+        )
         .unwrap();
     std::thread::sleep(Duration::from_millis(500));
 
@@ -185,7 +208,9 @@ fn pty_spawn_captures_output() {
         cwd: workdir.path().to_path_buf(),
         needs_pty: true,
     };
-    supervisor.spawn(&session, &spec).unwrap();
+    supervisor
+        .spawn(&session, &spec, &ledger_test_ctx())
+        .unwrap();
 
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
@@ -226,7 +251,9 @@ fn pty_sessions_roundtrip_input_output_and_resize() {
         cwd: workdir.path().to_path_buf(),
         needs_pty: true,
     };
-    supervisor.spawn(&session, &spec).unwrap();
+    supervisor
+        .spawn(&session, &spec, &ledger_test_ctx())
+        .unwrap();
     let tap = supervisor.tap(&session).unwrap();
 
     supervisor
@@ -280,7 +307,7 @@ fn pty_sessions_roundtrip_input_output_and_resize() {
     // Piped sessions have no PTY: the typed error says so.
     let piped = SessionId::new("s-piped");
     supervisor
-        .spawn(&piped, &sh_spec("true", workdir.path()))
+        .spawn(&piped, &sh_spec("true", workdir.path()), &ledger_test_ctx())
         .unwrap();
     let err = supervisor.write_input(&piped, b"x").unwrap_err();
     assert!(err.to_string().contains("no pty"), "{err}");
@@ -307,7 +334,9 @@ fn twenty_streaming_sessions_fan_out_without_deadlock() {
             cwd: workdir.path().to_path_buf(),
             needs_pty: true,
         };
-        supervisor.spawn(&session, &spec).unwrap();
+        supervisor
+            .spawn(&session, &spec, &ledger_test_ctx())
+            .unwrap();
         let tap = supervisor.tap(&session).unwrap();
         sessions.push((session, tap));
     }
@@ -362,6 +391,7 @@ fn live_stats_collector_batches_and_masks_first_cpu_sample() {
                 cwd: workdir.path().to_path_buf(),
                 needs_pty: false,
             },
+            &ledger_test_ctx(),
         )
         .unwrap();
 

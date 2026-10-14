@@ -66,7 +66,7 @@ fn classify_run(
     cwd: &std::path::Path,
     expect_exit: bool,
 ) -> Prediction {
-    supervisor.spawn(session, &spec(args, cwd)).unwrap();
+    supervisor.spawn(session, &spec(args, cwd), &ctx()).unwrap();
     // Wait for Started + output to land.
     // Generous deadlines: the workspace suite runs test binaries in
     // parallel, so CI runners can be briefly starved.
@@ -129,6 +129,16 @@ fn classify_run(
     supervisor.stop(session, Duration::from_secs(5)).unwrap();
     let _ = supervisor.recv_timeout(Duration::from_millis(300));
     prediction
+}
+
+fn ctx() -> juggler_supervisor::tree::SpawnContext {
+    juggler_supervisor::tree::SpawnContext {
+        provider: "fake-harness".into(),
+        account_id: Some("acc-fake".into()),
+        project_id: Some("proj-fake".into()),
+        machine: juggler_core::model::MachineId::new("machine-test"),
+        role: "root",
+    }
 }
 
 #[test]
@@ -256,6 +266,7 @@ fn fixture_corpus_precision_and_recall_at_least_90_percent() {
                     &["run", "--dir", ".", "--turns", "20000", "--delay-ms", "300"],
                     &dir,
                 ),
+                &ctx(),
             )
             .unwrap();
         let _ = supervisor.recv_timeout(Duration::from_millis(300));
@@ -306,6 +317,7 @@ fn live_dogfood_hang_fixture_flags_stuck_within_budget() {
                 &["run", "--dir", ".", "--turns", "2", "--stall-secs", "120"],
                 workdir.path(),
             ),
+            &ctx(),
         )
         .unwrap();
     let _ = supervisor.recv_timeout(Duration::from_millis(300));
