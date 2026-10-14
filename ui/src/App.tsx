@@ -21,7 +21,8 @@ import { ProfilesScreen } from "./screens/Profiles";
 import { OnboardingWizard } from "./screens/OnboardingWizard";
 import { NewSessionModal } from "./screens/NewSession";
 import { ReadyHome } from "./screens/ReadyHome";
-import { ProjectPanel, SessionPanel, WorkEmpty } from "./screens/WorkPanels";
+import { SessionPanel } from "./screens/WorkPanels";
+import { RightInspector } from "./components/RightInspector";
 import {
   accountsList,
   launchRecipesList,
@@ -66,7 +67,9 @@ type Selection =
   | { kind: "none" }
   | { kind: "project"; id: string }
   | { kind: "session"; id: string }
-  | { kind: "login"; id: string };
+  | { kind: "login"; id: string }
+  | { kind: "account"; id: string }
+  | { kind: "provider"; id: string };
 
 export default function App() {
   const [tab, setTab] = useState<WorkTab>("projects");
@@ -301,10 +304,16 @@ export default function App() {
     accounts.some((a) => a.login_state !== "logged_in") &&
     !readySkipped;
 
-  const sessionProject = useMemo(
-    () => projects.find((p) => p.id === selectedSession?.project_id) ?? null,
-    [projects, selectedSession],
+  const selectedAccount = useMemo(
+    () => (selection.kind === "account" ? (accounts.find((a) => a.id === selection.id) ?? null) : null),
+    [selection, accounts],
   );
+  const selectedProvider = useMemo(() => {
+    if (selection.kind !== "provider") return null;
+    const providerAccounts = accounts.filter((a) => a.provider === selection.id);
+    return { id: selection.id, name: selection.id, accounts: providerAccounts };
+  }, [selection, accounts]);
+
 
   // ⌘B legacy: toggles minimal↔comfortable (the old collapse, kept for
   // muscle memory). ⌘N starts a new session. Density cycle: Ctrl+D
@@ -485,50 +494,42 @@ export default function App() {
         <main className="min-h-0 flex-1 overflow-hidden p-5">
           {global === "accounts" ? (
             <div className="h-full overflow-y-auto">
-              <ProfilesScreen openTerminal={openLoginTerminal} />
+              <ProfilesScreen
+                openTerminal={openLoginTerminal}
+                onInspectAccount={(id) => {
+                  setGlobal(null);
+                  setSelection({ kind: "account", id });
+                }}
+              />
             </div>
           ) : global === "overview" ? (
             <div className="h-full overflow-y-auto">
-              <Overview sessions={sessions} projects={projects} onSelectSession={selectSession} />
+              <Overview
+                sessions={sessions}
+                projects={projects}
+                onSelectSession={selectSession}
+                onInspectProvider={(provider) => {
+                  setGlobal(null);
+                  setSelection({ kind: "provider", id: provider });
+                }}
+              />
             </div>
           ) : global === "usage" ? (
             <ComingSoon screen="Usage" />
           ) : global === "fleet" ? (
             <ComingSoon screen="Fleet" />
-          ) : selectedProject ? (
-            <ProjectPanel
-              project={selectedProject}
-              sessions={sessions}
-              accounts={accounts}
-              onOpenSession={selectSession}
-              onLaunch={async (recipe, project) => {
-                const result = await launchSession(recipe.id, project.root);
-                if (result) {
-                  void refresh();
-                  selectSession(result.session_id);
-                }
-              }}
-            />
-          ) : selectedSession || selectedLogin ? (
+          ) : selectedLogin ? (
             <SessionPanel
-              session={selectedSession}
-              project={sessionProject}
+              session={null}
+              project={null}
               loginTerminal={selectedLogin}
               profiles={profiles}
               accounts={accounts}
               onOpenProject={selectProject}
               onStopped={() => void refresh()}
-              onHandover={async (sessionId, targetProfileId) => {
-                try {
-                  const result = await sessionHandover(sessionId, targetProfileId);
-                  await refresh();
-                  selectSession(result.session_id);
-                } catch (cause) {
-                  window.alert(`Hand-over failed: ${String(cause)}`);
-                }
-              }}
+              onHandover={async () => {}}
             />
-          ) : showReadyHome ? (
+          ) : showReadyHome && selection.kind === "none" ? (
             <ReadyHome
               accounts={accounts}
               onSignIn={async (account) => {
@@ -546,7 +547,64 @@ export default function App() {
               }}
             />
           ) : (
-            <WorkEmpty onNew={() => setNewSession(true)} />
+            <RightInspector
+              selection={
+                selection.kind === "session"
+                  ? { kind: "instance", id: selection.id }
+                  : selection.kind === "none"
+                    ? { kind: "none" }
+                    : selection
+              }
+              data={{
+                instance: selectedSession,
+                project: selectedProject,
+                account: selectedAccount,
+                provider: selectedProvider ? { id: selectedProvider.id, name: selectedProvider.name } : null,
+                machineId: "this-mac",
+              }}
+              sessions={sessions}
+              projects={projects}
+              accounts={accounts}
+              profiles={profiles}
+              terminalTitle={selectedSession ? `${selectedSession.account_label} · instance` : null}
+              freshness={freshness}
+              now={now}
+              primaryAction={
+                selectedSession && (selectedSession.status === "running" || selectedSession.status === "starting") ? (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={async () => {
+                      const { terminalKill } = await import("./lib/bridge");
+                      await terminalKill(selectedSession.id);
+                      void refresh();
+                    }}
+                  >
+                    Stop
+                  </Button>
+                ) : null
+              }
+              onOpenProject={selectProject}
+              onOpenSession={selectSession}
+              onLaunch={async (recipe, project) => {
+                const result = await launchSession(recipe.id, project.root);
+                if (result) {
+                  void refresh();
+                  selectSession(result.session_id);
+                }
+              }}
+              onStopped={() => void refresh()}
+              onHandover={async (sessionId, targetProfileId) => {
+                try {
+                  const result = await sessionHandover(sessionId, targetProfileId);
+                  await refresh();
+                  selectSession(result.session_id);
+                } catch (cause) {
+                  window.alert(`Hand-over failed: ${String(cause)}`);
+                }
+              }}
+              onNew={() => setNewSession(true)}
+            />
           )}
         </main>
       </div>
@@ -611,10 +669,12 @@ function Overview({
   sessions,
   projects,
   onSelectSession,
+  onInspectProvider,
 }: {
   sessions: InstanceInfo[];
   projects: ProjectInfo[];
   onSelectSession: (id: string) => void;
+  onInspectProvider: (provider: string) => void;
 }) {
   const [stats, setStats] = useState<StatsInfo | null>(null);
   useEffect(() => {
@@ -699,12 +759,17 @@ function Overview({
               {live
                 .filter((s) => s.quota !== null)
                 .map((s) => (
-                  <div key={s.id} className="flex flex-col gap-1">
-                    <span className="text-[11px] text-muted">
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => onInspectProvider(s.provider)}
+                    className="flex flex-col items-start gap-1 rounded-lg outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+                  >
+                    <span className="text-[11px] text-muted hover:text-ink">
                       {s.account_label} · {s.provider}
                     </span>
                     <QuotaBar quota={s.quota} />
-                  </div>
+                  </button>
                 ))}
             </div>
           ) : (

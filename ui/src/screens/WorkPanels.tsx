@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button, Card, Chip, type ChipTone } from "../components/primitives";
 import { TerminalView } from "../components/TerminalView";
-import { IconJuggler, IconProjects, IconTerminal } from "../components/icons";
+import { IconProjects, IconTerminal } from "../components/icons";
 import {
   launchSession,
   launchRecipesList,
@@ -38,8 +38,9 @@ function since(ms: number): string {
 }
 
 /**
- * Session / instance detail (ADR-0007): the selected item loads here —
- * its terminal embedded, metadata above, actions at hand.
+ * The login-terminal panel (ADR-0007): a vendor sign-in flowing in an
+ * embedded terminal. Instance/project detail moved to RightInspector
+ * (AJ-E406) — extracted, not duplicated.
  */
 export function SessionPanel({
   session,
@@ -185,168 +186,6 @@ export function SessionPanel({
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-/**
- * Project detail (ADR-0007): the juggling anchor — who's on it now, the
- * account history, launch-with-another-account, and its session timeline.
- */
-export function ProjectPanel({
-  project,
-  sessions,
-  accounts,
-  onOpenSession,
-  onLaunch,
-}: {
-  project: ProjectInfo;
-  sessions: InstanceInfo[];
-  accounts: AccountInfo[];
-  onOpenSession: (id: string) => void;
-  onLaunch: (recipe: LaunchRecipeInfo, project: ProjectInfo) => void;
-}) {
-  const [profiles, setProfiles] = useState<LaunchRecipeInfo[] | null>(null);
-  if (profiles === null) {
-    void launchRecipesList().then(setProfiles);
-  }
-  const history = sessions.filter((s) => s.project_id === project.id);
-
-  return (
-    <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto">
-      <header className="flex items-center gap-3">
-        <span className="text-accent-hi">
-          <IconProjects width={18} height={18} />
-        </span>
-        <h2 className="text-lg font-semibold tracking-tight">{project.name}</h2>
-        {project.active_instance ? (
-          <Chip tone="live" dot>
-            {project.active_instance.account_label} on it
-          </Chip>
-        ) : (
-          <Chip tone="neutral">idle</Chip>
-        )}
-      </header>
-      <p className="-mt-2 font-mono text-[11px] text-faint">{project.root}</p>
-
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <Card className="flex flex-col gap-3 p-4">
-          <p className="text-[11px] uppercase tracking-wider text-faint">On it now</p>
-          {project.active_instance ? (
-            <button
-              type="button"
-              onClick={() => onOpenSession(project.active_instance!.id)}
-              className="flex items-center gap-2 rounded-lg border border-hairline px-3 py-2.5 text-left transition-colors hover:border-accent/40 hover:bg-surface"
-            >
-              <span className="dot-live size-1.5 rounded-full bg-live" />
-              <span className="text-sm">{project.active_instance.account_label}</span>
-              <Chip tone={statusTone(project.active_instance.status).tone}>
-                {statusTone(project.active_instance.status).label}
-              </Chip>
-              <span className="ml-auto flex items-center gap-1 text-[11px] text-muted">
-                open <IconTerminal width={12} height={12} />
-              </span>
-            </button>
-          ) : (
-            <p className="text-xs text-muted">No live instance — free to juggle.</p>
-          )}
-
-          <p className="mt-2 text-[11px] uppercase tracking-wider text-faint">
-            Launch with another account
-          </p>
-          <div className="flex flex-col gap-1.5">
-            {(profiles ?? []).slice(0, 5).map((recipe) => {
-              const ready =
-                accounts.find((a) => a.id === recipe.account_id)?.login_state === "logged_in";
-              return (
-                <button
-                  key={recipe.id}
-                  type="button"
-                  disabled={!ready}
-                  title={ready ? undefined : "Needs sign-in first (Ready home)"}
-                  onClick={() => onLaunch(recipe, project)}
-                  className={
-                    "flex items-center gap-2 rounded-lg border px-3 py-2 text-left text-xs transition-colors " +
-                    (ready
-                      ? "border-hairline hover:border-accent/40 hover:bg-surface"
-                      : "border-hairline/50 opacity-50")
-                  }
-                >
-                  <IconTerminal width={13} height={13} />
-                  <span className="font-medium">{recipe.account_label}</span>
-                  <span className="text-faint">·</span>
-                  <span className="text-muted">{recipe.name}</span>
-                  {recipe.model && (
-                    <span className="ml-auto font-mono text-[10px] text-faint">{recipe.model}</span>
-                  )}
-                  {!ready && <Chip tone="neutral">sign in first</Chip>}
-                </button>
-              );
-            })}
-            {(profiles ?? []).length === 0 && (
-              <p className="text-xs text-muted">
-                No profiles yet — add an account first (Accounts, top right).
-              </p>
-            )}
-          </div>
-        </Card>
-
-        <Card className="flex flex-col gap-2 p-4">
-          <p className="text-[11px] uppercase tracking-wider text-faint">
-            Sessions in this project
-          </p>
-          {history.length === 0 ? (
-            <p className="text-xs text-muted">Nothing recorded yet.</p>
-          ) : (
-            <div className="flex flex-col divide-y divide-hairline/50">
-              {history.map((s) => (
-                <button
-                  key={s.id}
-                  type="button"
-                  onClick={() => onOpenSession(s.id)}
-                  className="flex items-center gap-2.5 py-2 text-left text-xs"
-                >
-                  <span
-                    className={
-                      "size-1.5 shrink-0 rounded-full " +
-                      (isLive(s.status)
-                        ? "bg-live animate-breathe"
-                        : s.status === "failed"
-                          ? "bg-danger"
-                          : "bg-faint")
-                    }
-                  />
-                  <span className="min-w-0 flex-1 truncate font-medium">{s.account_label}</span>
-                  <span className="text-faint">{since(s.started_at_ms)}</span>
-                  <Chip tone={statusTone(s.status).tone}>{statusTone(s.status).label}</Chip>
-                </button>
-              ))}
-            </div>
-          )}
-        </Card>
-      </div>
-    </div>
-  );
-}
-
-/** Nothing selected — the workflow's resting state. */
-export function WorkEmpty({ onNew }: { onNew: () => void }) {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-4">
-      <span className="flex size-14 items-center justify-center rounded-2xl border border-accent/20 bg-accent-soft text-accent drop-shadow-[0_0_18px_#7c7cf433]">
-        <IconJuggler width={26} height={26} />
-      </span>
-      <div className="text-center">
-        <p className="text-sm font-medium">Pick something in the rail, or start fresh</p>
-        <p className="mt-1 text-xs text-muted">
-          Sessions load here with their terminal; projects show who's on them
-          and how to juggle accounts.
-        </p>
-      </div>
-      <Button variant="primary" size="sm" onClick={onNew}>
-        <IconTerminal width={14} height={14} />
-        New session
-      </Button>
     </div>
   );
 }

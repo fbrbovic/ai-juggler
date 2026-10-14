@@ -68,7 +68,9 @@ fn classify_run(
 ) -> Prediction {
     supervisor.spawn(session, &spec(args, cwd)).unwrap();
     // Wait for Started + output to land.
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    // Generous deadlines: the workspace suite runs test binaries in
+    // parallel, so CI runners can be briefly starved.
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
     loop {
         if let Some(LifecycleEvent::Started { .. }) =
             supervisor.recv_timeout(Duration::from_millis(50))
@@ -81,7 +83,7 @@ fn classify_run(
 
     if expect_exit {
         // Quota/crash fixtures end by themselves; classify the exit.
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
         loop {
             if let Some(LifecycleEvent::Exited { kind, .. }) =
                 supervisor.recv_timeout(Duration::from_millis(100))
