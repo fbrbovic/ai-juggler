@@ -31,6 +31,12 @@ pub struct SpawnedProcess {
     /// `None` where the platform has no groups — the ownership
     /// identity later kill paths target (never a guessed group).
     pub pgid: Option<u32>,
+    /// The spawn-time identity (AJ-E503): fork-time OS start time +
+    /// kernel-reported exe + boot id. `None` only when the probe
+    /// never landed — verification then fails CLOSED. The settled
+    /// post-`exec` identity arrives via the journal's
+    /// `identity_settled` entry and the handle.
+    pub identity: Option<crate::tree::ProcessIdentity>,
 }
 
 /// Live process statistics for one supervised Instance (AJ-E401 read
@@ -465,12 +471,19 @@ struct ChildExtras {
     /// The child's process-group id (AJ-E502): the deterministic kill
     /// target; `None` where the platform has no groups (honest).
     pgid: Option<u32>,
+    /// The spawn-time identity (AJ-E503); refined by the settle
+    /// thread after wrappers exec their interpreter.
+    identity: Option<crate::tree::ProcessIdentity>,
 }
 
 struct ChildHandle {
     pid: u32,
     /// The child's process-group id (AJ-E502, the ownership identity).
     pgid: Option<u32>,
+    /// The recorded identity (AJ-E503) — the verify-before-kill
+    /// input for kill paths (E507/E508) and the reconciler (E504).
+    /// Behind a mutex: the settle thread refines it after `exec`.
+    identity: Mutex<Option<crate::tree::ProcessIdentity>>,
     ring: Arc<Mutex<OutputRing>>,
     finished: Arc<AtomicBool>,
     /// Last output arrival (epoch ms, 0 = none) — feeds the Stuck rule
@@ -632,20 +645,82 @@ impl Supervisor {
         }
     }
 
-    /// The OS start time (epoch s) of a just-spawned pid, via a
-    /// one-shot table probe; `None` when the table has not caught up
-    /// (patched later by the reconciler tick).
-    fn os_start_time(pid: u32) -> Option<i64> {
-        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate};
-        let mut system = sysinfo::System::new();
-        system.refresh_processes_specifics(
-            ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]),
-            true,
-            ProcessRefreshKind::nothing(),
-        );
-        system
-            .process(sysinfo::Pid::from_u32(pid))
-            .and_then(|p| i64::try_from(p.start_time()).ok())
+    /// The full spawn-time identity probe (AJ-E503): fork-time OS
+    /// start time + kernel-reported exe, one targeted refresh with a
+    /// short retry for table lag on a just-forked pid. `None` means
+    /// the probe never landed — the caller records NO identity and
+    /// verification later fails CLOSED, never open.
+    fn os_probed(pid: u32) -> Option<crate::tree::ProbedProcess> {
+        use crate::tree::{IdentityProbe as _, OsIdentityProbe};
+        let probe = OsIdentityProbe;
+        for attempt in 0..5 {
+            if let Some(facts) = probe.probe(pid) {
+                return Some(facts);
+            }
+            if attempt < 4 {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+        None
+    }
+
+    /// The machine's boot identity (epoch seconds as text) — the
+    /// §6.2 boot gate's current value.
+    fn boot_id_string() -> String {
+        use crate::tree::{IdentityProbe as _, OsIdentityProbe};
+        OsIdentityProbe.boot_id()
+    }
+
+    /// Builds the spawn-time identity for a just-forked child.
+    #[allow(clippy::similar_names)] // pid/pgid are the kernel's own names
+    fn spawn_identity(pid: u32, pgid: Option<u32>) -> Option<crate::tree::ProcessIdentity> {
+        Self::os_probed(pid).map(|facts| crate::tree::ProcessIdentity {
+            pid,
+            pgid,
+            start_time: facts.start_time,
+            exe: facts.exe,
+            boot_id: Self::boot_id_string(),
+        })
+    }
+
+    /// AJ-E503 settle thread: script wrappers `exec` their
+    /// interpreter AFTER our spawn-time probe, so the kernel exe
+    /// legitimately moves — re-probe once the image settles and
+    /// record the authoritative identity (handle + journal, so
+    /// adoption verifies against the truth). Crash-safe by omission:
+    /// the entry simply never happens if we die first. A start-time
+    /// disagreement between the two probes means the pid was
+    /// recycled mid-settle — the record is left untouched (fail
+    /// closed).
+    #[allow(clippy::similar_names)] // pid/pgid are the kernel's own names
+    fn settle_identity(&self, session: &SessionId, pid: u32, handle: Arc<ChildHandle>) {
+        let journal = self.journal.clone();
+        let session = session.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(250));
+            let Some(facts) = Self::os_probed(pid) else {
+                return;
+            };
+            let pgid = handle.pgid;
+            let next = crate::tree::ProcessIdentity {
+                pid,
+                pgid,
+                start_time: facts.start_time,
+                exe: facts.exe,
+                boot_id: Self::boot_id_string(),
+            };
+            if let Ok(mut identity) = handle.identity.lock() {
+                if let Some(current) = identity.as_ref()
+                    && current.start_time != next.start_time
+                {
+                    return;
+                }
+                *identity = Some(next.clone());
+            }
+            if let Some(journal) = journal {
+                let _ = journal.record_identity_settled(&session, pid, &next);
+            }
+        });
     }
 
     /// Spawns one session per the launch spec. Interactive specs get a real
@@ -685,13 +760,29 @@ impl Supervisor {
         } else {
             self.spawn_piped(session, spec)?
         };
-        let started_at = Self::os_start_time(spawned.pid);
+        // The identity probe already landed inside the spawn path;
+        // its fork-time start time IS the ledger's started_at (one
+        // probe, not two — AJ-E503).
+        let started_at = spawned.identity.as_ref().map(|i| i.start_time);
         // AJ-E502 Req.2: the PGID captured per path (piped: own group
         // leader; PTY: one getpgid) lands in the ledger patch before
         // `spawn` returns.
         self.ledger_write(|ledger| ledger.spawned(session, spawned.pid, spawned.pgid, started_at));
         if let Some(journal) = &self.journal {
-            journal.record_spawned(session, spawned.pid, &spec.program)?;
+            journal.record_spawned(
+                session,
+                spawned.pid,
+                &spec.program,
+                spawned.identity.as_ref(),
+            )?;
+        }
+        if let Some(handle) = self
+            .children
+            .lock()
+            .ok()
+            .and_then(|children| children.get(session).cloned())
+        {
+            self.settle_identity(session, spawned.pid, handle);
         }
         let _ = self.events_tx.send(LifecycleEvent::Started {
             session: session.clone(),
@@ -749,8 +840,9 @@ impl Supervisor {
             message: e.to_string(),
         })?;
         let pid = child.id();
-        let started_at = Self::os_start_time(pid);
         let pgid = group::pgid_of(pid).ok();
+        let identity = Self::spawn_identity(pid, pgid);
+        let started_at = identity.as_ref().map(|i| i.start_time);
         self.ledger_write(|ledger| ledger.spawned(session, pid, pgid, started_at));
         let ring = Arc::new(Mutex::new(OutputRing::new(DEFAULT_RING_CAPACITY)));
         let child = Arc::new(Mutex::new(child));
@@ -759,7 +851,7 @@ impl Supervisor {
         let force_kill: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
             let _ = kill_child.lock().map(|mut c| c.kill());
         });
-        self.register(
+        let handle = self.register(
             session.clone(),
             pid,
             ring,
@@ -769,11 +861,13 @@ impl Supervisor {
                 pty: None,
                 last_output_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
                 pgid,
+                identity: identity.clone(),
             },
         );
         if let Some(journal) = &self.journal {
-            journal.record_spawned(session, pid, &launch.program)?;
+            journal.record_spawned(session, pid, &launch.program, identity.as_ref())?;
         }
+        self.settle_identity(session, pid, handle);
         let _ = self.events_tx.send(LifecycleEvent::Started {
             session: session.clone(),
             pid,
@@ -805,6 +899,7 @@ impl Supervisor {
             session: session.clone(),
             pid,
             pgid,
+            identity,
         })
     }
 
@@ -842,6 +937,7 @@ impl Supervisor {
         })?;
         let pid = child.id();
         let pgid = group::pgid_of(pid).ok();
+        let identity = Self::spawn_identity(pid, pgid);
         let ring = Arc::new(Mutex::new(OutputRing::new(DEFAULT_RING_CAPACITY)));
         let child = Arc::new(Mutex::new(child));
         let finished = Arc::new(AtomicBool::new(false));
@@ -851,7 +947,7 @@ impl Supervisor {
         });
         // Register before readers start so output tracking exists from
         // the first chunk (AJ-E405).
-        let last_output = self.register(
+        let handle = self.register(
             session.clone(),
             pid,
             Arc::clone(&ring),
@@ -861,8 +957,10 @@ impl Supervisor {
                 pty: None,
                 last_output_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
                 pgid,
+                identity: identity.clone(),
             },
         );
+        let last_output = Arc::clone(&handle.last_output_ms);
         let (out_atomic, err_atomic) = (Arc::clone(&last_output), last_output);
         let (out_tx, err_tx) = (
             std::sync::mpsc::SyncSender::clone(&self.activity_tx),
@@ -910,6 +1008,7 @@ impl Supervisor {
             session: session.clone(),
             pid,
             pgid,
+            identity,
         })
     }
 
@@ -1011,6 +1110,7 @@ impl Supervisor {
         // grouping — the identity comes from the kernel, not the
         // wrapper's convention.
         let pgid = group::pgid_of(pid).ok();
+        let identity = Self::spawn_identity(pid, pgid);
         self.register(
             session.clone(),
             pid,
@@ -1021,19 +1121,22 @@ impl Supervisor {
                 pty,
                 last_output_ms: last_output,
                 pgid,
+                identity: identity.clone(),
             },
         );
         Ok(SpawnedProcess {
             session: session.clone(),
             pid,
             pgid,
+            identity,
         })
     }
 
     #[allow(clippy::needless_pass_by_value)] // Arc handles are moved intentionally
     /// Registers a child handle; `parts.pty` and `parts.last_output_ms`
     /// come from the caller because the PTY path starts its reader before
-    /// the handle exists (output tracking from chunk 1).
+    /// the handle exists (output tracking from chunk 1). Returns the
+    /// stored handle (the settle thread refines its identity).
     fn register(
         &self,
         session: SessionId,
@@ -1042,21 +1145,21 @@ impl Supervisor {
         finished: Arc<AtomicBool>,
         force_kill: Arc<dyn Fn() + Send + Sync>,
         parts: ChildExtras,
-    ) -> Arc<std::sync::atomic::AtomicI64> {
-        let last_output_ms = parts.last_output_ms;
+    ) -> Arc<ChildHandle> {
         let handle = Arc::new(ChildHandle {
             pid,
             pgid: parts.pgid,
+            identity: Mutex::new(parts.identity),
             ring,
             finished,
-            last_output_ms: Arc::clone(&last_output_ms),
+            last_output_ms: parts.last_output_ms,
             force_kill,
             pty: parts.pty,
         });
         if let Ok(mut children) = self.children.lock() {
-            children.insert(session, handle);
+            children.insert(session, handle.clone());
         }
-        last_output_ms
+        handle
     }
 
     /// Stops a session: SIGTERM (unix), waits `grace`, then force-kills.
@@ -1218,6 +1321,22 @@ impl Supervisor {
             .lock()
             .ok()
             .and_then(|children| children.get(session).and_then(|h| h.pgid))
+    }
+
+    /// The root's recorded identity (AJ-E503) — the verify-before-kill
+    /// input for the reconciler (E504) and the kill ladder (E507/
+    /// E508). `None` when the spawn probe never landed (verification
+    /// then fails closed) or the session is not supervised.
+    #[must_use]
+    pub fn root_identity(&self, session: &SessionId) -> Option<crate::tree::ProcessIdentity> {
+        self.children
+            .lock()
+            .ok()?
+            .get(session)?
+            .identity
+            .lock()
+            .ok()?
+            .clone()
     }
 
     /// Feeds keyboard input to a PTY session's process.

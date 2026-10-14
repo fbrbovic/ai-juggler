@@ -76,7 +76,7 @@
 - Schema v13: `ALTER TABLE process_ledger ADD COLUMN escaped_group INTEGER NOT NULL DEFAULT 0`; sticky via `MAX(escaped_group, ?)` in the helper upsert (a clean re-tick never revokes the no-containment verdict); single ALTER owner = the migration runner (the repo's standalone CREATE is born v13-shaped; production always opens Storage before the ledger repo).
 - Evidence: `docs/qa/evidence/AJ-E502/` — root leader + in-group double-forked grandchild (PGID == root PGID) + `setsid` escapee (`escaped_group=1`, PGID ≠ root) in `supervisor-ledger-groups-test.log` + `evidence-db-dump.txt`; v12→v13 upgrade test in `core-storage-v13-test.log`. UI untouched (badge wording lands with AJ-E506).
 
-### AJ-E503 ProcessIdentity and fail-closed verify-before-kill | Status: TODO | Priority P0 | Effort M | Depends: AJ-E501
+### AJ-E503 ProcessIdentity and fail-closed verify-before-kill | Status: DONE-EVIDENCED (evidence: docs/qa/evidence/AJ-E503/manifest.md) | Priority P0 | Effort M | Depends: AJ-E501
 
 **Goal**: Make PID reuse (F-2/T5) structurally un-killable: a PID is a name, not an identity.
 
@@ -104,6 +104,14 @@
 **Research basis**: pass2/05 §6.2 (lines 254-268, incl. man7 proc(5) PID-reuse citation), §2 T5; deep/08 §5 F-2 (`journal.rs:188-196`).
 
 **Handover note**: Trap: helpers, not roots, are where PID reuse bites during long sessions — verify at kill time for EVERY candidate, not only at adoption. Trap: clock changes must not mass-flip rows; `boot_id` gate runs first (FMEA C8).
+
+*Implementation mapping (recorded in this task's PR per the claiming protocol)*:
+- Primitives (Req.1/2): `tree.rs` — `ProcessIdentity {pid, pgid, start_time, exe, boot_id}`, `Verification {Verified, Unverifiable}`, `pub fn verify` (real probe) + `verify_with` (injectable `IdentityProbe` seam; tests forge) + `verify_any` (adoption replay); boot gate FIRST (FMEA C8); probe error and missing-live-exe are `Unverifiable`, never `Verified`.
+- Errors (Req.3): `SupervisorError::Unverifiable { pid }` + `::LedgerDegraded` (typed refusal, distinct from `UnknownSession`).
+- Adoption (Req.4): `Journal::adopt_orphans` verifies roots against BOTH journal identity records — `spawned`'s spawn-time probe AND the new `identity_settled` entry (+250 ms settle thread re-probes the kernel exe after wrappers exec their interpreter; a start-time disagreement mid-settle leaves the record untouched). Pre-E503 lines (serde-default) → process left alone, fail closed. Kill-path in-tick re-verification is E507/E508's own spec (their ladders); `Supervisor::root_identity()` exposes the input.
+- Permanent flip (Req.5): `STATE_UNVERIFIABLE` + `ProcessLedgerRepo::mark_unverifiable` + `LedgerStore::mark_unverifiable`; candidates are running-only and the prune exited-only → an unverifiable row can never re-enter either, ever (drill + roundtrip assert both).
+- Supervisor wiring: `os_probed` (one targeted refresh, retry on table lag) builds spawn identities at all three paths; `SpawnedProcess`/`ChildHandle`/`ChildExtras` carry it; the ledger's `started_at` now comes from the same probe (one probe, not two — `os_start_time` deleted).
+- Evidence: `docs/qa/evidence/AJ-E503/` — the PID-reuse drill (forged single-field strangers, 0-signal trap-log witness, dead-pid arm, control arm), 6 unit tests per quality gate, adoption-restart test, storage roundtrip, sqlite dump of the flipped row.
 
 ### AJ-E504 Reconciler loop, orphan detection, and children-map eviction | Status: TODO | Priority P0 | Effort L | Depends: AJ-E501, AJ-E502, AJ-E503
 

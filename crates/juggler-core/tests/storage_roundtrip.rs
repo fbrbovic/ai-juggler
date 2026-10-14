@@ -963,6 +963,30 @@ fn process_ledger_lifecycle_roundtrip() {
             .any(|r| r.pid == Some(5001) && r.state == STATE_RUNNING)
     );
 
+    // 5b. AJ-E503: identity failure flips a running row to the
+    // PERMANENT unverifiable state — out of candidates, immune to
+    // the prune (neither running nor exited).
+    repo.mark_unverifiable(5001, "boot-42", 3_600).unwrap();
+    let flipped = repo
+        .rows_for_session("sess-ledger")
+        .unwrap()
+        .into_iter()
+        .find(|r| r.pid == Some(5001))
+        .unwrap();
+    assert_eq!(flipped.state, juggler_core::storage::STATE_UNVERIFIABLE);
+    let candidates = repo.candidates("machine-stable").unwrap();
+    assert!(
+        candidates.iter().all(|r| r.pid != Some(5001)),
+        "unverifiable rows never re-enter the candidate set"
+    );
+    repo.prune(i64::MAX).unwrap();
+    let flipped_still = repo
+        .rows_for_session("sess-ledger")
+        .unwrap()
+        .into_iter()
+        .any(|r| r.pid == Some(5001));
+    assert!(flipped_still, "the prune never removes an unverifiable row");
+
     // 6. Persistence: reopen the same file — everything survives
     // (root exit, app exit, reboot are all just "reopen later").
     drop(repo);

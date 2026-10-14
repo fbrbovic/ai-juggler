@@ -148,7 +148,11 @@ fn children_survive_drop_and_are_readopted_from_journal() {
         spawned.pid
         // Supervisor dropped here; the child must survive (spec §5.3).
     };
-    std::thread::sleep(Duration::from_millis(200));
+    // Wait past the identity-settle window (AJ-E503: `sh -c` execs
+    // `sleep`, so adoption verifies against the SETTLED journal
+    // identity — the immediate pre-exec record alone would fail
+    // closed, by design).
+    std::thread::sleep(Duration::from_millis(600));
 
     // "Restart": a fresh supervisor consults the journal.
     let orphans = Journal::open(state.join("supervision.jsonl"))

@@ -11,6 +11,7 @@ use juggler_core::model::SessionId;
 
 use crate::error::SupervisorError;
 use crate::lifecycle::ExitKind;
+use crate::tree::{OsIdentityProbe, ProcessIdentity, Verification, verify_any};
 
 /// A process found alive after a restart, reconstructed from the journal.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +22,47 @@ pub struct AdoptedProcess {
     pub pid: u32,
     /// The program that was spawned.
     pub program: String,
+    /// The verified identity (AJ-E503): adoption is identity-gated,
+    /// so every adopted root carries the record that passed.
+    pub identity: Option<ProcessIdentity>,
+}
+
+/// The identity facts persisted in journal entries (AJ-E503): the
+/// spawn-time record plus the post-`exec` settled record — replay
+/// verifies against BOTH (a stranger matches neither).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct JournalIdentity {
+    /// OS process start time, epoch seconds.
+    start_time: i64,
+    /// Kernel-reported executable at record time.
+    exe: String,
+    /// Process-group id (`None` where the platform lacks groups).
+    pgid: Option<u32>,
+    /// OS boot time, epoch seconds as text.
+    boot_id: String,
+}
+
+impl From<&ProcessIdentity> for JournalIdentity {
+    fn from(identity: &ProcessIdentity) -> Self {
+        Self {
+            start_time: identity.start_time,
+            exe: identity.exe.to_string_lossy().into_owned(),
+            pgid: identity.pgid,
+            boot_id: identity.boot_id.clone(),
+        }
+    }
+}
+
+impl From<&JournalIdentity> for ProcessIdentity {
+    fn from(record: &JournalIdentity) -> Self {
+        Self {
+            pid: 0, // replay fills the pid from the entry it rode on
+            pgid: record.pgid,
+            start_time: record.start_time,
+            exe: std::path::PathBuf::from(&record.exe),
+            boot_id: record.boot_id.clone(),
+        }
+    }
 }
 
 /// Append-only journal at a fixed path.
@@ -36,6 +78,20 @@ enum Entry {
         session: String,
         pid: u32,
         program: String,
+        at: i64,
+        /// Spawn-time identity (AJ-E503); absent on pre-E503 lines —
+        /// replay then leaves the process alone (fail closed).
+        #[serde(default)]
+        identity: Option<JournalIdentity>,
+    },
+    /// AJ-E503: the post-`exec` identity, probed after the spawn
+    /// settles (script wrappers exec their interpreter; the
+    /// kernel-reported exe changes). Adoption verifies against BOTH
+    /// records — a stranger on a recycled pid matches neither.
+    IdentitySettled {
+        session: String,
+        pid: u32,
+        identity: JournalIdentity,
         at: i64,
     },
     Exited {
@@ -75,6 +131,7 @@ struct JournalDescendant {
 #[derive(Default)]
 struct Last {
     spawned: Option<AdoptedProcess>,
+    identities: Vec<ProcessIdentity>,
     exited: bool,
 }
 
@@ -122,7 +179,9 @@ impl Journal {
         })
     }
 
-    /// Records that a process was spawned for `session`.
+    /// Records that a process was spawned for `session`, with its
+    /// spawn-time identity when the OS probe succeeded (AJ-E503 —
+    /// adoption later verifies against it, fail closed).
     ///
     /// # Errors
     ///
@@ -132,11 +191,35 @@ impl Journal {
         session: &SessionId,
         pid: u32,
         program: &std::path::Path,
+        identity: Option<&ProcessIdentity>,
     ) -> Result<(), SupervisorError> {
         self.append(&Entry::Spawned {
             session: session.to_string(),
             pid,
             program: program.to_string_lossy().into_owned(),
+            at: juggler_core::model::Timestamp::now().millis(),
+            identity: identity.map(JournalIdentity::from),
+        })
+    }
+
+    /// Records the post-`exec` settled identity (AJ-E503): script
+    /// wrappers exec their interpreter, so the kernel-reported exe
+    /// legitimately moves — this entry is the authoritative record
+    /// for it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SupervisorError::Journal`] on write failures.
+    pub fn record_identity_settled(
+        &self,
+        session: &SessionId,
+        pid: u32,
+        identity: &ProcessIdentity,
+    ) -> Result<(), SupervisorError> {
+        self.append(&Entry::IdentitySettled {
+            session: session.to_string(),
+            pid,
+            identity: JournalIdentity::from(identity),
             at: juggler_core::model::Timestamp::now().millis(),
         })
     }
@@ -222,9 +305,13 @@ impl Journal {
     }
 
     /// Replays the journal and returns processes that were spawned without a
-    /// recorded exit **and** are still alive. Zombies count as dead.
-    ///
-    /// Malformed lines are skipped (degrade, never crash).
+    /// recorded exit, are still alive, AND still carry a RECORDED
+    /// IDENTITY that verifies against the live process (AJ-E503
+    /// Req.4 — liveness alone trusts a recycled pid; identity does
+    /// not). Zombies count as dead. Pre-E503 lines carry no identity:
+    /// their processes are LEFT ALONE (fail closed — better an
+    /// unadopted orphan than a signalled stranger). Malformed lines
+    /// are skipped (degrade, never crash).
     ///
     /// # Errors
     ///
@@ -245,8 +332,15 @@ impl Journal {
                     session,
                     pid,
                     program,
+                    identity,
                     ..
                 } => {
+                    let mut identities = Vec::new();
+                    if let Some(record) = identity.as_ref() {
+                        let mut full = ProcessIdentity::from(record);
+                        full.pid = pid;
+                        identities.push(full);
+                    }
                     latest.insert(
                         (session.clone(), pid),
                         Last {
@@ -254,10 +348,24 @@ impl Journal {
                                 session: SessionId::new(session),
                                 pid,
                                 program,
+                                identity: None,
                             }),
+                            identities,
                             exited: false,
                         },
                     );
+                }
+                Entry::IdentitySettled {
+                    session,
+                    pid,
+                    identity,
+                    ..
+                } => {
+                    if let Some(last) = latest.get_mut(&(session, pid)) {
+                        let mut full = ProcessIdentity::from(&identity);
+                        full.pid = pid;
+                        last.identities.push(full);
+                    }
                 }
                 Entry::Exited { session, pid, .. } => {
                     if let Some(last) = latest.get_mut(&(session, pid)) {
@@ -271,11 +379,21 @@ impl Journal {
             }
         }
         let alive = alive_pids();
+        let probe = OsIdentityProbe;
         Ok(latest
             .into_values()
-            .filter_map(|last| {
-                let process = last.spawned?;
-                (!last.exited && alive.contains(&process.pid)).then_some(process)
+            .filter_map(|mut last| {
+                let mut process = last.spawned?;
+                if last.exited || !alive.contains(&process.pid) {
+                    return None;
+                }
+                // Identity gate: no record, or no record that still
+                // names this process → leave it alone.
+                if verify_any(&probe, process.pid, &last.identities) != Verification::Verified {
+                    return None;
+                }
+                process.identity = last.identities.pop();
+                Some(process)
             })
             .collect())
     }

@@ -19,6 +19,19 @@ pub enum SupervisorError {
     /// The session id is not currently supervised.
     #[error("session {0} is not supervised")]
     UnknownSession(SessionId),
+    /// The process failed fail-closed identity verification
+    /// (AJ-E503 §6.2): the PID may name a stranger now — NOTHING was
+    /// signalled. Callers surface this as a typed refusal, never as
+    /// [`SupervisorError::UnknownSession`].
+    #[error("process {pid} failed identity verification — refusing to touch it")]
+    Unverifiable {
+        /// The pid that no longer matches its recorded identity.
+        pid: u32,
+    },
+    /// The spawn ledger is degraded (AJ-E501): tracking is read-only
+    /// until restart; spawns continue, ledger-backed cleanup does not.
+    #[error("process ledger degraded — tracking is read-only until restart")]
+    LedgerDegraded,
     /// The operation needs a PTY session but this one runs piped.
     #[error("session {session} has no pty (piped/headless session)")]
     NotATty {
