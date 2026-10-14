@@ -1434,11 +1434,16 @@ pub fn preview_start(
         let emit = move |event: crate::preview::PreviewEvent| {
             emit_preview_event(&app, event);
         };
-        // D-17: the REAL capture source — the audited init shim
-        // (crates/juggler-scap-init) satisfies the binding's init
-        // requirement inside the workspace's unsafe-free law.
+        // D-17: the REAL capture source on macOS — the audited init
+        // shim (crates/juggler-scap-init) satisfies the binding's init
+        // requirement inside the workspace's unsafe-free law. Other
+        // platforms keep the honest unsupported source.
+        #[cfg(target_os = "macos")]
         let source: std::sync::Arc<dyn crate::preview::CaptureSource> =
             std::sync::Arc::new(crate::preview::ScreenshotSource);
+        #[cfg(not(target_os = "macos"))]
+        let source: std::sync::Arc<dyn crate::preview::CaptureSource> =
+            std::sync::Arc::new(crate::preview::UnsupportedSource);
         let driver = crate::preview::PreviewDriver {
             session_id: session.as_str(),
             identity,
