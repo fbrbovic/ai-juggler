@@ -1162,7 +1162,10 @@ pub fn desktop_focus_with(
             }
         }
     };
-    let attempt = focus::focus(runner, &identity);
+    // The tier engine is platform-independent over the runner seam
+    // (CI drives it everywhere); the platform gate lives in the
+    // command wrapper above.
+    let attempt = focus::FocusService::new(runner).attempt(&identity);
     // Persist the (possibly enriched) identity — first-sight titles and
     // re-discovered PIDs survive the attempt (Req.2).
     if attempt.identity != record.window {
