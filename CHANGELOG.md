@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Quality-signals engine (AJ-E409): per-Instance tokens/min, error rate,
+  context report, session cost from a versioned in-repo pricing table
+  (`crates/juggler-core/src/quality/pricing.v1.json`, **pricing table v1**
+  — captured 2026-10-13 from anthropic.com/pricing; future row changes bump
+  the version and land here).
 - Repository bootstrap: license (MIT), contribution guide, code of conduct,
   security policy, issue/PR templates, placeholder CI.
 - Deep-dive research notes for Claude Code, Codex, ZCode, and the tooling

@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "16-onboarding-detect"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "16-onboarding-detect"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -450,6 +450,26 @@ test("inspector — Project Overview On-it-now card", async ({ page }) => {
   await page.getByRole("button", { name: /ai-juggler/ }).first().click();
   await expect(page.getByTestId("project-on-it-now")).toBeVisible();
   await page.screenshot({ path: resolve(GALLERY, "08-inspector-aggregate/project-overview-1440x900.png") });
+});
+
+// AJ-E409 quality-tab captures.
+test("inspector — Quality tab populated", async ({ page }) => {
+  await seedInspectorPage(page, { width: 1440, height: 900 });
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  await page.getByRole("button", { name: /Work Max/ }).first().click();
+  await page.getByRole("tab", { name: "Quality / Performance" }).click();
+  await expect(page.getByTestId("quality-tokens")).toBeVisible();
+  await page.screenshot({ path: resolve(GALLERY, "09-quality/populated-1440x900.png") });
+});
+
+test("inspector — Quality tab View as table", async ({ page }) => {
+  await seedInspectorPage(page, { width: 1440, height: 900 });
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  await page.getByRole("button", { name: /Work Max/ }).first().click();
+  await page.getByRole("tab", { name: "Quality / Performance" }).click();
+  await page.getByRole("button", { name: "View as table" }).click();
+  await expect(page.getByTestId("quality-tokens").getByRole("table")).toBeVisible();
+  await page.screenshot({ path: resolve(GALLERY, "09-quality/as-table-1440x900.png") });
 });
 
 // Determinism self-test (Req.4): same fixture twice → byte-identical PNG.

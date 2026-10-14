@@ -391,6 +391,8 @@ function InspectorPanel(props: {
         return kind === "instance" ? <InstanceUsage {...props} /> : <SessionUsage {...props} />;
       case "history":
         return kind === "instance" ? <InstanceHistory {...props} /> : <SessionHistory {...props} />;
+      case "quality":
+        return <QualityTab {...props} />;
       case "actions":
         return kind === "instance" ? (
           <InstanceActions
@@ -1519,6 +1521,188 @@ function GroupedHistory(props: PanelProps) {
           <p className="text-[10px] text-muted">handovers in/out render from Switch Graph edges (E2)</p>
         </Card>
       ) : null}
+    </div>
+  );
+}
+
+
+// --- AJ-E409: Quality/Performance tab (D-07 — signals, never a score) ---
+
+function TierTag({ tier }: { tier: "Measured" | "Computed" | "Estimated" }) {
+  return (
+    <span className="rounded border border-hairline px-1 text-[9px] font-medium uppercase tracking-wide text-muted">
+      {tier}
+    </span>
+  );
+}
+
+function QualityTab(props: PanelProps) {
+  const instance = props.data.instance;
+  const [quality, setQuality] = useState<import("../lib/bridge").QualitySignalsInfo | null>(null);
+  const [asTable, setAsTable] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!instance) return;
+    let alive = true;
+    import("../lib/bridge")
+      .then((bridge) => bridge.instanceQuality(instance.id))
+      .then((result) => {
+        if (alive) {
+          setQuality(result);
+          setLoadError(null);
+        }
+      })
+      .catch((cause: unknown) => {
+        if (alive) setLoadError(String(cause));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [instance?.id]);
+
+  if (!instance) return <HonestEmpty tab="quality" task="AJ-E409" />;
+
+  const signals: { testId: string; label: string; body: React.ReactNode; tier: "Measured" | "Computed" | "Estimated"; reason?: string }[] = [];
+  if (loadError) {
+    return (
+      <Card className="flex flex-col gap-1 p-4" data-testid="quality-tab">
+        <p className="text-[11.5px] text-muted">Signals unavailable right now.</p>
+        <p className="text-[10px] text-muted">{loadError}</p>
+      </Card>
+    );
+  }
+  if (quality) {
+    signals.push({
+      testId: "quality-tokens",
+      label: "Tokens / min",
+      tier: "Measured",
+      body: quality.tokens_bars ? (
+        <div className="flex flex-col gap-1">
+          <span className="tabular-nums text-ink">
+            {Math.round(quality.avg_tokens_per_min)} avg (5 min) · idle is a real 0
+          </span>
+          {asTable ? (
+            <table className="text-[10px]">
+              <tbody>
+                <tr>
+                  <td className="pr-2 text-muted">minutes ago</td>
+                  {[5, 4, 3, 2, 1].map((m) => (
+                    <td key={m} className="pr-2 text-muted">{m}</td>
+                  ))}
+                </tr>
+                <tr>
+                  <td className="pr-2 text-muted">tokens</td>
+                  {quality.tokens_bars.map((bar, i) => (
+                    <td key={i} className="pr-2 tabular-nums text-ink">{bar}</td>
+                  ))}
+                </tr>
+              </tbody>
+            </table>
+          ) : (
+            <div className="flex items-end gap-1" aria-hidden="true">
+              {quality.tokens_bars.map((bar, i) => (
+                <span key={i} className="w-3 rounded-sm bg-accent/70" style={{ height: `${Math.max(3, (bar / Math.max(...quality.tokens_bars!)) * 24)}px` }} />
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <span className="text-muted">no data — no transcript usage events yet</span>
+      ),
+    });
+    signals.push({
+      testId: "quality-errors",
+      label: "Errors",
+      tier: "Measured",
+      body: quality.errors_not_measurable ? (
+        <span className="text-muted">Not measurable (interactive)</span>
+      ) : (
+        <span className="tabular-nums text-ink">{quality.error_label}</span>
+      ),
+    });
+    signals.push({
+      testId: "quality-context",
+      label: "Context",
+      tier: "Measured",
+      body:
+        quality.context_used !== null && quality.context_window ? (
+          <span className="tabular-nums text-ink">
+            {Math.round((quality.context_used / quality.context_window) * 100)}% ({quality.context_used.toLocaleString()} / {quality.context_window.toLocaleString()})
+          </span>
+        ) : (
+          <span className="text-muted">
+            Context: not reported by {instance.provider} · cumulative{" "}
+            <span className="tabular-nums text-ink">
+              {(quality.cumulative.input + quality.cumulative.output).toLocaleString()}
+            </span>{" "}
+            tokens (cumulative, not context)
+          </span>
+        ),
+    });
+    signals.push({
+      testId: "quality-cost",
+      label: "Session cost",
+      tier: "Estimated",
+      body: quality.session_cost_usd !== null ? (
+        <span className="tabular-nums text-ink">
+          \${quality.session_cost_usd.toFixed(2)} · Est · value-equiv. ({quality.priced_model})
+        </span>
+      ) : (
+        <span className="text-muted">
+          tokens only — no pricing row for this model (never $0.00)
+        </span>
+      ),
+    });
+    signals.push({
+      testId: "quality-forecast",
+      label: "Quota forecast",
+      tier: "Estimated",
+      body: <span className="text-ink">{quality.quota_forecast}</span>,
+    });
+    if (quality.stuck) {
+      signals.push({
+        testId: "quality-stuck",
+        label: "Stuck?",
+        tier: "Computed",
+        body: (
+          <span className="text-ink">
+            {quality.stuck.rule} · {quality.stuck.inputs.join(" · ")}
+          </span>
+        ),
+      });
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-3" data-testid="quality-tab">
+      {signals.length === 0 ? (
+        <Card className="flex flex-col gap-1 p-4">
+          <p className="text-[11.5px] text-muted">no data — no transcript usage events yet</p>
+        </Card>
+      ) : (
+        <>
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] text-muted">2s sampling · CPU/RAM land with the process collector (AJ-E410)</p>
+            <button
+              type="button"
+              onClick={() => setAsTable((v) => !v)}
+              aria-pressed={asTable}
+              className="rounded-lg border border-hairline px-2 py-0.5 text-[10px] text-muted outline-none transition-colors hover:bg-surface hover:text-ink focus-visible:ring-1 focus-visible:ring-accent/60"
+            >
+              {asTable ? "View as chart" : "View as table"}
+            </button>
+          </div>
+          {signals.map((signal) => (
+            <Card key={signal.testId} className="flex flex-col gap-1 p-3" data-testid={signal.testId}>
+              <p className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-muted">
+                {signal.label} <TierTag tier={signal.tier} />
+              </p>
+              {signal.body}
+            </Card>
+          ))}
+        </>
+      )}
     </div>
   );
 }

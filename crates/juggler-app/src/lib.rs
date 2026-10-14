@@ -104,6 +104,7 @@ pub fn run() {
             commands::terminal_resize,
             commands::terminal_kill,
             commands::terminal_snapshot,
+            commands::instance_quality,
         ])
         .setup(|app| {
             let _ = app.emit(EVENT_APP_READY, commands::AppInfo::current());

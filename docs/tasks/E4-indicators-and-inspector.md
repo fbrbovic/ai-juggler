@@ -209,7 +209,7 @@
 **Research basis**: pass2/04 §5.3 (322-341), §5.4 (343-364), §5.5 (366-381); SPEC.md:146,158,257,349,358,409; deep 02 PF-03/PF-08/PP-02/PP-05/PP-07.
 **Handover note**: Trap: D-10 — "New profile" in Account Actions is legacy wording; label it `New launch settings...`. Provider "Check for update" must never auto-update the binary (SPEC.md:358 guardrail test).
 
-### AJ-E409 Quality signals without a score: tokens/min, errors, context, stuck evidence | Status: TODO | Priority P0 | Effort L | Depends: AJ-E406,AJ-E405
+### AJ-E409 Quality signals without a score: tokens/min, errors, context, stuck evidence | Status: DONE-EVIDENCED (zcode-primary, 2026-10-13) | Priority P0 | Effort L | Depends: AJ-E406,AJ-E405
 **Goal**: Implement the Quality/Performance tab data per D-07 — individually labelled signals, numerator/denominator shown, no composite 0-100 score anywhere.
 **User story**: As Persona A deciding whether a session is healthy, I want `2 errors / 41 turns` and the stuck rule that tripped, so that I can judge quality myself instead of trusting an invented score.
 **Requirements**:
@@ -229,6 +229,12 @@
 **Files to touch**: `crates/juggler-core/src/model.rs:263,279,288,299`, `crates/juggler-adapters/src/claude_transcript.rs`, `crates/juggler-app/src/commands.rs:751`, `ui/src/screens/WorkPanels.tsx`, `ui/src/components/primitives.tsx`, `docs/SPEC.md:184-235,257` (read only).
 **Research basis**: decision-log D-07 (lines 70-77); pass2/04 §6 table (lines 413-421); SPEC.md:192-210,220; PROPOSAL.md:146 (>= 90% corpus claim is not a per-session probability).
 **Handover note**: The pricing table does not exist today (full review F1.2: no USD view anywhere) — create it as data (model, input/output per-1k, version, source URL, date), not code constants. Trap: Codex quota is Estimated even though its tokens are Measured — keep the two tiers separate per series.
+*Implementation mapping (corrected in this task's PR per the claiming protocol)*:
+- Engine lives in `crates/juggler-core/src/quality/` (`signals.rs` + `pricing.rs` + `pricing.v1.json` data file) — new module, not `model.rs` edits; surfaced via the `instance_quality` command (`commands.rs`) → bridge `instanceQuality` → `QualityTab` in `RightInspector.tsx` (the E406/E407 shell, not `WorkPanels.tsx`).
+- Req.2: session cost shipped (table v1: claude-code opus/sonnet, source+captured date, CHANGELOG line); cost/min joins with the AJ-E606 usage engine (needs burn deltas) — tab shows the honest owner note, no fabricated series.
+- Req.5: stuck = the AJ-E405 attention rule id + inputs + `since` (schema v6 `attention_json`); grep gate test enforces no `quality_score|health_score|QualityScore` in `crates/` or `ui/src`.
+- Req.7: `quota_forecast_label(quota_used_pct, pct_burned_last_5_min)` renders `~L-Hm at current rate · Est` (±33% range) or `not burning`; the command passes burn 0.0 today (deltas unobservable until AJ-E606+) — honest idle, wired for the future feed.
+- Req.6: CPU/RAM footnote names the AJ-E410 collector; fixtures are provider-shape-agnostic JSONL (`tests/fixtures/`), with Codex `token_usage_record` / ZCode `model_usage` shapes deferred to their adapter tasks (E5/E6) rather than guessed.
 
 ### AJ-E410 Processes tab, resource collector, and orphan (left-behind) contract | Status: TODO | Priority P0 | Effort L | Depends: AJ-E406,AJ-E401
 **Goal**: Collect per-tree CPU/RAM (I-07 sparkline source), render the live Processes tree for every selection, and surface orphaned descendants after Instance exit with verified stop actions.
