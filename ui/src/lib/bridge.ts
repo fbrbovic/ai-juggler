@@ -14,12 +14,14 @@ import type { NeedsAttention } from "../types/generated/NeedsAttention";
 import type { ProjectInfo } from "../types/generated/ProjectInfo";
 import type { ProviderInfo } from "../types/generated/ProviderInfo";
 import type { QuotaSnapshotInfo } from "../types/generated/QuotaSnapshotInfo";
+import type { QualitySignalsInfo } from "../types/generated/QualitySignalsInfo";
 import type { StatsInfo } from "../types/generated/StatsInfo";
 import type { TerminalInfo } from "../types/generated/TerminalInfo";
 import type { TokenCountsInfo } from "../types/generated/TokenCountsInfo";
 
 export type {
   AppInfo,
+  QualitySignalsInfo,
   AccountInfo,
   DiscoveredInfo,
   ImportResult,
@@ -90,6 +92,50 @@ const MOCK_PROFILES: LaunchRecipeInfo[] = [
   { id: "p-2", name: "Quick fixes", account_id: "claude-work", account_label: "Work Max", provider: "claude-code", model: Some("sonnet"), default_cwd: None() },
   { id: "p-3", name: "Weekend build", account_id: "claude-personal", account_label: "Personal", provider: "claude-code", model: None(), default_cwd: None() },
 ];
+
+const MOCK_QUALITY: Record<string, QualitySignalsInfo> = {
+  // sess-8 sorts first (needs-me) and is what the captures click; sess-2
+  // is the running row.
+  "sess-8": {
+    tokens_bars: [300, 410, 380, 500, 440],
+    avg_tokens_per_min: 406,
+    error_label: "1 errors / 12 turns",
+    errors_not_measurable: false,
+    context_used: null,
+    context_window: null,
+    cumulative: { input: 4_200, output: 1_800, cache_read: 20, cache_write: 40, reasoning: 8 },
+    session_cost_usd: 0.19,
+    priced_model: "opus",
+    quota_forecast: "not burning",
+    stuck: { rule: "stuck_no_output", inputs: ["no output 8m", "cpu 0.3%", "transcript stale 8m"], since_ms: Date.now() - 8 * 60_000 },
+  },
+  "sess-2": {
+    tokens_bars: [420, 510, 380, 600, 540],
+    avg_tokens_per_min: 490,
+    error_label: "2 errors / 41 turns",
+    errors_not_measurable: false,
+    context_used: null,
+    context_window: null,
+    cumulative: { input: 12_345, output: 6_789, cache_read: 100, cache_write: 200, reasoning: 42 },
+    session_cost_usd: 0.69,
+    priced_model: "opus",
+    quota_forecast: "not burning",
+    stuck: null,
+  },
+  "sess-live-1": {
+    tokens_bars: [420, 510, 380, 600, 540],
+    avg_tokens_per_min: 490,
+    error_label: "2 errors / 41 turns",
+    errors_not_measurable: false,
+    context_used: null,
+    context_window: null,
+    cumulative: { input: 12_345, output: 6_789, cache_read: 100, cache_write: 200, reasoning: 42 },
+    session_cost_usd: 0.69,
+    priced_model: "opus",
+    quota_forecast: "not burning",
+    stuck: null,
+  },
+};
 
 const MOCK_STATS: StatsInfo =
   seeded.stats ?? { accounts: 2, profiles: 3, active_sessions: 0 };
@@ -403,6 +449,14 @@ export async function instancesList(): Promise<InstanceInfo[]> {
 
 /** @deprecated legacy alias (AJ-E107) — use instancesList. */
 export const sessionsList = instancesList;
+
+/** AJ-E409: D-07 quality signals for the selected Instance (no score). */
+export async function instanceQuality(sessionId: string): Promise<QualitySignalsInfo | null> {
+  if (!hasBackend) {
+    return MOCK_QUALITY[sessionId] ?? null;
+  }
+  return invoke<QualitySignalsInfo>("instance_quality", { sessionId });
+}
 
 export async function stopSession(sessionId: string): Promise<void> {
   if (!hasBackend) {

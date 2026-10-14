@@ -162,6 +162,43 @@ pub struct AttentionInfo {
     pub since_ms: i64,
 }
 
+/// AJ-E409: the Quality/Performance signal set (D-07) — individually
+/// labelled signals with tiers; NO composite score exists (grep gate).
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct QualitySignalsInfo {
+    /// tokens/min: five 1-min bars (oldest first) or `null` = no data.
+    #[ts(type = "Array<number> | null")]
+    pub tokens_bars: Option<Vec<u64>>,
+    /// Trailing-5-min average tokens/min (a real 0 when idle).
+    #[ts(type = "number")]
+    pub avg_tokens_per_min: f64,
+    /// `2 errors / 41 turns` (exact rendered string) or the
+    /// provider-specific not-measurable reason.
+    pub error_label: String,
+    /// True when the provider has no structured error feed.
+    pub errors_not_measurable: bool,
+    /// Context tokens in use, when the provider reports them.
+    #[ts(type = "number | null")]
+    pub context_used: Option<u64>,
+    /// Provider-reported context window size, when known.
+    #[ts(type = "number | null")]
+    pub context_window: Option<u64>,
+    /// Cumulative session tokens (labelled `cumulative, not context`).
+    pub cumulative: TokenCountsInfo,
+    /// Session cost USD from the versioned pricing table (`Est ·
+    /// value-equiv.`); `null` when the model has no pricing row.
+    #[ts(type = "number | null")]
+    pub session_cost_usd: Option<f64>,
+    /// The model the cost was priced against (null = unpriced).
+    pub priced_model: Option<String>,
+    /// Quota forecast RANGE label (`~13-27m at current rate · Est`) or
+    /// `not burning`.
+    pub quota_forecast: String,
+    /// The AJ-E405 stuck rule + inputs, when tripped (permanent `?`).
+    pub stuck: Option<AttentionInfo>,
+}
+
 /// I-10: why an Instance needs its user (`null` when it does not).
 /// Derived from the lifecycle status here; AJ-E405 replaces the
 /// derivation with structured heuristic reasons.
@@ -1102,6 +1139,186 @@ pub fn attention_recovery_drain(app: &tauri::AppHandle, state: &Arc<AppState>) -
         emit_sessions(app, state)?;
     }
     Ok(())
+}
+
+/// Aggregated transcript facts feeding the quality signals.
+struct TranscriptScan {
+    events: Vec<juggler_core::quality::UsageEvent>,
+    errors: u64,
+    turns: u64,
+    context_used: Option<u64>,
+    context_window: Option<u64>,
+}
+
+/// Scans the native transcript JSONL for per-turn usage events,
+/// timestamps, error markers and the last reported context pair.
+/// Fixture-compatible shapes; Claude transcripts carry `timestamp` +
+/// `usage` on assistant lines.
+fn scan_transcript(record: &SessionRecord, now: i64) -> TranscriptScan {
+    let mut scan = TranscriptScan {
+        events: Vec::new(),
+        errors: 0,
+        turns: 0,
+        context_used: None,
+        context_window: None,
+    };
+    let bytes = record
+        .transcript_ref
+        .as_ref()
+        .and_then(|transcript| std::fs::read(&transcript.path).ok());
+    let Some(bytes) = bytes else {
+        return scan;
+    };
+    for line in String::from_utf8_lossy(&bytes).lines() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if value.get("usage").is_none() {
+            continue;
+        }
+        scan.turns += 1;
+        let usage = &value["usage"];
+        let tokens = juggler_core::model::TokenCounts {
+            input: usage["input_tokens"].as_u64().unwrap_or(0),
+            output: usage["output_tokens"].as_u64().unwrap_or(0),
+            cache_read: 0,
+            cache_write: 0,
+            reasoning: 0,
+        };
+        // Wall clock: RFC3339 `timestamp` when present, else `now`
+        // (honest single-point fallback → the per-minute bars degrade
+        // to one bucket, never fabricated).
+        let at_ms = value["timestamp"]
+            .as_str()
+            .and_then(chrono_like_ms)
+            .unwrap_or(now);
+        scan.events
+            .push(juggler_core::quality::UsageEvent { at_ms, tokens });
+        if value.get("error").is_some() {
+            scan.errors += 1;
+        }
+        if let Some(used) = value["context_tokens"].as_u64() {
+            scan.context_used = Some(used);
+            scan.context_window = value["context_window"].as_u64();
+        }
+    }
+    scan
+}
+
+/// Computes the D-07 quality signals for one Instance (AJ-E409): reads
+/// the native transcript when present (per-turn usage + timestamps +
+/// error markers); every field is a labelled signal or its honest
+/// empty — never a composite score.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on failure.
+#[tauri::command]
+pub fn instance_quality(
+    state: tauri::State<'_, Arc<AppState>>,
+    session_id: String,
+) -> AppResult<QualitySignalsInfo> {
+    let storage = lock_storage(&state)?;
+    let record = storage
+        .sessions()
+        .get(&SessionId::new(session_id.clone()))
+        .map_err(AppError::from)?;
+    let now = Timestamp::now().millis();
+    let scan = scan_transcript(&record, now);
+
+    let tpm = juggler_core::quality::signals::tokens_per_min(&scan.events, now);
+    let error_label = if scan.turns == 0 {
+        "Not measurable (interactive)".to_string()
+    } else {
+        format!("{} errors / {} turns", scan.errors, scan.turns)
+    };
+    let table = juggler_core::quality::load_pricing_table();
+    // Price against the launch-settings model when set (the honest
+    // per-Instance running-model feed lands with AJ-E412).
+    let recipe = storage.profiles().get(&record.profile).ok();
+    let model = recipe
+        .as_ref()
+        .and_then(|r| r.settings_overlay.model.clone());
+    let provider = storage
+        .accounts()
+        .list()
+        .ok()
+        .and_then(|accounts| {
+            accounts
+                .iter()
+                .find(|a| recipe.as_ref().is_some_and(|r| r.account == a.id))
+                .map(|a| a.harness.to_string())
+        })
+        .unwrap_or_default();
+    let cost = model.as_deref().and_then(|model| {
+        juggler_core::quality::pricing::session_cost(&table, &provider, model, record.usage.tokens)
+    });
+    // Forecast: from quota deltas — none are observable yet, so idle
+    // honestly until the usage engine (AJ-E606+) feeds burn rates.
+    let forecast = juggler_core::quality::quota_forecast_label(
+        record
+            .usage
+            .window
+            .as_ref()
+            .map_or(0.0, |w| w.used_percentage),
+        0.0,
+    );
+    Ok(QualitySignalsInfo {
+        tokens_bars: tpm.bars.map(|bars| bars.to_vec()),
+        avg_tokens_per_min: tpm.avg_per_min,
+        error_label,
+        errors_not_measurable: scan.turns == 0,
+        context_used: scan.context_used,
+        context_window: scan.context_window,
+        cumulative: TokenCountsInfo {
+            input: record.usage.tokens.input,
+            output: record.usage.tokens.output,
+            cache_read: record.usage.tokens.cache_read,
+            cache_write: record.usage.tokens.cache_write,
+            reasoning: record.usage.tokens.reasoning,
+        },
+        session_cost_usd: cost,
+        priced_model: model.filter(|_| cost.is_some()),
+        quota_forecast: forecast,
+        stuck: record.attention.as_ref().map(|reason| AttentionInfo {
+            rule: reason.rule.clone(),
+            inputs: reason.inputs.clone(),
+            since_ms: reason.since_ms,
+        }),
+    })
+}
+
+/// RFC3339-ish timestamp → epoch ms without pulling chrono (the
+/// transcripts use `2026-10-13T12:34:56.789Z`-style stamps).
+// Fractional seconds land in f64; the ms truncation is below the
+// per-minute bar resolution we compute from it.
+#[allow(clippy::cast_possible_truncation)]
+fn chrono_like_ms(raw: &str) -> Option<i64> {
+    let date_time = raw.split('T').nth(1)?.split(['Z', '+']).next()?;
+    let mut parts = date_time.split(':');
+    let h: i64 = parts.next()?.parse().ok()?;
+    let m: i64 = parts.next()?.parse().ok()?;
+    let sec: f64 = parts.next()?.parse().ok()?;
+    let day_ms = raw.strip_suffix('Z').map(str::to_string).and_then(|s| {
+        let date = s.split('T').next()?.to_string();
+        let mut d = date.split('-');
+        let y: i64 = d.next()?.parse().ok()?;
+        let mo: i64 = d.next()?.parse().ok()?;
+        let da: i64 = d.next()?.parse().ok()?;
+        Some(days_from_civil(y, mo, da) * 86_400_000)
+    })?;
+    Some(day_ms + h * 3_600_000 + m * 60_000 + (sec * 1000.0) as i64)
+}
+
+/// Days since epoch (Howard Hinnant's civil-from-days inverse).
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
 }
 
 /// Emits the refreshed session list to the UI.
