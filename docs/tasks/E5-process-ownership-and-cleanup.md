@@ -40,7 +40,7 @@
 - Machine identity: `local_machine_id()` (generated once in app_settings; no new `"this-mac"` literals); `boot_id` = OS boot time (sysinfo) on every row/exit patch.
 - Evidence: `docs/qa/evidence/AJ-E501/` — root+3-helpers fixture (0 missing, exit patch `signal:15`, reopen persistence), sqlite dump excerpt, log; gallery `_gallery/17-ledger/` banner captures both themes.
 
-### AJ-E502 Process-group ownership at spawn (Unix PGID, Windows seam) | Status: TODO | Priority P0 | Effort M | Depends: AJ-E501
+### AJ-E502 Process-group ownership at spawn (Unix PGID, Windows seam) | Status: DONE-EVIDENCED (evidence: docs/qa/evidence/AJ-E502/manifest.md) | Priority P0 | Effort M | Depends: AJ-E501
 
 **Goal**: Create ownership at spawn time (dedicated process group per Instance) instead of inferring it later from racy ppid walks.
 
@@ -68,6 +68,13 @@
 **Research basis**: pass2/05 §4 (lines 161-190), §3 "no setpgid/setsid/killpg under crates/" (lines 115-123); deep/08 §5 F-9.
 
 **Handover note**: Trap: a helper forking between ppid-walk and signal escapes tree-kill — that is why PGID, not `descendants_of` (`supervisor.rs:557-579`), is the kill primitive. Do not "fix" F-9 by bolting a ppid walk onto `stop()`.
+
+*Implementation mapping (recorded in this task's PR per the claiming protocol)*:
+- Seam: new `crates/juggler-supervisor/src/group.rs` — `make_group_leader` via the STABLE-STANDARD `CommandExt::process_group(0)` (the spec's `pre_exec setsid` intent, zero `unsafe`: the workspace's absolute `unsafe_code = "forbid"` is the stronger law and the module doc is the mechanism pin) + `pgid_of` (`nix::unistd::getpgid`); `GroupError::{UnsupportedPlatform, ProcessGone}`; `cfg(not(unix))` returns `UnsupportedPlatform` (Job Object seam stays M7-5, never a silent PID-only fallback — the piped site logs the degradation).
+- Capture: `ChildExtras`/`ChildHandle`/`SpawnedProcess` gained `pgid`; piped path calls `make_group_leader` BEFORE `.spawn()`; PTY + desktop paths record one `getpgid` each; the shared `spawn()` wrapper patches `ledger.spawned(..., spawned.pgid, ...)` before returning; new `Supervisor::root_pgid(&SessionId)` reads the cached handle (the E507 killpg key). `Supervisor::stop` signature unchanged (Req.5).
+- Detection: `LiveStatsCollector::ledger_upserts` records each helper's LIVE pgid and flags `escaped_group` when it differs from the root's (one `getpgid` per helper riding the existing 2 s tick — zero new polling; probe failure claims nothing).
+- Schema v13: `ALTER TABLE process_ledger ADD COLUMN escaped_group INTEGER NOT NULL DEFAULT 0`; sticky via `MAX(escaped_group, ?)` in the helper upsert (a clean re-tick never revokes the no-containment verdict); single ALTER owner = the migration runner (the repo's standalone CREATE is born v13-shaped; production always opens Storage before the ledger repo).
+- Evidence: `docs/qa/evidence/AJ-E502/` — root leader + in-group double-forked grandchild (PGID == root PGID) + `setsid` escapee (`escaped_group=1`, PGID ≠ root) in `supervisor-ledger-groups-test.log` + `evidence-db-dump.txt`; v12→v13 upgrade test in `core-storage-v13-test.log`. UI untouched (badge wording lands with AJ-E506).
 
 ### AJ-E503 ProcessIdentity and fail-closed verify-before-kill | Status: TODO | Priority P0 | Effort M | Depends: AJ-E501
 
