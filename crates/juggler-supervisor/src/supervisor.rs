@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -19,6 +19,20 @@ use crate::ring::OutputRing;
 
 /// Default output retention per session (spec §1 footprint budget).
 const DEFAULT_RING_CAPACITY: usize = 512 * 1024;
+
+/// Default orphan grace, seconds (AJ-E504 Req.3): how long a helper
+/// survives its Instance's dead root before the reconciler will even
+/// CONSIDER flagging it — the false-alert budget (brief build flicker
+/// must never surface). Per-Provider tunable via
+/// [`Supervisor::set_orphan_grace`]; never lowered for demos.
+pub const DEFAULT_ORPHAN_GRACE_SECS: u64 = 30;
+
+/// How long a finished session's `ChildHandle` stays in the children
+/// map after exit (AJ-E504 Req.4, F-6): the window the UI may still
+/// read the retained output tail; after it the handle (and its ring)
+/// is evicted so stopped Instances leave no phantom rows and rings do
+/// not live for the process lifetime.
+pub const OUTPUT_RETENTION_AFTER_EXIT_MS: i64 = 120_000;
 
 /// A successfully spawned supervised process.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,6 +101,88 @@ pub struct ProcessRow {
     pub child_count: u32,
     /// Tree depth (root = 0) — the UI's indent level.
     pub depth: u8,
+    /// Kernel process start time, epoch seconds (AJ-E504: the helper
+    /// rows' identity fact — the ledger records THIS, never a
+    /// wall-clock derivation).
+    pub start_time: i64,
+    /// Kernel-reported executable path (`None` when unreadable — then
+    /// identity verification honestly skips the exe fact).
+    pub exe: Option<String>,
+}
+
+/// The reconciler's cached process table (AJ-E504 Req.1): the ppid map
+/// plus per-pid identity facts, built ONCE per tick from the shared
+/// `sysinfo::System`. Every query — `descendants`, orphan chain walks,
+/// identity re-verification — reads this snapshot; constructing a
+/// fresh table per query is the regression the construction counter
+/// guards.
+#[derive(Debug, Default, Clone)]
+pub struct ProcessTable {
+    /// Parent pid → child pids (the tree-walk edges).
+    pub parents: HashMap<u32, Vec<u32>>,
+    /// Pid → identity facts from the tick's refresh.
+    pub facts: HashMap<u32, ProcessFacts>,
+}
+
+/// Identity facts for one pid in the reconciler's snapshot.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ProcessFacts {
+    /// Parent pid (`None` when unreadable).
+    pub ppid: Option<u32>,
+    /// Process name.
+    pub name: String,
+    /// Kernel start time, epoch seconds.
+    pub start_time: i64,
+    /// Kernel-reported executable (`None` when unreadable).
+    pub exe: Option<String>,
+    /// Resident memory, bytes.
+    pub rss_bytes: u64,
+}
+
+/// True when `pid`'s parent chain (capped walk) never reaches a
+/// live Juggler-owned root — re-parented to init/launchd (`ppid` 1),
+/// orphaned under a dead root, or chain-broken (AJ-E504 Req.3).
+fn detached_from(
+    table: &ProcessTable,
+    pid: u32,
+    live_roots: &std::collections::HashSet<u32>,
+) -> bool {
+    let mut cursor = pid;
+    for _ in 0..64 {
+        if live_roots.contains(&cursor) {
+            return false; // still attached to a live owned root
+        }
+        let Some(facts) = table.facts.get(&cursor) else {
+            return true; // chain left the table: broken
+        };
+        match facts.ppid {
+            None | Some(1) => return true, // init/launchd: re-parented
+            Some(parent) => cursor = parent,
+        }
+    }
+    true // cycle guard: treat as detached, never spin
+}
+
+/// Builds the shared snapshot from a refreshed table (one pass).
+fn process_table(system: &sysinfo::System) -> ProcessTable {
+    let mut table = ProcessTable::default();
+    for (pid, process) in system.processes() {
+        let pid = pid.as_u32();
+        if let Some(parent) = process.parent() {
+            table.parents.entry(parent.as_u32()).or_default().push(pid);
+        }
+        table.facts.insert(
+            pid,
+            ProcessFacts {
+                ppid: process.parent().map(sysinfo::Pid::as_u32),
+                name: process.name().to_string_lossy().into_owned(),
+                start_time: i64::try_from(process.start_time()).unwrap_or_default(),
+                exe: process.exe().map(|exe| exe.to_string_lossy().into_owned()),
+                rss_bytes: process.memory(),
+            },
+        );
+    }
+    table
 }
 
 /// One point of the per-tree resource ring (the I-07 sparkline source).
@@ -133,7 +229,7 @@ const WARMUP_FULL_TICKS: u32 = 3;
 /// sampler thread, so the per-tree herd the stagger defends against
 /// cannot exist by construction); every 10th tick does one full-table
 /// refresh to discover newly spawned descendants.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct LiveStatsCollector {
     system: sysinfo::System,
     sampled: bool,
@@ -143,6 +239,29 @@ pub struct LiveStatsCollector {
     /// Per-session ledger upsert throttle (AJ-E501 Req.4: at most one
     /// batched helper upsert per 2 s per Instance).
     last_ledger_upsert: HashMap<SessionId, i64>,
+    /// Consecutive ticks a running row's pid was ABSENT from the
+    /// table (AJ-E504: exit-by-absence, confirmed at two ticks).
+    absence: HashMap<(u32, String), u32>,
+    /// Consecutive agreeing orphan-candidate ticks per helper row
+    /// (AJ-E504 Req.3: two-tick confirmation kills flap).
+    orphan_agree: HashMap<(u32, String), u32>,
+}
+
+impl Default for LiveStatsCollector {
+    fn default() -> Self {
+        // The ONE shared table (AJ-E504): counted like every other
+        // construction — the tick itself adds zero more.
+        Self {
+            system: crate::new_system(),
+            sampled: false,
+            ticks: 0,
+            trees: HashMap::new(),
+            stats: HashMap::new(),
+            last_ledger_upsert: HashMap::new(),
+            absence: HashMap::new(),
+            orphan_agree: HashMap::new(),
+        }
+    }
 }
 
 impl LiveStatsCollector {
@@ -157,14 +276,19 @@ impl LiveStatsCollector {
     /// recompute per-tree rows + stats, append one ring sample per live
     /// tree. Finished sessions keep their last rows frozen (the exit
     /// snapshot source) and report definitive dead stats.
+    ///
+    /// AJ-E504: the SAME tick is the reconciler — it builds the ppid
+    /// map ONCE (the shared `ProcessTable`), publishes it for
+    /// query paths, re-verifies candidate ledger rows against the
+    /// table (no per-row probes), detects orphans after grace +
+    /// two agreeing ticks, patches helper exits by absence, and
+    /// evicts finished `ChildHandle`s past the retention window.
     pub fn tick(&mut self, supervisor: &Supervisor, now_ms: i64) {
         self.ticks = self.ticks.saturating_add(1);
         let full = self.ticks <= WARMUP_FULL_TICKS || self.ticks.is_multiple_of(FULL_SCAN_EVERY);
         let roots = supervisor.live_roots();
         if full {
             self.refresh_all();
-            let parents = parents_map(&self.system);
-            self.rebuild_trees(&roots, &parents, now_ms);
         } else {
             let known: Vec<u32> = self
                 .trees
@@ -175,10 +299,15 @@ impl LiveStatsCollector {
             self.refresh_pids(&known);
             // Targeted refresh keeps parent edges of known pids fresh;
             // brand-new children appear at the next full scan.
-            let parents = parents_map(&self.system);
-            self.rebuild_trees(&roots, &parents, now_ms);
         }
+        // ONE table per tick (Req.1): parents + identity facts from
+        // the single shared refresh — every downstream reader uses it.
+        let table = std::sync::Arc::new(process_table(&self.system));
+        self.rebuild_trees(&roots, &table.parents, now_ms);
+        supervisor.publish_table(std::sync::Arc::clone(&table));
         self.ledger_upserts(supervisor, now_ms);
+        self.reconcile(supervisor, &table, now_ms);
+        Self::sweep_finished(supervisor, now_ms);
         let sampled = self.sampled;
         self.sampled = true;
         if !sampled {
@@ -231,9 +360,11 @@ impl LiveStatsCollector {
             let root_pgid = supervisor.root_pgid(session);
             let mut helpers = Vec::new();
             for row in tree.rows.iter().skip(1) {
-                let started_at = now_ms
-                    .checked_sub(i64::try_from(row.age_ms).unwrap_or(0))
-                    .map(|ms| ms.div_euclid(1000));
+                // AJ-E504: the row carries the KERNEL facts from the
+                // shared table — the ledger records the real start
+                // time and real exe (the identity facts, E503), never
+                // a wall-clock derivation or a bare process name.
+                let started_at = (row.start_time > 0).then_some(row.start_time);
                 // Containment probe: a helper that itself `setsid`'d has
                 // a live PGID ≠ the root's. Probe failure (process gone
                 // this tick) claims NOTHING — the sticky store flag owns
@@ -247,7 +378,7 @@ impl LiveStatsCollector {
                     pid: Some(row.pid),
                     pgid: live_pgid,
                     started_at,
-                    exe_path: row.name.clone(),
+                    exe_path: row.exe.clone().unwrap_or_else(|| row.name.clone()),
                     cmdline_hash: format!("name:{}", row.name),
                     cmdline_trunc: row.name.clone(),
                     boot_id: boot_id.clone(),
@@ -288,12 +419,216 @@ impl LiveStatsCollector {
         }
     }
 
+    /// The reconciler pass (AJ-E504 Req.2/3): re-verifies candidate
+    /// rows against the tick's OWN table (zero per-row probes),
+    /// patches helper exits by two-tick absence, and flags orphans
+    /// only after grace + two consecutive agreeing ticks. Single-row
+    /// state patches only — helper bulk writes stay in the batched
+    /// upsert transaction (AJ-E501's contract).
+    #[allow(clippy::too_many_lines)] // one pass per tick; splitting would hide the state machine
+    fn reconcile(&mut self, supervisor: &Supervisor, table: &ProcessTable, now_ms: i64) {
+        use juggler_core::storage::STATE_RUNNING;
+
+        let Some(ledger) = supervisor.ledger.clone() else {
+            return;
+        };
+        let contexts = supervisor
+            .spawn_contexts
+            .lock()
+            .map(|contexts| contexts.clone())
+            .unwrap_or_default();
+        let boot_id = ledger.boot_id();
+
+        // Machines with spawn contexts, each queried once per tick.
+        let machines: Vec<juggler_core::model::MachineId> = {
+            let mut seen = std::collections::HashSet::new();
+            contexts
+                .values()
+                .map(|ctx| ctx.machine.clone())
+                .filter(|machine| seen.insert(machine.as_str().to_string()))
+                .collect()
+        };
+        let mut candidates = Vec::new();
+        for machine in &machines {
+            if let Ok(rows) = ledger.candidates(machine) {
+                candidates.extend(rows);
+            } else {
+                supervisor
+                    .ledger_degraded
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                return; // read failed: this tick reconciles nothing
+            }
+        }
+
+        // Live-owned roots: unfinished handles + running ROOT rows.
+        let mut live_roots: std::collections::HashSet<u32> = supervisor
+            .live_roots()
+            .into_iter()
+            .filter(|(_, _, finished)| !finished)
+            .map(|(_, pid, _)| pid)
+            .collect();
+        for row in &candidates {
+            if row.role == "root"
+                && row.state == STATE_RUNNING
+                && let Some(pid) = row.pid
+            {
+                live_roots.insert(pid);
+            }
+        }
+
+        // Group candidate rows per session (root-exit facts come from
+        // the session's full row set — the root row may be `exited`).
+        let mut by_session: HashMap<String, Vec<juggler_core::storage::LedgerRow>> = HashMap::new();
+        for row in candidates {
+            by_session
+                .entry(row.session_id.clone())
+                .or_default()
+                .push(row);
+        }
+
+        for (session_id, rows) in by_session {
+            let session = SessionId::new(session_id.clone());
+            let Some(ctx) = contexts.get(&session) else {
+                continue;
+            };
+            let grace_ms = i64::try_from(supervisor.orphan_grace_for(&ctx.provider))
+                .unwrap_or(i64::MAX)
+                .saturating_mul(1000);
+            let full_rows = ledger.session_rows(&session).unwrap_or_default();
+            let root_row = full_rows.iter().find(|row| row.role == "root");
+            let root_exit_ms = root_row
+                .filter(|row| row.state == "exited")
+                .map(|row| row.last_seen);
+
+            for row in rows {
+                let Some(pid) = row.pid else { continue };
+                let key = (pid, row.boot_id.clone());
+                let Some(facts) = table.facts.get(&pid) else {
+                    // Absent from the tick's table: one agreeing tick
+                    // short of an exit patch; confirmed at two.
+                    let ticks = self.absence.entry(key).and_modify(|n| *n += 1).or_insert(1);
+                    if *ticks >= 2 {
+                        self.absence.remove(&(pid, row.boot_id.clone()));
+                        self.orphan_agree.remove(&(pid, row.boot_id.clone()));
+                        let _ = ledger.mark_exited(pid, &row.boot_id, "unknown", false);
+                    }
+                    continue;
+                };
+                self.absence.remove(&key);
+
+                // (c) boot gate first (FMEA C8): a record from another
+                // boot is permanently unverifiable.
+                if row.boot_id != boot_id {
+                    let _ = ledger.mark_unverifiable(pid, &row.boot_id);
+                    self.orphan_agree.remove(&key);
+                    continue;
+                }
+                // Table-based re-verification (Req.2): the recorded
+                // identity facts vs THIS tick's refresh. Rows without
+                // recorded facts (legacy, unpatched) are skipped —
+                // honest absence, never a flip on missing data.
+                let mut mismatch = false;
+                if let Some(recorded_start) = row.started_at
+                    && recorded_start > 0
+                    && recorded_start != facts.start_time
+                {
+                    mismatch = true;
+                }
+                // The exe fact is KERNEL-vs-kernel — only HELPER rows
+                // carry a kernel-recorded exe (the upsert writes it);
+                // ROOT rows record the launch program, which the
+                // kernel may legitimately alias or replace across
+                // exec (macOS /bin/sh → bash), so roots verify below
+                // against the handle's kernel-recorded identity.
+                if row.role == "helper"
+                    && let Some(live_exe) = facts.exe.as_deref()
+                    && row.exe_path.starts_with('/')
+                    && row.exe_path != live_exe
+                {
+                    mismatch = true;
+                }
+                if row.role == "root" && !mismatch {
+                    // Roots verify against the kernel-recorded handle
+                    // identity (exe moves legitimately across exec;
+                    // the handle's settled record is the truth).
+                    if let Some(identity) = supervisor.root_identity(&session)
+                        && identity.start_time != facts.start_time
+                    {
+                        mismatch = true;
+                    }
+                }
+                if mismatch {
+                    let _ = ledger.mark_unverifiable(pid, &row.boot_id);
+                    self.orphan_agree.remove(&key);
+                    eprintln!(
+                        "ai-juggler: pid {pid} failed re-verification — flipped unverifiable"
+                    );
+                    continue;
+                }
+
+                // Orphan detection (Req.3): running helpers of an
+                // EXITED root, past grace, whose parent chain no
+                // longer reaches a live Juggler-owned root — two
+                // consecutive agreeing ticks.
+                if row.role == "helper"
+                    && row.state == STATE_RUNNING
+                    && let Some(root_exit) = root_exit_ms
+                    && now_ms - root_exit >= grace_ms
+                    && detached_from(table, pid, &live_roots)
+                {
+                    let ticks = self
+                        .orphan_agree
+                        .entry(key)
+                        .and_modify(|n| *n += 1)
+                        .or_insert(1);
+                    if *ticks >= 2 {
+                        self.orphan_agree.remove(&(pid, row.boot_id.clone()));
+                        let _ = ledger.mark_orphaned(pid, &row.boot_id);
+                        let _ = supervisor.events_tx.send(LifecycleEvent::HelperOrphaned {
+                            session: session.clone(),
+                            pid,
+                        });
+                    }
+                } else {
+                    // Not an orphan candidate this tick: flap control.
+                    self.orphan_agree.remove(&key);
+                }
+            }
+        }
+    }
+
+    /// Evicts finished `ChildHandle`s past the output-retention
+    /// window (AJ-E504 Req.4, F-6): stopped Instances leave no
+    /// phantom Running rows and rings do not grow for the process
+    /// lifetime. The ledger keeps the durable history.
+    fn sweep_finished(supervisor: &Supervisor, now_ms: i64) {
+        let Ok(mut children) = supervisor.children.lock() else {
+            return;
+        };
+        let expired: Vec<SessionId> = children
+            .iter()
+            .filter(|(_, handle)| {
+                let exit_at = handle.exit_at_ms.load(Ordering::Relaxed);
+                exit_at > 0
+                    && handle.finished.load(Ordering::Acquire)
+                    && now_ms.saturating_sub(exit_at) > OUTPUT_RETENTION_AFTER_EXIT_MS
+            })
+            .map(|(session, _)| session.clone())
+            .collect();
+        for session in expired {
+            children.remove(&session);
+        }
+    }
+
     fn refresh_all(&mut self) {
         use sysinfo::{ProcessRefreshKind, ProcessesToUpdate};
         self.system.refresh_processes_specifics(
             ProcessesToUpdate::All,
             true,
-            ProcessRefreshKind::nothing().with_cpu().with_memory(),
+            ProcessRefreshKind::nothing()
+                .with_cpu()
+                .with_memory()
+                .with_exe(sysinfo::UpdateKind::Always),
         );
     }
 
@@ -307,7 +642,10 @@ impl LiveStatsCollector {
         self.system.refresh_processes_specifics(
             ProcessesToUpdate::Some(&targets),
             true,
-            ProcessRefreshKind::nothing().with_cpu().with_memory(),
+            ProcessRefreshKind::nothing()
+                .with_cpu()
+                .with_memory()
+                .with_exe(sysinfo::UpdateKind::Always),
         );
     }
 
@@ -445,6 +783,8 @@ fn tree_rows(
             age_ms,
             child_count: u32::try_from(children.len()).unwrap_or(u32::MAX),
             depth,
+            start_time: i64::try_from(process.start_time()).unwrap_or_default(),
+            exe: process.exe().map(|exe| exe.to_string_lossy().into_owned()),
         });
         cpu += f64::from(process.cpu_usage());
         rss += process.memory();
@@ -474,6 +814,9 @@ struct ChildExtras {
     /// The spawn-time identity (AJ-E503); refined by the settle
     /// thread after wrappers exec their interpreter.
     identity: Option<crate::tree::ProcessIdentity>,
+    /// Exit wall-clock (epoch ms, 0 = live) — shared with the wait
+    /// thread so the eviction sweep (AJ-E504 Req.4) can time it.
+    exit_at_ms: Arc<AtomicI64>,
 }
 
 struct ChildHandle {
@@ -484,6 +827,9 @@ struct ChildHandle {
     /// input for kill paths (E507/E508) and the reconciler (E504).
     /// Behind a mutex: the settle thread refines it after `exec`.
     identity: Mutex<Option<crate::tree::ProcessIdentity>>,
+    /// When the process exited (epoch ms; 0 = live) — the eviction
+    /// timer (AJ-E504 Req.4).
+    exit_at_ms: Arc<AtomicI64>,
     ring: Arc<Mutex<OutputRing>>,
     finished: Arc<AtomicBool>,
     /// Last output arrival (epoch ms, 0 = none) — feeds the Stuck rule
@@ -525,6 +871,14 @@ pub struct Supervisor {
     /// Spawn contexts (AJ-E501): helper rows inherit the root's
     /// provider/account/project/machine; kept for the ledger tick.
     spawn_contexts: Mutex<HashMap<SessionId, crate::tree::SpawnContext>>,
+    /// The reconciler's published process table (AJ-E504 Req.1):
+    /// queries (`descendants`, chain walks) read this cached
+    /// snapshot — never a fresh per-call scan.
+    table: Mutex<Option<std::sync::Arc<ProcessTable>>>,
+    /// Orphan grace per Provider, seconds (AJ-E504 Req.3). The `""`
+    /// key overrides the default; lookup falls back to
+    /// [`DEFAULT_ORPHAN_GRACE_SECS`].
+    orphan_grace_secs: Mutex<HashMap<String, u64>>,
     /// Sessions with fresh output since the last drain (throttled per
     /// session) — the recovery signal (AJ-E405 Req.5, <300 ms).
     activity_tx: std::sync::mpsc::SyncSender<SessionId>,
@@ -542,6 +896,8 @@ impl Default for Supervisor {
             spawn_contexts: Mutex::new(HashMap::new()),
             children: Mutex::new(HashMap::new()),
             user_stopped: Mutex::new(Vec::new()),
+            table: Mutex::new(None),
+            orphan_grace_secs: Mutex::new(HashMap::new()),
             events_tx,
             events_rx: Mutex::new(events_rx),
             activity_tx,
@@ -851,6 +1207,7 @@ impl Supervisor {
         let force_kill: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
             let _ = kill_child.lock().map(|mut c| c.kill());
         });
+        let exit_at = Arc::new(AtomicI64::new(0));
         let handle = self.register(
             session.clone(),
             pid,
@@ -862,6 +1219,7 @@ impl Supervisor {
                 last_output_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
                 pgid,
                 identity: identity.clone(),
+                exit_at_ms: Arc::clone(&exit_at),
             },
         );
         if let Some(journal) = &self.journal {
@@ -886,6 +1244,7 @@ impl Supervisor {
                     pid,
                     exit_kind_std(status),
                     &done,
+                    &exit_at,
                     journal.as_ref(),
                     ledger.as_ref(),
                     &events,
@@ -947,6 +1306,7 @@ impl Supervisor {
         });
         // Register before readers start so output tracking exists from
         // the first chunk (AJ-E405).
+        let exit_at = Arc::new(AtomicI64::new(0));
         let handle = self.register(
             session.clone(),
             pid,
@@ -958,6 +1318,7 @@ impl Supervisor {
                 last_output_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
                 pgid,
                 identity: identity.clone(),
+                exit_at_ms: Arc::clone(&exit_at),
             },
         );
         let last_output = Arc::clone(&handle.last_output_ms);
@@ -995,6 +1356,7 @@ impl Supervisor {
                     pid,
                     exit_kind_std(status),
                     &done,
+                    &exit_at,
                     journal.as_ref(),
                     ledger.as_ref(),
                     &events,
@@ -1076,6 +1438,7 @@ impl Supervisor {
         let pty = Some(Arc::new(Mutex::new(PtyHandle { writer, master })));
 
         let finished = Arc::new(AtomicBool::new(false));
+        let exit_at = Arc::new(AtomicI64::new(0));
         let force_kill: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
             let _ = killer.lock().map(|mut k| k.kill());
         });
@@ -1085,6 +1448,7 @@ impl Supervisor {
         let ledger = self.ledger.clone();
         let events = self.events_tx.clone();
         let done = Arc::clone(&finished);
+        let exit_timer = Arc::clone(&exit_at);
         std::thread::spawn(move || {
             let status = child.wait().ok();
             if let Some(status) = status {
@@ -1096,6 +1460,7 @@ impl Supervisor {
                     pid,
                     kind,
                     &done,
+                    &exit_timer,
                     journal.as_ref(),
                     ledger.as_ref(),
                     &events,
@@ -1122,6 +1487,7 @@ impl Supervisor {
                 last_output_ms: last_output,
                 pgid,
                 identity: identity.clone(),
+                exit_at_ms: exit_at,
             },
         );
         Ok(SpawnedProcess {
@@ -1150,6 +1516,7 @@ impl Supervisor {
             pid,
             pgid: parts.pgid,
             identity: Mutex::new(parts.identity),
+            exit_at_ms: parts.exit_at_ms,
             ring,
             finished,
             last_output_ms: parts.last_output_ms,
@@ -1227,6 +1594,25 @@ impl Supervisor {
             .get(session)
             .cloned()
             .ok_or_else(|| SupervisorError::UnknownSession(session.clone()))?;
+        // AJ-E504 Req.1: walk the reconciler's cached ppid map — no
+        // fresh full refresh per query. Before the first tick the
+        // snapshot does not exist yet: one counted cold-path scan
+        // (the regression gate reads the counter).
+        if let Some(table) = self.snapshot_table() {
+            let mut found = Vec::new();
+            let mut queue: std::collections::VecDeque<u32> = table
+                .parents
+                .get(&handle.pid)
+                .cloned()
+                .into_iter()
+                .flatten()
+                .collect();
+            while let Some(pid) = queue.pop_front() {
+                found.push(pid);
+                queue.extend(table.parents.get(&pid).cloned().into_iter().flatten());
+            }
+            return Ok(found);
+        }
         Ok(descendants_of(handle.pid))
     }
 
@@ -1337,6 +1723,44 @@ impl Supervisor {
             .lock()
             .ok()?
             .clone()
+    }
+
+    /// Publishes the reconciler's process-table snapshot (one per
+    /// tick, from the ONE shared `sysinfo::System` — AJ-E504 Req.1).
+    fn publish_table(&self, table: std::sync::Arc<ProcessTable>) {
+        if let Ok(mut slot) = self.table.lock() {
+            *slot = Some(table);
+        }
+    }
+
+    /// The last published process-table snapshot (`None` before the
+    /// first tick — callers then take the counted cold-path scan).
+    #[must_use]
+    pub fn snapshot_table(&self) -> Option<std::sync::Arc<ProcessTable>> {
+        self.table.lock().ok().and_then(|slot| slot.clone())
+    }
+
+    /// Sets the orphan grace for one Provider (seconds); the `""` key
+    /// overrides the default for every Provider without its own entry
+    /// (AJ-E504 Req.3 — per-Provider tunable, stored in settings by
+    /// the app at startup).
+    pub fn set_orphan_grace(&self, provider: &str, secs: u64) {
+        if let Ok(mut graces) = self.orphan_grace_secs.lock() {
+            graces.insert(provider.to_string(), secs.max(1));
+        }
+    }
+
+    /// The effective orphan grace for `provider` (seconds): its own
+    /// entry, else the `""` default override, else
+    /// [`DEFAULT_ORPHAN_GRACE_SECS`] (30 — the false-alert budget;
+    /// never lowered for demos).
+    #[must_use]
+    pub fn orphan_grace_for(&self, provider: &str) -> u64 {
+        self.orphan_grace_secs
+            .lock()
+            .ok()
+            .and_then(|graces| graces.get(provider).or_else(|| graces.get("")).copied())
+            .unwrap_or(DEFAULT_ORPHAN_GRACE_SECS)
     }
 
     /// Feeds keyboard input to a PTY session's process.
@@ -1534,16 +1958,25 @@ fn child_lock(
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+#[allow(clippy::too_many_arguments)] // one flat exit fan-out, grouping would churn 3 callers
 fn emit_exit(
     session: &SessionId,
     pid: u32,
     kind: ExitKind,
     done: &AtomicBool,
+    exit_at: &AtomicI64,
     journal: Option<&Journal>,
     ledger: Option<&crate::tree::SharedLedger>,
     events: &std::sync::mpsc::Sender<LifecycleEvent>,
 ) {
     done.store(true, Ordering::Release);
+    // The eviction timer starts HERE (AJ-E504 Req.4): the retention
+    // window is measured from the observed exit, not the stop call.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or_default();
+    exit_at.store(now, Ordering::Release);
     if let Some(journal) = journal {
         let _ = journal.record_exited(session, pid, kind);
     }
@@ -1606,9 +2039,9 @@ fn send_terminate(_pid: u32) {
 }
 
 fn descendants_of(root: u32) -> Vec<u32> {
-    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate};
 
-    let mut system = System::new();
+    let mut system = crate::new_system();
     system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
     let mut parents: HashMap<u32, Vec<u32>> = HashMap::new();
     for (pid, process) in system.processes() {

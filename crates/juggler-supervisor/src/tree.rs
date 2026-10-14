@@ -115,6 +115,23 @@ pub trait LedgerStore: Send + Sync {
     /// [`LedgerError::Store`] on store failure.
     fn mark_unverifiable(&self, pid: u32, boot_id: &str) -> Result<(), LedgerError>;
 
+    /// Flips a running helper row to the `orphaned` state (AJ-E504
+    /// Req.3): root exited, grace elapsed, two consecutive ticks
+    /// agreed. The row stays a candidate (re-verified each tick).
+    ///
+    /// # Errors
+    ///
+    /// [`LedgerError::Store`] on store failure.
+    fn mark_orphaned(&self, pid: u32, boot_id: &str) -> Result<(), LedgerError>;
+
+    /// Every row of one session, all states (the reconciler's
+    /// root-exit facts + tests/evidence dumps).
+    ///
+    /// # Errors
+    ///
+    /// [`LedgerError::Store`] on store failure.
+    fn session_rows(&self, session: &SessionId) -> Result<Vec<LedgerRow>, LedgerError>;
+
     /// Retention prune (exited rows only).
     ///
     /// # Errors
@@ -221,6 +238,18 @@ impl LedgerStore for CoreLedgerStore {
             .map_err(|e| LedgerError::Store(e.to_string()))
     }
 
+    fn mark_orphaned(&self, pid: u32, boot_id: &str) -> Result<(), LedgerError> {
+        self.repo
+            .mark_orphaned(pid, boot_id, now_ms())
+            .map_err(|e| LedgerError::Store(e.to_string()))
+    }
+
+    fn session_rows(&self, session: &SessionId) -> Result<Vec<LedgerRow>, LedgerError> {
+        self.repo
+            .rows_for_session(session.as_str())
+            .map_err(|e| LedgerError::Store(e.to_string()))
+    }
+
     fn prune(&self, exited_before_ms: i64) -> Result<usize, LedgerError> {
         self.repo
             .prune(exited_before_ms)
@@ -313,7 +342,7 @@ pub struct OsIdentityProbe;
 impl IdentityProbe for OsIdentityProbe {
     fn probe(&self, pid: u32) -> Option<ProbedProcess> {
         use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, UpdateKind};
-        let mut system = sysinfo::System::new();
+        let mut system = crate::new_system();
         system.refresh_processes_specifics(
             ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]),
             true,

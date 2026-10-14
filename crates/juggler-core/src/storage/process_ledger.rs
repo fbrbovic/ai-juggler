@@ -24,6 +24,10 @@ pub const STATE_EXITED: &str = "exited";
 /// leaves every kill path and the candidate set forever, and the
 /// prune never touches it (neither running nor exited).
 pub const STATE_UNVERIFIABLE: &str = "unverifiable";
+/// The Instance's root exited and the reconciler confirmed (grace +
+/// two agreeing ticks, AJ-E504) the helper was left behind. Stays a
+/// candidate (re-verified every tick); the Cleanup Centre surface.
+pub const STATE_ORPHANED: &str = "orphaned";
 
 /// Row role: the root harness process.
 pub const ROLE_ROOT: &str = "root";
@@ -281,7 +285,11 @@ impl ProcessLedgerRepo {
                      peak_rss = MAX(COALESCE(peak_rss, 0), COALESCE(?3, 0)),
                      peak_cpu = MAX(COALESCE(peak_cpu, 0.0), COALESCE(?4, 0.0)),
                      pgid = COALESCE(?8, pgid),
-                     escaped_group = MAX(escaped_group, ?9)
+                     escaped_group = MAX(escaped_group, ?9),
+                     started_at = COALESCE(started_at, ?10),
+                     exe_path = CASE
+                         WHEN exe_path NOT LIKE '/%' AND ?11 LIKE '/%' THEN ?11
+                         ELSE exe_path END
                  WHERE session_id = ?1 AND pid = ?5 AND boot_id = ?6 AND state = ?7",
             )?;
             let mut insert = tx.prepare(
@@ -306,6 +314,8 @@ impl ProcessLedgerRepo {
                     STATE_RUNNING,
                     row.pgid,
                     i64::from(row.escaped_group),
+                    row.started_at,
+                    row.exe_path,
                 ])?;
                 if changed == 0 {
                     insert.execute(params![
@@ -356,13 +366,15 @@ impl ProcessLedgerRepo {
     ) -> Result<(), CoreError> {
         let conn = self.lock()?;
         // `(pid, boot_id)` is the identity key (E503); the newest
-        // running row for it is the one that ended.
+        // running row for it is the one that ended. An ORPHANED row
+        // may also exit (post-confirmation) — it resolves to `exited`
+        // and leaves the Cleanup Centre.
         conn.execute(
             "UPDATE process_ledger SET
                  state = ?2, exit_kind = ?3, reaped_by_us = ?4, last_seen = ?5
              WHERE rowid IN (
                  SELECT rowid FROM process_ledger
-                 WHERE pid = ?1 AND boot_id = ?6 AND state = ?7
+                 WHERE pid = ?1 AND boot_id = ?6 AND state IN (?7, ?8)
                  ORDER BY first_seen DESC LIMIT 1
              )",
             params![
@@ -372,7 +384,8 @@ impl ProcessLedgerRepo {
                 i64::from(reaped_by_us),
                 now_ms,
                 boot_id,
-                STATE_RUNNING
+                STATE_RUNNING,
+                STATE_ORPHANED
             ],
         )?;
         Ok(())
@@ -401,8 +414,39 @@ impl ProcessLedgerRepo {
         Ok(())
     }
 
+    /// Flips a RUNNING helper row to `orphaned` (AJ-E504 Req.3):
+    /// root exited, grace elapsed, two ticks agreed. The row stays a
+    /// candidate; an orphan that later exits flips to `exited` via
+    /// [`ProcessLedgerRepo::mark_exited`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::Storage`] on SQLite failures.
+    pub fn mark_orphaned(&self, pid: u32, boot_id: &str, now_ms: i64) -> Result<(), CoreError> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE process_ledger SET
+                 state = ?2, last_seen = ?3
+             WHERE rowid IN (
+                 SELECT rowid FROM process_ledger
+                 WHERE pid = ?1 AND boot_id = ?4 AND state = ?5 AND role = ?6
+                 ORDER BY first_seen DESC LIMIT 1
+             )",
+            params![
+                pid,
+                STATE_ORPHANED,
+                now_ms,
+                boot_id,
+                STATE_RUNNING,
+                ROLE_HELPER
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Candidate rows for orphan reconciliation (AJ-E504's input):
-    /// every `running` row on a machine.
+    /// every `running` **or** `orphaned` row on a machine — both are
+    /// re-verified each tick; `exited`/`unverifiable` never return.
     ///
     /// # Errors
     ///
@@ -410,9 +454,11 @@ impl ProcessLedgerRepo {
     pub fn candidates(&self, machine_id: &str) -> Result<Vec<LedgerRow>, CoreError> {
         let conn = self.lock()?;
         let mut out = Vec::new();
-        let mut stmt =
-            conn.prepare("SELECT * FROM process_ledger WHERE state = ?1 AND machine_id = ?2")?;
-        let rows = stmt.query_map(params![STATE_RUNNING, machine_id], map_row)?;
+        let mut stmt = conn.prepare(
+            "SELECT * FROM process_ledger
+             WHERE state IN (?1, ?3) AND machine_id = ?2",
+        )?;
+        let rows = stmt.query_map(params![STATE_RUNNING, machine_id, STATE_ORPHANED], map_row)?;
         for row in rows {
             out.push(row?);
         }

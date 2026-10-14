@@ -366,7 +366,7 @@ fn zombie(process: &sysinfo::Process) -> bool {
 /// A one-shot sysinfo table refreshed for exactly these pids.
 fn fresh_table(pids: &[u32]) -> sysinfo::System {
     use sysinfo::{ProcessRefreshKind, ProcessesToUpdate};
-    let mut system = sysinfo::System::new();
+    let mut system = crate::new_system();
     let targets: Vec<sysinfo::Pid> = pids
         .iter()
         .map(|pid| sysinfo::Pid::from_u32(*pid))

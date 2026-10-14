@@ -401,9 +401,9 @@ impl Journal {
 
 /// One-shot snapshot of currently alive, non-zombie process ids.
 fn alive_pids() -> std::collections::HashSet<u32> {
-    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate};
 
-    let mut system = System::new();
+    let mut system = crate::new_system();
     system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
     system
         .processes()
