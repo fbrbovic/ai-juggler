@@ -138,6 +138,19 @@ export default function App() {
     return onAppReady(setInfo);
   }, []);
 
+  // Inspector action events (AJ-E408): Add-account / sign-in cards and
+  // the Start-first-session CTA route to the real surfaces.
+  useEffect(() => {
+    const openAccounts = () => setGlobal("accounts");
+    const newSession = () => setNewSession(true);
+    window.addEventListener("aij:open-accounts", openAccounts);
+    window.addEventListener("aij:new-session", newSession);
+    return () => {
+      window.removeEventListener("aij:open-accounts", openAccounts);
+      window.removeEventListener("aij:new-session", newSession);
+    };
+  }, []);
+
   // First run: zero accounts → the onboarding wizard opens by itself
   // (spec §12.1), once per dismissal.
   useEffect(() => {

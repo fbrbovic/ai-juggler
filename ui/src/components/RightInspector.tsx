@@ -10,7 +10,7 @@ import {
   IconTerminal,
 } from "./icons";
 import type { AccountInfo, InstanceInfo, LaunchRecipeInfo, ProjectInfo } from "../lib/bridge";
-import { QuotaBar, quotaTierTag } from "./primitives";
+import { QuotaBar, formatCountdown, quotaTierTag, QuotaRing } from "./primitives";
 import { formatBytes, stateChip } from "./indicator";
 
 /**
@@ -354,6 +354,31 @@ function InspectorPanel(props: {
 }) {
   const { tab, kind } = props;
 
+  if (kind === "provider" || kind === "account" || kind === "project") {
+    switch (tab) {
+      case "overview":
+        return kind === "provider" ? (
+          <ProviderOverview {...props} />
+        ) : kind === "account" ? (
+          <AccountOverview {...props} />
+        ) : (
+          <ProjectOverview {...props} />
+        );
+      case "history":
+        return kind === "account" || kind === "project" ? <GroupedHistory {...props} /> : <HonestEmpty tab="history" task="AJ-E408 (adapter version history)" />;
+      case "actions":
+        return kind === "provider" ? (
+          <ProviderActions />
+        ) : kind === "account" ? (
+          <AccountActions {...props} />
+        ) : (
+          <ProjectActions {...props} />
+        );
+      default:
+        break;
+    }
+  }
+
   if (kind === "instance" || kind === "session") {
     switch (tab) {
       case "overview":
@@ -380,6 +405,7 @@ function InspectorPanel(props: {
                 accounts_used: [],
                 instance_count: 0,
                 history_sessions: 0,
+                missing: false,
               })
             }
           />
@@ -1113,6 +1139,7 @@ function SessionActions(props: PanelProps) {
                   accounts_used: [],
                   instance_count: 0,
                   history_sessions: 0,
+                  missing: false,
                 })
             : undefined
         }
@@ -1128,6 +1155,370 @@ function SessionActions(props: PanelProps) {
       <ActionRow label="Fork" onClick={undefined} reason="fork/branch copy lands with E2 switching" />
       <ActionRow label="Archive" onClick={undefined} reason="session lifecycle lands with AJ-E1007" />
       <ActionRow label="Delete…" danger onClick={undefined} reason="guarded delete lands with retention (AJ-E1007)" />
+    </div>
+  );
+}
+
+// --- AJ-E408: Provider / Account / Project content -----------------------
+
+/** Provider Overview (§5.3): counts, worst-first aggregate, honest
+ * capability/version badges. */
+function ProviderOverview(props: PanelProps) {
+  const provider = props.data.provider;
+  if (!provider) return <HonestEmpty tab="overview" task="AJ-E408" />;
+  const providerAccounts = props.accounts.filter((a) => a.provider === provider.id);
+  const providerSessions = props.sessions.filter((s) => s.provider === provider.id);
+  const running = providerSessions.filter((s) => s.status === "running" || s.status === "starting");
+  // Aggregate quota, WORST ACCOUNT FIRST (recognition over recall); each
+  // row traces to its rail row (Req.7 — no unexplainable dashboard).
+  const perAccount = providerAccounts
+    .map((account) => {
+      const rows = providerSessions.filter((s) => s.account_id === account.id && s.quota !== null);
+      const worst = rows.reduce<InstanceInfo | null>((min, row) => {
+        if (!min) return row;
+        return (100 - row.quota!.used_percentage) < (100 - min.quota!.used_percentage) ? row : min;
+      }, null);
+      return { account, worst };
+    })
+    .sort((a, b) => {
+      const leftA = a.worst ? 100 - a.worst.quota!.used_percentage : Number.POSITIVE_INFINITY;
+      const leftB = b.worst ? 100 - b.worst.quota!.used_percentage : Number.POSITIVE_INFINITY;
+      return leftA - leftB;
+    });
+  const tiers = new Set(
+    perAccount.filter((entry) => entry.worst).map((entry) => entry.worst!.quota!.confidence),
+  );
+  return (
+    <div className="flex flex-col gap-3" data-testid="provider-overview">
+      <Card className="flex flex-col gap-2 p-4">
+        <div className="flex flex-wrap items-center gap-2 text-[11.5px]">
+          <span className="text-ink">
+            {providerAccounts.length} account{providerAccounts.length === 1 ? "" : "s"}
+          </span>
+          <span className="text-muted">· {running.length} running</span>
+          <span className="rounded border border-hairline px-1 text-[10px] text-muted" title="binary version + verified range arrive with adapter discovery wiring">
+            version: No data
+          </span>
+          <span className="rounded border border-hairline px-1 text-[10px] text-muted" title="capability flags arrive with adapter discovery wiring">
+            capabilities: No data
+          </span>
+        </div>
+      </Card>
+      <Card className="flex flex-col gap-1.5 p-4" data-testid="provider-aggregate">
+        <p className="text-[11px] uppercase tracking-wider text-muted">Aggregate quota (worst account first)</p>
+        {perAccount.length === 0 ? (
+          <p className="text-[11.5px] text-muted">No accounts on this provider yet.</p>
+        ) : (
+          perAccount.map(({ account, worst }) => (
+            <div key={account.id} className="flex flex-col gap-1 py-0.5">
+              <span className="text-[11.5px]">
+                <span className="text-ink">{account.label}</span>
+                {account.login_state !== "logged_in" ? <span className="text-faint"> · signed out</span> : null}
+              </span>
+              <QuotaBar quota={worst?.quota ?? null} />
+            </div>
+          ))
+        )}
+        {tiers.size > 1 ? (
+          <span className="text-[10px] text-muted" data-testid="provider-mixed">
+            cross-account sums are <span className="rounded border border-hairline px-1">mixed</span> (confidence tiers differ)
+          </span>
+        ) : null}
+      </Card>
+    </div>
+  );
+}
+
+function ProviderActions() {
+  return (
+    <div className="flex flex-col gap-2" data-testid="provider-actions">
+      <ActionRow label="Add account…" onClick={() => window.dispatchEvent(new Event("aij:open-accounts"))} reason="opens Accounts" />
+      <ActionRow label="Check for Provider update" onClick={undefined} reason="manual check only — lands with provider settings (never auto-update, SPEC §5.4)" />
+      <ActionRow label="Open Provider settings" onClick={undefined} reason="provider settings screen lands with E3+" />
+    </div>
+  );
+}
+
+/** Account Overview (§5.4): rings with % text, forecast, affinity,
+ * renewal field (E411), logged-out collapse to the sign-in card. */
+function AccountOverview(props: PanelProps) {
+  const account = props.data.account;
+  if (!account) return <HonestEmpty tab="overview" task="AJ-E408" />;
+  const rows = props.sessions.filter((s) => s.account_id === account.id);
+  const running = rows.filter((s) => s.status === "running" || s.status === "starting");
+  const worst = rows
+    .filter((s) => s.quota !== null)
+    .reduce<InstanceInfo | null>((min, row) => {
+      if (!min) return row;
+      return (100 - row.quota!.used_percentage) < (100 - min.quota!.used_percentage) ? row : min;
+    }, null);
+  const usualProjects = props.projects.filter((p) => p.accounts_used.includes(account.label));
+
+  if (account.login_state !== "logged_in") {
+    // Logged-out collapse: the Overview IS the sign-in card (Req.3).
+    return (
+      <Card className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center" data-testid="account-signin-card">
+        <p className="text-[13px] font-medium text-ink">{account.label} is signed out</p>
+        <p className="max-w-xs text-[11.5px] leading-relaxed text-muted">
+          Sign in from the Accounts screen to see quota, usage and launch controls again. Nothing is
+          deleted — the isolated account state is kept.
+        </p>
+        <Button size="sm" variant="primary" onClick={() => window.dispatchEvent(new Event("aij:open-accounts"))}>
+          Open Accounts to sign in
+        </Button>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3" data-testid="account-overview">
+      <Card className="flex flex-wrap items-center gap-4 p-4">
+        <div className="flex items-center gap-4" data-testid="account-rings">
+          <QuotaRing percent={worst?.quota ? worst.quota.used_percentage : null} label="5h" />
+          <QuotaRing percent={null} label="week" />
+        </div>
+        <div className="flex min-w-0 flex-1 flex-col gap-1 text-[11px]">
+          <span className="flex items-center gap-2">
+            <Chip tone="success">signed in</Chip>
+            <span className="text-muted">plan: <span className="text-ink">{account.plan ?? "unknown"}</span></span>
+          </span>
+          <span data-testid="account-renewal" className="text-muted">
+            renewal date: <span className="text-faint">not set (optional, D-12 — field lands with AJ-E411)</span>
+          </span>
+          <span data-testid="account-reset" className="text-muted">
+            reset:{" "}
+            {worst?.quota?.resets_at_ms ? (
+              <span className="text-ink">{formatCountdown(worst.quota.resets_at_ms, props.now)}</span>
+            ) : (
+              <span className="text-faint">No data</span>
+            )}
+          </span>
+          <span className="text-muted">
+            burn-down forecast: <span className="text-faint">No data — arrives with the usage engine (AJ-E606+)</span>
+          </span>
+        </div>
+      </Card>
+      <Card className="flex flex-col gap-1.5 p-4">
+        <p className="text-[11px] uppercase tracking-wider text-muted">Running instances ({running.length})</p>
+        {running.length === 0 ? (
+          <p className="text-[11.5px] text-muted">None right now.</p>
+        ) : (
+          running.map((row) => (
+            <button key={row.id} type="button" onClick={() => props.onOpenSession(row.id)} className="flex items-center gap-2 py-1 text-left text-xs">
+              <span className="min-w-0 flex-1 truncate font-medium">{row.account_label}</span>
+              <Chip tone={statusTone(row.status).tone}>{statusTone(row.status).label}</Chip>
+            </button>
+          ))
+        )}
+      </Card>
+      <Card className="flex flex-col gap-1.5 p-4" data-testid="account-affinity">
+        <p className="text-[11px] uppercase tracking-wider text-muted">Usual projects</p>
+        {usualProjects.length === 0 ? (
+          <p className="text-[11.5px] text-muted">No project affinity yet.</p>
+        ) : (
+          usualProjects.map((project) => (
+            <button key={project.id} type="button" onClick={() => props.onOpenProject(project.id)} className="flex items-center gap-2 py-1 text-left text-xs">
+              <span className="min-w-0 flex-1 truncate font-medium">{project.name}</span>
+              <span className="text-faint">usual</span>
+            </button>
+          ))
+        )}
+      </Card>
+    </div>
+  );
+}
+
+function AccountActions(props: PanelProps) {
+  const account = props.data.account;
+  if (!account) return <HonestEmpty tab="actions" task="AJ-E408" />;
+  const recipes = props.profiles.filter((r) => r.account_id === account.id);
+  const first = recipes[0] ?? null;
+  return (
+    <div className="flex flex-col gap-2" data-testid="account-actions">
+      <ActionRow
+        label="Launch session"
+        onClick={
+          first
+            ? () =>
+                props.onLaunch(first, {
+                  id: "launch", root: first.default_cwd ?? "", name: "launch", last_activity_ms: null,
+                  active_instance: null, accounts_used: [], instance_count: 0, history_sessions: 0, missing: false,
+                })
+            : undefined
+        }
+        reason={first ? undefined : "no launch settings on this account yet"}
+      />
+      <ActionRow label={account.login_state === "logged_in" ? "Re-check login" : "Sign in"} onClick={() => window.dispatchEvent(new Event("aij:open-accounts"))} reason="opens Accounts" />
+      <ActionRow label="New launch settings…" onClick={undefined} reason="launch-settings editor lands with E3+" />
+      <ActionRow label="Rename" onClick={undefined} reason="account settings land with E3+" />
+      <ActionRow label="Delete account…" danger onClick={undefined} reason="danger — the managed isolated directory is kept (confirm flow lands with E3+)" />
+    </div>
+  );
+}
+
+/** Project Overview (§5.5): On-it-now row (full I-01..I-11 via
+ * SessionRow), root copy, branch summary, counts, missing-dir banner. */
+function ProjectOverview(props: PanelProps) {
+  const project = props.data.project;
+  if (!project) return <HonestEmpty tab="overview" task="AJ-E408" />;
+  const rows = props.sessions.filter((s) => s.project_id === project.id);
+  const active = rows.find((s) => s.status === "running" || s.status === "starting") ?? null;
+  const branches = [...new Set(rows.map((r) => r.git_branch).filter((b): b is string => b !== null))];
+  const dirtyTotal = rows.reduce((sum, r) => sum + (r.git_dirty_count ?? 0), 0);
+  return (
+    <div className="flex flex-col gap-3" data-testid="project-overview">
+      {project.missing ? (
+        <div className="flex items-center gap-3 rounded-xl border border-danger/40 bg-danger-soft px-4 py-3" data-testid="project-missing-banner" role="alert">
+          <span className="text-[12px] font-medium text-danger">Project directory is missing</span>
+          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted">{project.root}</span>
+          <ActionRow label="Relocate…" onClick={undefined} />
+        </div>
+      ) : null}
+      {rows.length === 0 ? (
+        <Card className="flex flex-col items-center gap-3 p-6 text-center">
+          <p className="text-[12px] font-medium text-ink">No sessions in this project yet</p>
+          <Button size="sm" variant="primary" onClick={() => window.dispatchEvent(new Event("aij:new-session"))}>
+            <IconTerminal width={13} height={13} />
+            Start first session
+          </Button>
+        </Card>
+      ) : (
+        <>
+          <Card className="flex flex-col gap-1 p-3">
+            <p className="text-[11px] uppercase tracking-wider text-muted">On it now</p>
+            {active ? (
+              <div data-testid="project-on-it-now" className="cursor-pointer" onClick={() => props.onOpenSession(active.id)}>
+                <SessionRowForCard session={active} />
+              </div>
+            ) : (
+              <p className="text-[11.5px] text-muted">No live instance — free to juggle.</p>
+            )}
+          </Card>
+          <Card className="flex flex-col gap-2 p-4">
+            <CopyField testId="project-root" label="root" value={project.root} mono />
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted" data-testid="project-summary">
+              <span>
+                branches: <span className="text-ink">{branches.length > 0 ? branches.join(", ") : "none"}</span>
+                {dirtyTotal > 0 ? <span className="text-warning"> · {dirtyTotal} dirty</span> : null}
+              </span>
+              <span>
+                accounts used: <span className="text-ink">{project.accounts_used.join(", ") || "none"}</span>
+              </span>
+              <span>
+                instances: <span className="tabular-nums text-ink">{project.instance_count}</span> · imported sessions:{" "}
+                <span className="tabular-nums text-ink">{project.history_sessions}</span>
+              </span>
+            </div>
+          </Card>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** SessionRow reuse for the On-it-now card — import late to avoid cycles. */
+import { SessionRow } from "./WorkflowRail";
+function SessionRowForCard({ session }: { session: InstanceInfo }) {
+  return <SessionRow session={session} selected={false} onSelect={() => {}} />;
+}
+
+function ProjectActions(props: PanelProps) {
+  const project = props.data.project;
+  if (!project) return <HonestEmpty tab="actions" task="AJ-E408" />;
+  // Ranked by headroom: the signed-in account with the MOST quota left
+  // first; `Usual` star marks accounts that already ran in this project.
+  const ranked = props.profiles
+    .map((recipe) => {
+      const worst = props.sessions
+        .filter((s) => s.account_id === recipe.account_id && s.quota !== null)
+        .reduce<number | null>((min, row) => {
+          const left = 100 - row.quota!.used_percentage;
+          return min === null ? left : Math.min(min, left);
+        }, null);
+      const usual = project.accounts_used.includes(recipe.account_label);
+      return { recipe, left: worst ?? Number.POSITIVE_INFINITY, usual };
+    })
+    .sort((a, b) => b.left - a.left);
+  return (
+    <div className="flex flex-col gap-2" data-testid="project-actions">
+      <p className="text-[11px] uppercase tracking-wider text-muted">Launch with another account (ranked by headroom)</p>
+      {ranked.map(({ recipe, usual }) => {
+        const ready = props.accounts.find((a) => a.id === recipe.account_id)?.login_state === "logged_in";
+        return (
+          <button
+            key={recipe.id}
+            type="button"
+            disabled={!ready}
+            onClick={() =>
+              props.onLaunch(recipe, {
+                id: project.id, root: project.root, name: project.name, last_activity_ms: null,
+                active_instance: null, accounts_used: [], instance_count: 0, history_sessions: 0, missing: project.missing,
+              })
+            }
+            title={ready ? undefined : "Needs sign-in first"}
+            className={
+              "flex items-center gap-2 rounded-lg border px-3 py-2 text-left text-xs transition-colors " +
+              (ready ? "border-hairline hover:border-accent/40 hover:bg-surface" : "border-hairline/50 text-faint")
+            }
+          >
+            <span className="font-medium">{recipe.account_label}</span>
+            {usual ? <span className="rounded border border-accent/30 bg-accent-soft px-1 text-[9px] text-accent-hi">Usual</span> : null}
+            <span className="ml-auto text-faint">{recipe.name}</span>
+          </button>
+        );
+      })}
+      {ranked.length === 0 ? <p className="text-[11.5px] text-muted">No launch settings yet — add an account first.</p> : null}
+      <ActionRow label="Hand over project" onClick={undefined} reason="project-level hand-over lands with E2 switching" />
+      <ActionRow label="Open in editor" onClick={undefined} reason="editor integration lands with E3+" />
+      <ActionRow label="Pin" onClick={undefined} reason="project pinning lands with AJ-E407/E1007 lifecycle" />
+      <ActionRow label="Rename" onClick={undefined} reason="project settings land with E3+" />
+      <ActionRow label="Archive project" onClick={undefined} reason="session lifecycle lands with AJ-E1007" />
+    </div>
+  );
+}
+
+/** Account/Project History (§5.4/§5.5): real session timeline grouped
+ * Today / Yesterday / Earlier; lineage honest. */
+function GroupedHistory(props: PanelProps) {
+  const kind = props.kind;
+  const rows =
+    kind === "account"
+      ? props.sessions.filter((s) => s.account_id === props.data.account?.id)
+      : props.sessions.filter((s) => s.project_id === props.data.project?.id);
+  const dayStart = (offset: number) => {
+    const date = new Date(props.now);
+    date.setHours(0, 0, 0, 0);
+    return date.getTime() - offset * 86_400_000;
+  };
+  const groups: { label: string; from: number; to: number }[] = [
+    { label: "Today", from: dayStart(0), to: Number.POSITIVE_INFINITY },
+    { label: "Yesterday", from: dayStart(1), to: dayStart(0) },
+    { label: "Earlier", from: Number.NEGATIVE_INFINITY, to: dayStart(1) },
+  ];
+  return (
+    <div className="flex flex-col gap-3" data-testid={`${kind}-history`}>
+      {groups.map((group) => {
+        const groupRows = rows.filter((r) => r.started_at_ms >= group.from && r.started_at_ms < group.to);
+        if (groupRows.length === 0) return null;
+        return (
+          <Card key={group.label} className="flex flex-col gap-1 p-4">
+            <p className="text-[11px] uppercase tracking-wider text-muted">{group.label}</p>
+            {groupRows.map((row) => (
+              <button key={row.id} type="button" onClick={() => props.onOpenSession(row.id)} className="flex items-center gap-2 py-1 text-left text-xs">
+                <span className="min-w-0 flex-1 truncate font-medium">{row.account_label}</span>
+                <span className="text-faint">{formatCountdown(row.started_at_ms, props.now)} ago</span>
+                <Chip tone={statusTone(row.status).tone}>{statusTone(row.status).label}</Chip>
+              </button>
+            ))}
+          </Card>
+        );
+      })}
+      {rows.length === 0 ? (
+        <Card className="flex flex-col gap-1 p-4">
+          <p className="text-[11.5px] text-muted">No history recorded yet</p>
+          <p className="text-[10px] text-muted">handovers in/out render from Switch Graph edges (E2)</p>
+        </Card>
+      ) : null}
     </div>
   );
 }

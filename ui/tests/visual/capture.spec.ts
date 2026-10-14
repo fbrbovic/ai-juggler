@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "16-onboarding-detect"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "16-onboarding-detect"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -407,6 +407,49 @@ test("inspector — Session Overview ended stamp", async ({ page }) => {
   await page.getByRole("button", { name: /Personal/ }).first().click();
   await expect(page.getByText(/Ended|Conversation|Transcript not readable yet/).first()).toBeVisible();
   await page.screenshot({ path: resolve(GALLERY, "07-inspector-content/session-overview.png") });
+});
+
+// AJ-E408 aggregate-content captures.
+test("inspector — Account Overview rings + forecast", async ({ page }) => {
+  await seedInspectorPage(page, { width: 1440, height: 900 });
+  await page.getByRole("button", { name: "Accounts" }).click();
+  await page.getByRole("button", { name: "Inspect claude-code" }).first().click();
+  await expect(page.getByTestId("account-rings")).toBeVisible();
+  await page.screenshot({ path: resolve(GALLERY, "08-inspector-aggregate/account-overview-1440x900.png") });
+});
+
+test("inspector — Account logged-out collapse", async ({ page }) => {
+  // Override: the Personal account is signed out in this capture.
+  await page.addInitScript(
+    ({ fixture, t0 }) => {
+      (window as never as { __AIJ_FIXTURE__: unknown }).__AIJ_FIXTURE__ = {
+        ...fixture,
+        accounts: fixture.accounts.map((a: { id: string }) =>
+          a.id === "claude-personal" ? { ...a, login_state: "logged_out" } : a,
+        ),
+      };
+      localStorage.setItem("aij.theme", "dark");
+      localStorage.setItem("aij.onboarding.dismissed", "1");
+      sessionStorage.setItem("aij.ready.skipped", "1");
+      Date.now = () => t0;
+    },
+    { fixture: allStatuses, t0: T0 },
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Accounts" }).click();
+  await page.getByRole("button", { name: "Inspect claude-code" }).nth(1).click();
+  await expect(page.getByTestId("account-signin-card")).toBeVisible();
+  await page.screenshot({ path: resolve(GALLERY, "08-inspector-aggregate/account-logged-out-1280x800.png") });
+});
+
+test("inspector — Project Overview On-it-now card", async ({ page }) => {
+  await seedInspectorPage(page, { width: 1440, height: 900 });
+  await page.getByRole("tab", { name: "Projects" }).click();
+  await page.getByRole("button", { name: /ai-juggler/ }).first().click();
+  await expect(page.getByTestId("project-on-it-now")).toBeVisible();
+  await page.screenshot({ path: resolve(GALLERY, "08-inspector-aggregate/project-overview-1440x900.png") });
 });
 
 // Determinism self-test (Req.4): same fixture twice → byte-identical PNG.

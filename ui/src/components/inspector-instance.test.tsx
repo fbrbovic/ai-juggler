@@ -71,6 +71,7 @@ function mk(overrides: Partial<InstanceInfo> = {}): InstanceInfo {
 const project: ProjectInfo = {
   id: "proj-1", root: "/Users/dev/ai-juggler", name: "ai-juggler", last_activity_ms: null,
   active_instance: null, accounts_used: [], instance_count: 1, history_sessions: 0,
+  missing: false,
 };
 const account: AccountInfo = {
   id: "claude-work", provider: "claude-code", label: "Work Max", plan: "max-20x", login_state: "logged_in",
