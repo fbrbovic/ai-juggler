@@ -59,6 +59,7 @@ pub fn run() {
     let attention_state = Arc::clone(&app_state);
     let heuristic_tick_state = Arc::clone(&app_state);
     let resource_tick_state = Arc::clone(&app_state);
+    let processes_tick_state = Arc::clone(&app_state);
     let quota_tick_state = Arc::clone(&app_state);
 
     tauri::Builder::default()
@@ -105,6 +106,11 @@ pub fn run() {
             commands::terminal_kill,
             commands::terminal_snapshot,
             commands::instance_quality,
+            commands::instance_processes,
+            commands::orphan_stop,
+            commands::orphan_stop_all,
+            commands::orphan_verify,
+            commands::account_set_cleanup,
         ])
         .setup(|app| {
             let _ = app.emit(EVENT_APP_READY, commands::AppInfo::current());
@@ -114,6 +120,7 @@ pub fn run() {
                 quota_tick_state,
                 attention_state,
                 heuristic_tick_state,
+                processes_tick_state,
             );
             Ok(())
         })
@@ -135,6 +142,7 @@ fn spawn_read_model_ticks(
     quota_state: Arc<state::AppState>,
     attention_state: Arc<state::AppState>,
     heuristic_state: Arc<state::AppState>,
+    processes_state: Arc<state::AppState>,
 ) {
     // Event-driven recovery (AJ-E405 Req.5): drain fresh-output signals
     // at 200 ms — well inside the 300 ms budget.
@@ -163,6 +171,15 @@ fn spawn_read_model_ticks(
         loop {
             std::thread::sleep(std::time::Duration::from_secs(5));
             let _ = commands::emit_resources(&app, &resource_state);
+        }
+    });
+    // The 2 s per-tree sampling tick (AJ-E410): collector rings/rows,
+    // orphan grace poll, and the opted-in Tier-1 auto-cleanup sweep.
+    // UI emissions stay on their own coalesced cadences above.
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            commands::processes_tick(&processes_state);
         }
     });
     std::thread::spawn(move || {
@@ -205,6 +222,12 @@ fn spawn_lifecycle_forwarder(state: Arc<state::AppState>) {
                 }
                 juggler_supervisor::LifecycleEvent::Started { .. } => None,
             };
+            if let juggler_supervisor::LifecycleEvent::Exited { kind, session, pid } = &event {
+                // AJ-E410: freeze the pre-exit descendant rows into the
+                // orphan tracker + journal the durable allow-list BEFORE
+                // the status mapping consumes the event.
+                commands::record_exit_snapshot(&state, session, *pid, kind);
+            }
             if let Ok(storage) = state.storage.lock() {
                 drop(commands::apply_lifecycle_event(
                     &storage,

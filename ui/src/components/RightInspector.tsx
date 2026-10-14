@@ -152,6 +152,7 @@ export function RightInspector({
   onStopped,
   onHandover,
   onNew,
+  processesBridge = defaultProcessesBridge,
 }: {
   selection: InspectorSelection;
   data: InspectorData;
@@ -169,6 +170,7 @@ export function RightInspector({
   onStopped: () => void;
   onHandover: (sessionId: string, targetProfileId: string) => void;
   onNew: () => void;
+  processesBridge?: ProcessesBridge;
 }) {
   const kind: InspectorKind | "none" | "login" = selection.kind;
   const [tab, setTab] = useState<InspectorTab>(() =>
@@ -304,6 +306,7 @@ export function RightInspector({
               tab={entry.id}
               kind={kind as InspectorKind}
               data={data}
+              processesBridge={processesBridge}
               sessions={sessions}
               projects={projects}
               accounts={accounts}
@@ -339,6 +342,7 @@ function InspectorPanel(props: {
   tab: InspectorTab;
   kind: InspectorKind;
   data: InspectorData;
+  processesBridge: ProcessesBridge;
   sessions: InstanceInfo[];
   projects: ProjectInfo[];
   accounts: AccountInfo[];
@@ -366,6 +370,10 @@ function InspectorPanel(props: {
         );
       case "history":
         return kind === "account" || kind === "project" ? <GroupedHistory {...props} /> : <HonestEmpty tab="history" task="AJ-E408 (adapter version history)" />;
+      case "processes":
+        // Rollups above Instance level are read-only (Req.2); orphan
+        // stop actions live on the Instance's own tab.
+        return <AggregateProcesses {...props} />;
       case "actions":
         return kind === "provider" ? (
           <ProviderActions />
@@ -393,6 +401,10 @@ function InspectorPanel(props: {
         return kind === "instance" ? <InstanceHistory {...props} /> : <SessionHistory {...props} />;
       case "quality":
         return <QualityTab {...props} />;
+      case "processes":
+        // Session (conversation) selections render the frozen final tree
+        // read-only (E407 contract); the Instance tab owns stop actions.
+        return <ProcessesTab {...props} readOnly={kind === "session"} />;
       case "actions":
         return kind === "instance" ? (
           <InstanceActions
@@ -426,15 +438,38 @@ function InspectorPanel(props: {
     usage: "AJ-E606+ (two-clock usage engine)",
     history: "AJ-E408 (transcript discovery)",
     quality: "AJ-E409 (measurable signals, no score)",
-    processes: "AJ-E410 + E5 (verified process collector)",
+    processes: "AJ-E410 (process collector) — unreachable for known kinds",
     actions: "AJ-E408",
   };
   return <HonestEmpty tab={tab} task={owner[tab]} />;
 }
 
+/// The Processes-tab data/action seam (AJ-E410): production resolves the
+/// real bridge lazily; tests inject a deterministic source. (Extracted
+/// because vitest 5's mocker did not intercept this tab's dynamic
+/// import site — the seam keeps the component testable either way.)
+export type ProcessesBridge = {
+  load: (sessionId: string) => Promise<import("../lib/bridge").ProcessesInfo | null>;
+  stop: (sessionId: string, pid: number) => Promise<import("../lib/bridge").StopOutcomeInfo>;
+  stopAll: (sessionId: string) => Promise<import("../lib/bridge").StopOutcomeInfo[]>;
+  verify: (
+    sessionId: string,
+    pid: number,
+  ) => Promise<import("../lib/bridge").OrphanVerifyInfo>;
+};
+
+const defaultProcessesBridge: ProcessesBridge = {
+  load: async (sessionId) => (await import("../lib/bridge")).instanceProcesses(sessionId),
+  stop: async (sessionId, pid) => (await import("../lib/bridge")).orphanStop(sessionId, pid),
+  stopAll: async (sessionId) => (await import("../lib/bridge")).orphanStopAll(sessionId),
+  verify: async (sessionId, pid) => (await import("../lib/bridge")).orphanVerify(sessionId, pid),
+};
+
 type PanelProps = {
   kind: InspectorKind;
   data: InspectorData;
+  /** AJ-E410 seam: the Processes-tab data/actions source (tests inject). */
+  processesBridge: ProcessesBridge;
   sessions: InstanceInfo[];
   projects: ProjectInfo[];
   accounts: AccountInfo[];
@@ -1287,6 +1322,26 @@ function AccountOverview(props: PanelProps) {
           <span data-testid="account-renewal" className="text-muted">
             renewal date: <span className="text-faint">not set (optional, D-12 — field lands with AJ-E411)</span>
           </span>
+          <label data-testid="account-cleanup-toggle" className="flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={account.cleanup_opt_in}
+              onChange={(event) => {
+                const optIn = event.target.checked;
+                void import("../lib/bridge").then((bridge) =>
+                  bridge.accountSetCleanup(account.id, optIn).catch(() => {
+                    /* the checkbox re-reads from props on the next list refresh */
+                  }),
+                );
+              }}
+            />
+            <span className="text-muted">Clean up leftover processes after exit (opt-in)</span>
+          </label>
+          <span className="text-[10px] leading-relaxed text-faint">
+            Off by default — nothing is ever killed automatically unless you opt in per account.
+            Only PIDs the journal recorded as descendants are touched, and every kill is
+            audit-logged (D-08).
+          </span>
           <span data-testid="account-reset" className="text-muted">
             reset:{" "}
             {worst?.quota?.resets_at_ms ? (
@@ -1539,6 +1594,7 @@ function TierTag({ tier }: { tier: "Measured" | "Computed" | "Estimated" }) {
 function QualityTab(props: PanelProps) {
   const instance = props.data.instance;
   const [quality, setQuality] = useState<import("../lib/bridge").QualitySignalsInfo | null>(null);
+  const [resources, setResources] = useState<import("../lib/bridge").ProcessesInfo | null>(null);
   const [asTable, setAsTable] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -1555,6 +1611,16 @@ function QualityTab(props: PanelProps) {
       })
       .catch((cause: unknown) => {
         if (alive) setLoadError(String(cause));
+      });
+    // AJ-E410 completes E409 Req.6: CPU/RAM now come from the process
+    // collector's 2 s ring (labelled Measured, footnote `2s sampling`).
+    import("../lib/bridge")
+      .then((bridge) => bridge.instanceProcesses(instance.id))
+      .then((result) => {
+        if (alive) setResources(result);
+      })
+      .catch(() => {
+        /* CPU/RAM stays honestly absent — the other signals render */
       });
     return () => {
       alive = false;
@@ -1609,6 +1675,20 @@ function QualityTab(props: PanelProps) {
         </div>
       ) : (
         <span className="text-muted">no data — no transcript usage events yet</span>
+      ),
+    });
+    const lastSample = resources?.spark.at(-1);
+    signals.push({
+      testId: "quality-cpu",
+      label: "CPU / RAM now",
+      tier: "Measured",
+      body: lastSample ? (
+        <span className="tabular-nums text-ink">
+          {lastSample.cpu_pct !== null ? `${Math.round(lastSample.cpu_pct)}% CPU` : "CPU: first sample pending"} ·{" "}
+          {(lastSample.rss_bytes / 1_000_000_000).toFixed(1)} GB RSS (process tree sum)
+        </span>
+      ) : (
+        <span className="text-muted">Collecting first samples…</span>
       ),
     });
     signals.push({
@@ -1683,7 +1763,7 @@ function QualityTab(props: PanelProps) {
       ) : (
         <>
           <div className="flex items-center justify-between">
-            <p className="text-[10px] text-muted">2s sampling · CPU/RAM land with the process collector (AJ-E410)</p>
+            <p className="text-[10px] text-muted">2s sampling · Measured from the process collector (AJ-E410)</p>
             <button
               type="button"
               onClick={() => setAsTable((v) => !v)}
@@ -1702,6 +1782,385 @@ function QualityTab(props: PanelProps) {
             </Card>
           ))}
         </>
+      )}
+    </div>
+  );
+}
+
+/// Formats bytes as MB/GB for the RAM column.
+function formatRss(bytes: number): string {
+  if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(1)} GB`;
+  return `${Math.round(bytes / 1_000_000)} MB`;
+}
+
+/// Formats an age in ms as `42m` / `12s` / `2h 3m`.
+function formatAge(ms: number): string {
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+/// The live Processes tab (AJ-E410): the tree table (PID / Process /
+/// CPU / RAM / Age / ⑂), the I-07 sparkline, and the orphan section
+/// with verified stop actions. Refreshes every 5 s; failures render a
+/// banner with a manual Retry — never a silently empty table.
+function ProcessesTab(props: PanelProps & { readOnly?: boolean }) {
+  const instance = props.data.instance;
+  const [info, setInfo] = useState<import("../lib/bridge").ProcessesInfo | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [confirmPid, setConfirmPid] = useState<number | null>(null);
+  const [confirmAll, setConfirmAll] = useState(false);
+  const [verifyNotes, setVerifyNotes] = useState<Record<number, string>>({});
+  const [reloadKey, setReloadKey] = useState(0);
+  const readOnly = props.readOnly ?? false;
+
+  // Load shape mirrors QualityTab (top-level import in the effect):
+  // the vitest mocker intercepts this form; a wrapped `load()` closure
+  // resolved the unmocked module in vitest 5 (see processes-tab tests).
+  const bridge = props.processesBridge;
+  useEffect(() => {
+    if (!instance) return;
+    let alive = true;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const load = () => {
+      bridge
+        .load(instance.id)
+        .then((result) => {
+          if (alive) {
+            setInfo(result);
+            setError(null);
+          }
+        })
+        .catch((cause: unknown) => {
+          if (alive) setError(String(cause));
+        });
+    };
+    load();
+    timer = setInterval(load, 5_000);
+    return () => {
+      alive = false;
+      if (timer) clearInterval(timer);
+    };
+  }, [instance?.id, reloadKey, bridge]);
+
+  if (!instance) return <HonestEmpty tab="processes" task="AJ-E410" />;
+
+  if (error) {
+    return (
+      <Card className="flex flex-col gap-2 p-4" data-testid="processes-error" role="alert">
+        <p className="text-[11.5px] font-medium text-ink">Process tree read failed</p>
+        <p className="text-[10px] break-all text-muted">{error}</p>
+        <Button size="sm" variant="secondary" onClick={() => setReloadKey((key) => key + 1)}>
+          Retry
+        </Button>
+      </Card>
+    );
+  }
+
+  if (info?.unavailable_reason) {
+    return (
+      <Card className="flex flex-col gap-1 p-4" data-testid="processes-unavailable">
+        <p className="text-[11.5px] text-muted">{info.unavailable_reason}</p>
+        <p className="text-[10px] text-faint">
+          Adopted or desktop-kind sessions have no readable process tree — resources are
+          unavailable, never flat zero.
+        </p>
+      </Card>
+    );
+  }
+
+  const rows = info?.rows ?? [];
+  const orphans = info?.orphans ?? [];
+  const spark = info?.spark ?? [];
+  const lastSpark = spark.at(-1);
+
+  const stopOne = (pid: number) => {
+    setConfirmPid(null);
+    bridge
+      .stop(instance.id, pid)
+      .then((outcome) => {
+          setInfo((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  orphans: prev.orphans.map((orphan) =>
+                    orphan.pid === pid ? { ...orphan, stop_state: outcome.state } : orphan,
+                  ),
+                }
+              : prev,
+          );
+        })
+        .catch(() => {
+          /* the 5 s refresh re-reads the row state */
+        });
+  };
+
+  const stopAll = () => {
+    setConfirmAll(false);
+    bridge
+      .stopAll(instance.id)
+      .then((outcomes) => {
+          setInfo((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  orphans: prev.orphans.map((orphan) => {
+                    const outcome = outcomes.find((row) => row.pid === orphan.pid);
+                    return outcome ? { ...orphan, stop_state: outcome.state } : orphan;
+                  }),
+                }
+              : prev,
+          );
+        })
+        .catch(() => {
+          /* the 5 s refresh re-reads the row states */
+        });
+  };
+
+  const verifyOne = (pid: number) => {
+    bridge
+      .verify(instance.id, pid)
+      .then((result) => setVerifyNotes((notes) => ({ ...notes, [pid]: result.note })))
+      .catch(() => {
+        /* verification is manual — failures keep the row as-is */
+      });
+  };
+
+  return (
+    <div className="flex flex-col gap-3" data-testid="processes-tab">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[10px] text-muted">2s sampling · 5s refresh · Measured</p>
+        {lastSpark && (
+          <span className="flex items-end gap-[2px]" aria-hidden="true" data-testid="processes-spark">
+            {spark.slice(-30).map((sample, i) => (
+              <span
+                key={i}
+                className="w-[3px] rounded-sm bg-accent/70"
+                style={{
+                  height: `${Math.max(2, ((sample.cpu_pct ?? 0) / 100) * 18)}px`,
+                }}
+              />
+            ))}
+          </span>
+        )}
+      </div>
+
+      <Card className="flex flex-col gap-1 overflow-x-auto p-3">
+        <table className="w-full min-w-[420px] text-left text-[11px]">
+          <thead>
+            <tr className="text-[10px] uppercase tracking-wider text-muted">
+              <th scope="col" className="py-1 pr-2 font-medium">PID</th>
+              <th scope="col" className="py-1 pr-2 font-medium">Process</th>
+              <th scope="col" className="py-1 pr-2 font-medium">CPU</th>
+              <th scope="col" className="py-1 pr-2 font-medium">RAM</th>
+              <th scope="col" className="py-1 pr-2 font-medium">Age</th>
+              <th scope="col" className="py-1 font-medium">⑂</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="py-3 text-center text-[11px] text-muted" data-testid="processes-empty">
+                  No subprocesses
+                </td>
+              </tr>
+            ) : (
+              rows.map((row) => (
+                <tr key={row.pid} className="border-t border-hairline">
+                  <td className="py-1 pr-2 font-mono text-[10.5px] tabular-nums text-muted">{row.pid}</td>
+                  <td className="py-1 pr-2 text-ink">
+                    <span aria-hidden="true" className="text-faint">{"│ ".repeat(row.depth)}{row.depth > 0 ? "└ " : ""}</span>
+                    {row.name}
+                  </td>
+                  <td className="py-1 pr-2 tabular-nums text-ink">
+                    {row.cpu_pct !== null ? `${Math.round(row.cpu_pct)}%` : <span className="text-faint">— first sample</span>}
+                  </td>
+                  <td className="py-1 pr-2 tabular-nums text-ink">{formatRss(row.rss_bytes)}</td>
+                  <td className="py-1 pr-2 tabular-nums text-muted">{formatAge(row.age_ms)}</td>
+                  <td className="py-1 tabular-nums text-muted">{row.child_count}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+        {readOnly && (
+          <p className="pt-1 text-[10px] text-faint">
+            Read-only — ended conversation; stop actions live on the Instance&apos;s Processes tab.
+          </p>
+        )}
+      </Card>
+
+      {!readOnly && (
+        <Card className="flex flex-col gap-2 p-3" data-testid="processes-orphans">
+          <p className="text-[11px] uppercase tracking-wider text-muted" data-testid="orphans-heading">
+            {orphans.length > 0 ? `Orphaned - left behind (${orphans.length})` : "No orphaned processes"}
+          </p>
+          {orphans.length === 0 ? (
+            <p className="text-[10px] text-faint">
+              A good empty state: nothing this Instance spawned outlived it.
+            </p>
+          ) : (
+            <>
+              {orphans.map((orphan) => (
+                <div key={orphan.pid} className="flex flex-col gap-1 border-t border-hairline pt-2" data-testid={`orphan-row-${orphan.pid}`}>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+                    <span className="font-mono text-[10.5px] tabular-nums text-muted">{orphan.pid}</span>
+                    <span className="text-ink">{orphan.name}</span>
+                    <span className="tabular-nums text-muted">{formatRss(orphan.rss_bytes)}</span>
+                    <span className="tabular-nums text-muted">since exit {formatAge(orphan.age_since_parent_exit_ms)}</span>
+                    <span className="text-faint">parent: {orphan.parent_label}</span>
+                    {orphan.stop_state && (
+                      <span
+                        data-testid={`orphan-state-${orphan.pid}`}
+                        className={orphan.stop_state === "gone" ? "text-success" : "text-warning"}
+                      >
+                        {orphan.stop_state === "gone" ? "gone ✓" : orphan.stop_state}
+                      </span>
+                    )}
+                  </div>
+                  {verifyNotes[orphan.pid] && (
+                    <p className="text-[10px] text-muted" data-testid={`orphan-verify-${orphan.pid}`}>
+                      Verify owner: {verifyNotes[orphan.pid]}
+                    </p>
+                  )}
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" variant="secondary" onClick={() => verifyOne(orphan.pid)}>
+                      Verify owner
+                    </Button>
+                    {!orphan.stop_state && (
+                      <Button size="sm" variant="danger" onClick={() => setConfirmPid(orphan.pid)}>
+                        Stop process {orphan.pid}
+                      </Button>
+                    )}
+                  </div>
+                  {confirmPid === orphan.pid && (
+                    <div className="flex flex-col gap-2 rounded-lg border border-danger/40 bg-danger/5 p-2" data-testid={`orphan-confirm-${orphan.pid}`} role="alertdialog" aria-label={`Stop process ${orphan.pid}`}>
+                      <p className="text-[11px] text-ink">
+                        Stop process <span className="font-mono">{orphan.pid}</span> ({orphan.name})? SIGTERM
+                        first, SIGKILL after a grace period — only this journal-recorded PID.
+                      </p>
+                      <div className="flex gap-2">
+                        <Button size="sm" variant="danger" onClick={() => stopOne(orphan.pid)}>
+                          Stop {orphan.pid}
+                        </Button>
+                        <Button size="sm" variant="secondary" onClick={() => setConfirmPid(null)}>
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {orphans.some((orphan) => !orphan.stop_state) && (
+                <div className="flex flex-col gap-2 pt-1">
+                  <Button size="sm" variant="danger" onClick={() => setConfirmAll(true)}>
+                    Stop all orphans…
+                  </Button>
+                  {confirmAll && (
+                    <div className="flex flex-col gap-2 rounded-lg border border-danger/40 bg-danger/5 p-2" data-testid="orphans-confirm-all" role="alertdialog" aria-label="Stop all orphans">
+                      <p className="text-[11px] text-ink">
+                        Stop all orphaned processes — {orphans.filter((orphan) => !orphan.stop_state).map((orphan) => orphan.pid).join(", ")}?
+                        Each gets the SIGTERM → SIGKILL ladder and a re-read.
+                      </p>
+                      <div className="flex gap-2">
+                        <Button size="sm" variant="danger" onClick={stopAll}>
+                          Stop all
+                        </Button>
+                        <Button size="sm" variant="secondary" onClick={() => setConfirmAll(false)}>
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </Card>
+      )}
+    </div>
+  );
+}
+
+/// Read-only process rollups for Provider / Account / Project
+/// selections (Req.2): every member Instance's tree, labelled with its
+/// Instance, with the stop-actions note pointing at the Instance tab.
+function AggregateProcesses(props: PanelProps) {
+  const kind = props.kind;
+  const data = props.data;
+  const members = props.sessions.filter((session) => {
+    if (kind === "provider") return session.provider === data.provider?.id;
+    if (kind === "account") return session.account_id === data.account?.id;
+    return session.cwd === data.project?.root;
+  });
+  const [infos, setInfos] = useState<Record<string, import("../lib/bridge").ProcessesInfo | null>>({});
+
+  useEffect(() => {
+    let alive = true;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const bridge = props.processesBridge;
+    const load = () => {
+      void Promise.all(
+        members.map((member) =>
+          bridge.load(member.id).then((result) => [member.id, result] as const),
+        ),
+      ).then((entries) => {
+        if (alive) setInfos(Object.fromEntries(entries));
+      });
+    };
+    load();
+    timer = setInterval(load, 5_000);
+    return () => {
+      alive = false;
+      if (timer) clearInterval(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind, data.provider?.id, data.account?.id, data.project?.root, members.map((m) => m.id).join(",")]);
+
+  const totalRows = members.reduce((sum, member) => sum + (infos[member.id]?.rows.length ?? 0), 0);
+
+  return (
+    <div className="flex flex-col gap-3" data-testid="processes-aggregate">
+      <p className="text-[10px] text-muted">
+        Read-only rollup across {members.length} instance{members.length === 1 ? "" : "s"} · stop actions
+        live on each Instance&apos;s Processes tab
+      </p>
+      {totalRows === 0 ? (
+        <Card className="flex flex-col gap-1 p-4">
+          <p className="text-[11.5px] text-muted" data-testid="processes-empty">No subprocesses</p>
+        </Card>
+      ) : (
+        members.map((member) => {
+          const info = infos[member.id];
+          const rows = info?.rows ?? [];
+          if (rows.length === 0) return null;
+          return (
+            <Card key={member.id} className="flex flex-col gap-1 p-3">
+              <p className="text-[10px] uppercase tracking-wider text-muted">
+                {member.account_label} · {member.cwd?.split("/").pop() || member.cwd || member.id}
+              </p>
+              <table className="w-full text-left text-[11px]">
+                <tbody>
+                  {rows.map((row) => (
+                    <tr key={`${member.id}-${row.pid}`} className="border-t border-hairline">
+                      <td className="py-1 pr-2 font-mono text-[10.5px] tabular-nums text-muted">{row.pid}</td>
+                      <td className="py-1 pr-2 text-ink">
+                        <span aria-hidden="true" className="text-faint">{"│ ".repeat(row.depth)}{row.depth > 0 ? "└ " : ""}</span>
+                        {row.name}
+                      </td>
+                      <td className="py-1 pr-2 tabular-nums text-ink">
+                        {row.cpu_pct !== null ? `${Math.round(row.cpu_pct)}%` : <span className="text-faint">—</span>}
+                      </td>
+                      <td className="py-1 tabular-nums text-ink">{formatRss(row.rss_bytes)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Card>
+          );
+        })
       )}
     </div>
   );

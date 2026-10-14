@@ -174,6 +174,11 @@ pub struct Account {
     /// The isolated harness state directory AI Juggler manages for this
     /// account (`CLAUDE_CONFIG_DIR` / `CODEX_HOME` / `HOME` root).
     pub state_dir: PathBuf,
+    /// D-08 Tier-1 "clean safe" opt-in: when true, leftovers verified as
+    /// journal-recorded descendants are stopped automatically 60 s after
+    /// the Instance ends (every kill audit-logged). Off by default —
+    /// the default tier is notify-only.
+    pub cleanup_opt_in: bool,
 }
 
 /// Settings applied on top of an account's defaults when launching a profile.

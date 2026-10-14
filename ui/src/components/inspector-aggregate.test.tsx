@@ -57,9 +57,9 @@ function mk(id: string, overrides: Partial<InstanceInfo> = {}): InstanceInfo {
 }
 
 const ACCOUNTS: AccountInfo[] = [
-  { id: "claude-work", provider: "claude-code", label: "Work Max", plan: "max-20x", login_state: "logged_in" },
-  { id: "claude-personal", provider: "claude-code", label: "Personal", plan: null, login_state: "logged_in" },
-  { id: "z-glm", provider: "zcode", label: "GLM Pro", plan: "glm-pro", login_state: "logged_out" },
+  { id: "claude-work", provider: "claude-code", label: "Work Max", plan: "max-20x", login_state: "logged_in", cleanup_opt_in: false },
+  { id: "claude-personal", provider: "claude-code", label: "Personal", plan: null, login_state: "logged_in", cleanup_opt_in: false },
+  { id: "z-glm", provider: "zcode", label: "GLM Pro", plan: "glm-pro", login_state: "logged_out", cleanup_opt_in: false },
 ];
 
 const SESSIONS: InstanceInfo[] = [
@@ -160,6 +160,16 @@ describe("AJ-E408 Account (§5.4, Req.3-4)", () => {
     expect(container.querySelector('[data-testid="account-reset"]')?.textContent).toContain("1h0m");
     expect(container.querySelector('[data-testid="account-renewal"]')?.textContent).toContain("not set");
     expect(container.querySelector('[data-testid="account-affinity"]')?.textContent).toContain("ai-juggler");
+    // AJ-E410 (D-08): the Tier-1 cleanup opt-in toggle — off by default.
+    const toggle = container.querySelector('[data-testid="account-cleanup-toggle"]')! as HTMLInputElement;
+    expect(toggle).not.toBeNull();
+    expect(toggle.querySelector("input")!.checked).toBe(false);
+    expect(container.querySelector('[data-testid="account-overview"]')!.textContent).toContain(
+      "Off by default",
+    );
+    expect(container.querySelector('[data-testid="account-overview"]')!.textContent).toContain(
+      "audit-logged (D-08)",
+    );
   });
 
   it("logged-out accounts collapse Overview to the sign-in card", () => {

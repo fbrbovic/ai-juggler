@@ -23,4 +23,8 @@ plan: string | null,
 /**
  * Login state: `logged_in` or `logged_out`.
  */
-login_state: string, };
+login_state: string, 
+/**
+ * D-08 Tier-1 cleanup opt-in (off by default — notify-only tier).
+ */
+cleanup_opt_in: boolean, };

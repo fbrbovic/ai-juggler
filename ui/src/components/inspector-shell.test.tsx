@@ -69,7 +69,7 @@ const account: AccountInfo = {
   provider: "claude-code",
   label: "Work Max",
   plan: "max-20x",
-  login_state: "logged_in",
+  login_state: "logged_in", cleanup_opt_in: false,
 };
 
 const recipe: LaunchRecipeInfo = {

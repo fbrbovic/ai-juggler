@@ -9,7 +9,8 @@
 //! fake-harness run --dir DIR [--session-id ID | --resume ID] [--turns N]
 //!               [--delay-ms MS] [--stall-secs S] [--burn-cpus SECS]
 //!               [--exit CODE] [--prompt TEXT] [--wait-prompt TEXT]
-//!               [--quota-exit]
+//!               [--quota-exit] [--spawn-child PROG --child-args "A B"]
+//!               [--child-ignore-term]
 //! ```
 //!
 //! Sessions are JSONL files under `--dir`: a `session_meta` line, turn pairs
@@ -17,6 +18,10 @@
 //! terminal `ended` line. `--stall-secs` sleeps silently, `--burn-cpus`
 //! busy-loops (stuck-detection fixtures), `--exit` sets the exit code
 //! (crash fixtures). `--resume` appends to an existing session file.
+//! `--spawn-child` starts a detached child (stdio null, so it never holds
+//! the harness's output pipes) that OUTLIVES the harness — the orphan
+//! fixture (AJ-E410); `--child-ignore-term` makes it ignore SIGTERM
+//! (the stop-ladder escalation fixture, unix only).
 
 use std::env;
 use std::fs::{File, OpenOptions};
@@ -59,6 +64,13 @@ struct RunOptions {
     /// Print a rate-limit signature and exit non-zero (the quota-exit
     /// fixture, AJ-E405).
     quota_exit: bool,
+    /// Detached child program to start (survives the harness — the
+    /// orphan fixture, AJ-E410).
+    spawn_child: Option<String>,
+    /// Arguments for `--spawn-child`, whitespace-split.
+    child_args: String,
+    /// Make the child ignore SIGTERM (stop-ladder escalation fixture).
+    child_ignore_term: bool,
 }
 
 fn parse_options(args: &[String]) -> Result<RunOptions, String> {
@@ -74,6 +86,9 @@ fn parse_options(args: &[String]) -> Result<RunOptions, String> {
         prompt: String::new(),
         wait_prompt: None,
         quota_exit: false,
+        spawn_child: None,
+        child_args: String::new(),
+        child_ignore_term: false,
     };
     let mut i = 0;
     while i < args.len() {
@@ -129,6 +144,18 @@ fn parse_options(args: &[String]) -> Result<RunOptions, String> {
                 opts.quota_exit = true;
                 false
             }
+            "--child-ignore-term" => {
+                opts.child_ignore_term = true;
+                false
+            }
+            "--spawn-child" => {
+                opts.spawn_child = Some(value()?);
+                true
+            }
+            "--child-args" => {
+                opts.child_args = value()?;
+                true
+            }
             other => return Err(format!("unknown option {other}")),
         };
         i += if takes_value { 2 } else { 1 };
@@ -142,6 +169,34 @@ where
     T::Err: std::fmt::Display,
 {
     s.parse().map_err(|e| format!("invalid number {s:?}: {e}"))
+}
+
+/// Builds the fixture-child command. `ignore_term` wraps the program in
+/// `bash -c "trap '' TERM; exec …"` — `SIG_IGN` survives `exec(2)`, so the
+/// child ignores SIGTERM and the supervisor's stop ladder must escalate
+/// to SIGKILL. (The workspace forbids unsafe code, so `pre_exec` signal
+/// dispositions are not an option; the wrapper shell is the portable
+/// equivalent.) Unix-only effect; elsewhere the flag degrades to a
+/// plain child.
+fn spawn_child_command(
+    program: &str,
+    child_args: &str,
+    ignore_term: bool,
+) -> std::process::Command {
+    #[cfg(unix)]
+    if ignore_term {
+        let script = format!("trap '' TERM; exec {program} {child_args}");
+        let mut command = std::process::Command::new("/bin/bash");
+        command.arg("-c").arg(script);
+        return command;
+    }
+    #[cfg(not(unix))]
+    if ignore_term {
+        eprintln!("fake-harness: --child-ignore-term is a unix-only fixture");
+    }
+    let mut command = std::process::Command::new(program);
+    command.args(child_args.split_whitespace());
+    command
 }
 
 fn run(args: &[String]) -> ExitCode {
@@ -183,6 +238,23 @@ fn run(args: &[String]) -> ExitCode {
         }
     };
     let mut out = LineWriter::new(file, transcript.clone());
+
+    // The orphan fixture (AJ-E410): a detached child that outlives the
+    // harness. stdio is null so it never holds the harness's output
+    // pipes — the supervisor's readers must see EOF when the harness
+    // itself exits, not when the leftover child dies.
+    if let Some(program) = &opts.spawn_child {
+        let child = spawn_child_command(program, &opts.child_args, opts.child_ignore_term);
+        let mut child = child;
+        child
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        match child.spawn() {
+            Ok(spawned) => println!("spawned child {program} (pid {})", spawned.id()),
+            Err(message) => eprintln!("fake-harness: cannot spawn {program:?}: {message}"),
+        }
+    }
 
     let is_resume = opts.resume.is_some() && line_count(&transcript) > 0;
     let header = if is_resume {

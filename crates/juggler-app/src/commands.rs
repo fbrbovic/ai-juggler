@@ -14,12 +14,13 @@ use tauri_plugin_opener::OpenerExt;
 use ts_rs::TS;
 
 use juggler_adapter::LaunchMode;
+use juggler_core::CoreError;
 use juggler_core::model::{
     Account, AccountId, MachineId, Profile, ProfileId, SessionId, SessionRecord, SessionStatus,
     SettingsOverlay, Timestamp,
 };
 use juggler_core::storage::Storage;
-use juggler_supervisor::LifecycleEvent;
+use juggler_supervisor::{ExitKind, LifecycleEvent};
 
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
@@ -84,6 +85,8 @@ pub struct AccountInfo {
     pub plan: Option<String>,
     /// Login state: `logged_in` or `logged_out`.
     pub login_state: String,
+    /// D-08 Tier-1 cleanup opt-in (off by default — notify-only tier).
+    pub cleanup_opt_in: bool,
 }
 
 /// A Launch settings row for the UI (AJ-E107).
@@ -502,6 +505,7 @@ pub fn create_account(
         label: label.to_string(),
         plan: plan.map(juggler_core::model::PlanTier::new),
         state_dir,
+        cleanup_opt_in: false,
     };
     lock_storage_arc(state)?.accounts().insert(&account)?;
     Ok(account_info_of(&account))
@@ -615,6 +619,7 @@ pub fn account_import_impl(
         label: label.to_string(),
         plan: plan.map(juggler_core::model::PlanTier::new),
         state_dir,
+        cleanup_opt_in: false,
     };
     {
         let storage = lock_storage_arc(state)?;
@@ -1439,6 +1444,7 @@ fn account_info_of(account: &Account) -> AccountInfo {
         provider: account.harness.to_string(),
         label: account.label.clone(),
         plan: account.plan.as_ref().map(ToString::to_string),
+        cleanup_opt_in: account.cleanup_opt_in,
     }
 }
 
@@ -2047,6 +2053,505 @@ pub(crate) fn unique_suffix() -> u128 {
         % 1_000_000_000_000
 }
 
+// ---------------------------------------------------------------------------
+// AJ-E410: the Processes tab data, the orphan contract, and the Tier-1
+// auto-cleanup engine (D-08).
+// ---------------------------------------------------------------------------
+
+/// One live process row for the Processes tab (PID / name / CPU / RAM /
+/// age / child count / depth).
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct ProcessRowInfo {
+    /// OS process id.
+    pub pid: u32,
+    /// Parent pid, when readable.
+    #[ts(type = "number | null")]
+    pub parent_pid: Option<u32>,
+    /// Process name.
+    pub name: String,
+    /// CPU utilization, percent; `null` until two table samples.
+    pub cpu_pct: Option<f64>,
+    /// Resident memory, bytes.
+    #[ts(type = "number")]
+    pub rss_bytes: u64,
+    /// Process age, ms.
+    #[ts(type = "number")]
+    pub age_ms: u64,
+    /// Direct children within the tree.
+    #[ts(type = "number")]
+    pub child_count: u32,
+    /// Tree depth (root = 0) — the UI indent level.
+    pub depth: u8,
+}
+
+/// One I-07 sparkline point (2 s sampling, 5 min retained).
+#[derive(Debug, Clone, Copy, Serialize, TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct TreeSampleInfo {
+    /// Sample time, epoch ms.
+    #[ts(type = "number")]
+    pub at_ms: i64,
+    /// Tree CPU%, percent; `null` before two samples.
+    pub cpu_pct: Option<f64>,
+    /// Tree RSS sum, bytes.
+    #[ts(type = "number")]
+    pub rss_bytes: u64,
+}
+
+/// One confirmed orphan row (`Orphaned - left behind (N)` section).
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct OrphanInfo {
+    /// Instance the process was left behind by.
+    pub session_id: String,
+    /// Orphan process id.
+    pub pid: u32,
+    /// Process name.
+    pub name: String,
+    /// Resident memory, bytes.
+    #[ts(type = "number")]
+    pub rss_bytes: u64,
+    /// Label of the dead parent (its program name).
+    pub parent_label: String,
+    /// Age since the parent exited, ms.
+    #[ts(type = "number")]
+    pub age_since_parent_exit_ms: i64,
+    /// Last stop state for this pid (`gone` / `still alive - escalated to
+    /// SIGKILL` / …), when one exists.
+    pub stop_state: Option<String>,
+}
+
+/// The Processes tab payload for one Instance (AJ-E410 Req.2/3).
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct ProcessesInfo {
+    /// Live tree rows (root first, breadth-first descendants).
+    pub rows: Vec<ProcessRowInfo>,
+    /// 5-minute 2 s resource ring (the I-07 sparkline source).
+    pub spark: Vec<TreeSampleInfo>,
+    /// Confirmed orphans for this Instance.
+    pub orphans: Vec<OrphanInfo>,
+    /// Honest unavailability note (adopted/deskto-kind without a tree):
+    /// `resources unavailable`, never flat-zero rows.
+    pub unavailable_reason: Option<String>,
+}
+
+/// Outcome payload for orphan stop actions.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct StopOutcomeInfo {
+    /// The pid the action targeted.
+    pub pid: u32,
+    /// UI state: `gone`, `still alive - escalated to SIGKILL`, or the
+    /// refusal reason.
+    pub state: String,
+}
+
+/// `Verify owner` payload: the re-checked ppid chain evidence.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct OrphanVerifyInfo {
+    /// The pid examined.
+    pub pid: u32,
+    /// True when the process is alive and non-zombie.
+    pub alive: bool,
+    /// Current parent pid, when readable.
+    #[ts(type = "number | null")]
+    pub parent_pid: Option<u32>,
+    /// Human note (e.g. `re-parented to init/launchd`).
+    pub note: String,
+}
+
+/// The live Processes tab payload for one Instance (rows + spark +
+/// orphans); rollups above Instance level aggregate several of these
+/// read-only in the UI (Req.2).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message when the Instance is unknown.
+#[tauri::command]
+pub fn instance_processes(
+    state: tauri::State<'_, Arc<AppState>>,
+    session_id: String,
+) -> AppResult<ProcessesInfo> {
+    instance_processes_arc(&state, &session_id)
+}
+
+/// The Arc-based core (tests call this directly).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message when the Instance is unknown.
+pub fn instance_processes_arc(state: &Arc<AppState>, session_id: &str) -> AppResult<ProcessesInfo> {
+    let (record_exists, supervised) = {
+        let storage = lock_storage_arc(state)?;
+        let exists = storage
+            .sessions()
+            .get(&SessionId::new(session_id.to_string()))
+            .is_ok();
+        (
+            exists,
+            state
+                .supervisor
+                .is_supervised(&SessionId::new(session_id.to_string())),
+        )
+    };
+    if !record_exists {
+        return Err(AppError::from(CoreError::NotFound {
+            entity: "instance",
+            id: session_id.to_string(),
+        }));
+    }
+    let session = SessionId::new(session_id.to_string());
+    let session_id = session_id.to_string();
+    let (rows, spark, unavailable) = {
+        let Ok(collector) = state.resources.lock() else {
+            return Ok(unavailable_processes("resources unavailable"));
+        };
+        let rows = collector.rows(&session).unwrap_or_default();
+        let spark = collector.ring(&session);
+        // Adopted/desktop-kind sessions this app never supervised have
+        // no tree to read: honest unavailability, never flat-zero rows.
+        let unavailable =
+            (!supervised && rows.is_empty()).then(|| "resources unavailable".to_string());
+        (rows, spark, unavailable)
+    };
+    let now = Timestamp::now().millis();
+    let orphans = state
+        .orphans
+        .orphans_of(&session)
+        .into_iter()
+        .map(|orphan| OrphanInfo {
+            session_id: session_id.clone(),
+            pid: orphan.pid,
+            name: orphan.name,
+            rss_bytes: orphan.rss_bytes,
+            parent_label: orphan.parent_label,
+            age_since_parent_exit_ms: now - orphan.parent_exit_ms,
+            stop_state: state
+                .orphans
+                .stop_state(orphan.pid)
+                .map(|outcome| outcome.state_label().to_string()),
+        })
+        .collect();
+    Ok(ProcessesInfo {
+        rows: rows
+            .into_iter()
+            .map(|row| ProcessRowInfo {
+                pid: row.pid,
+                parent_pid: row.parent_pid,
+                name: row.name,
+                cpu_pct: row.cpu_pct,
+                rss_bytes: row.rss_bytes,
+                age_ms: row.age_ms,
+                child_count: row.child_count,
+                depth: row.depth,
+            })
+            .collect(),
+        spark: spark
+            .into_iter()
+            .map(|sample| TreeSampleInfo {
+                at_ms: sample.at_ms,
+                cpu_pct: sample.cpu_pct,
+                rss_bytes: sample.rss_bytes,
+            })
+            .collect(),
+        orphans,
+        unavailable_reason: unavailable,
+    })
+}
+
+/// An honest `resources unavailable` payload (Req.7 — never flat zeros).
+fn unavailable_processes(reason: &str) -> ProcessesInfo {
+    ProcessesInfo {
+        rows: Vec::new(),
+        spark: Vec::new(),
+        orphans: Vec::new(),
+        unavailable_reason: Some(reason.to_string()),
+    }
+}
+
+/// Stops one orphan: the allow-list guard refuses PIDs that were not
+/// recorded as descendants (fail closed, PROPOSAL.md:47), then the
+/// TERM→KILL ladder runs with the post-stop re-read built in (Req.6).
+/// Every kill lands in the journal's audit trail (D-08).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message when the Instance is unknown.
+#[tauri::command]
+pub fn orphan_stop(
+    state: tauri::State<'_, Arc<AppState>>,
+    session_id: String,
+    pid: u32,
+) -> AppResult<StopOutcomeInfo> {
+    Ok(orphan_stop_inner(&state, &SessionId::new(session_id), pid))
+}
+
+/// Stops every confirmed orphan of one Instance (the confirm popover
+/// lists all PIDs before this runs; each kill is audited).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on failure.
+#[tauri::command]
+pub fn orphan_stop_all(
+    state: tauri::State<'_, Arc<AppState>>,
+    session_id: String,
+) -> AppResult<Vec<StopOutcomeInfo>> {
+    let session = SessionId::new(session_id);
+    Ok(state
+        .orphans
+        .orphans_of(&session)
+        .iter()
+        .map(|orphan| orphan_stop_inner(&state, &session, orphan.pid))
+        .collect())
+}
+
+/// Shared stop path for the command and `Stop all` (guard → ladder →
+/// audit → tracker).
+pub fn orphan_stop_inner(state: &Arc<AppState>, session: &SessionId, pid: u32) -> StopOutcomeInfo {
+    if !state.orphans.allows(session, pid) {
+        let outcome = juggler_supervisor::StopOutcome::RefusedNotRecorded;
+        state.orphans.record_stop(pid, outcome.clone());
+        return StopOutcomeInfo {
+            pid,
+            state: outcome.state_label().to_string(),
+        };
+    }
+    let outcome = juggler_supervisor::stop_pid_ladder(pid, Duration::from_secs(2), |pid| {
+        juggler_supervisor::process_alive(pid).is_some()
+    });
+    state.orphans.record_stop(pid, outcome.clone());
+    if let Some(journal) = state.supervisor.journal_ref() {
+        let _ = journal.record_killed(session, pid, "manual", outcome.state_label());
+    }
+    StopOutcomeInfo {
+        pid,
+        state: outcome.state_label().to_string(),
+    }
+}
+
+/// `Verify owner`: re-reads the ppid chain for one orphan pid (manual,
+/// honest evidence — never a silent re-check).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on failure.
+#[tauri::command]
+pub fn orphan_verify(
+    state: tauri::State<'_, Arc<AppState>>,
+    session_id: String,
+    pid: u32,
+) -> AppResult<OrphanVerifyInfo> {
+    orphan_verify_arc(&state, &session_id, pid)
+}
+
+/// The Arc-based core (tests call this directly).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on probe failure.
+pub fn orphan_verify_arc(
+    _state: &Arc<AppState>,
+    _session_id: &str,
+    pid: u32,
+) -> AppResult<OrphanVerifyInfo> {
+    // The probe itself is per-pid (the session scopes it in the UI).
+    match juggler_supervisor::verify_owner(pid) {
+        juggler_supervisor::OwnerState::Gone => Ok(OrphanVerifyInfo {
+            pid,
+            alive: false,
+            parent_pid: None,
+            note: "process is gone".to_string(),
+        }),
+        juggler_supervisor::OwnerState::Alive { ppid } => Ok(OrphanVerifyInfo {
+            pid,
+            alive: true,
+            parent_pid: ppid,
+            note: owner_note(ppid),
+        }),
+    }
+}
+
+/// Human note for a live pid's parent state.
+fn owner_note(ppid: Option<u32>) -> String {
+    match ppid {
+        Some(1 | 0) => "alive — re-parented to init/launchd (its parent exited)".to_string(),
+        Some(parent) => format!("alive — parent pid {parent}"),
+        None => "alive — parent not readable".to_string(),
+    }
+}
+
+/// Sets the per-Account Tier-1 cleanup opt-in (D-08: off by default;
+/// the toggle is the only way automatic kills ever happen).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message when the Account is unknown.
+#[tauri::command]
+pub fn account_set_cleanup(
+    state: tauri::State<'_, Arc<AppState>>,
+    account_id: String,
+    opt_in: bool,
+) -> AppResult<AccountInfo> {
+    account_set_cleanup_arc(&state, &account_id, opt_in)
+}
+
+/// The Arc-based core (tests call this directly).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message when the Account is unknown.
+pub fn account_set_cleanup_arc(
+    state: &Arc<AppState>,
+    account_id: &str,
+    opt_in: bool,
+) -> AppResult<AccountInfo> {
+    let account = {
+        let storage = lock_storage_arc(state)?;
+        let mut account = storage
+            .accounts()
+            .get(&AccountId::new(account_id.to_string()))?;
+        account.cleanup_opt_in = opt_in;
+        storage.accounts().update(&account)?;
+        account
+    };
+    Ok(account_info_of(&account))
+}
+
+/// The exit-snapshot hook (AJ-E410 Req.3): freezes the pre-exit
+/// descendant rows into the tracker and journals the durable
+/// allow-list. Called by the lifecycle forwarder on every Exited event
+/// (clean exits are recorded too — they simply never surface orphans).
+pub fn record_exit_snapshot(
+    state: &Arc<AppState>,
+    session: &SessionId,
+    root_pid: u32,
+    kind: &ExitKind,
+) {
+    let (rows, root_program) = snapshot_descendants(state, session, root_pid);
+    if let Some(journal) = state.supervisor.journal_ref() {
+        let _ = journal.record_descendants(session, root_pid, kind.is_success(), &rows);
+    }
+    state.orphans.record_exit(juggler_supervisor::ExitSnapshot {
+        session: session.clone(),
+        root_pid,
+        root_program,
+        clean: kind.is_success(),
+        taken_ms: Timestamp::now().millis(),
+        rows,
+    });
+}
+
+/// The frozen pre-exit rows, split into (descendants, root program name).
+/// The root is dead already — its name survives only in the collector's
+/// last tick while it was alive, which is exactly what this reads.
+fn snapshot_descendants(
+    state: &Arc<AppState>,
+    session: &SessionId,
+    root_pid: u32,
+) -> (Vec<juggler_supervisor::DescendantRow>, String) {
+    let Some(collector) = state.resources.lock().ok() else {
+        return (Vec::new(), "the ended instance".to_string());
+    };
+    let frozen = collector.rows(session).unwrap_or_default();
+    let root_program = frozen
+        .iter()
+        .find(|row| row.pid == root_pid)
+        .map_or_else(|| "the ended instance".to_string(), |row| row.name.clone());
+    let rows = frozen
+        .into_iter()
+        .filter(|row| row.pid != root_pid)
+        .map(|row| juggler_supervisor::DescendantRow {
+            pid: row.pid,
+            name: row.name,
+            rss_bytes: row.rss_bytes,
+        })
+        .collect();
+    (rows, root_program)
+}
+
+/// The 2 s sampling tick (AJ-E410 Req.1): collector tick (targeted
+/// refresh + periodic discovery), orphan grace poll with fresh liveness
+/// probes, then the Tier-1 auto-cleanup sweep for opted-in Accounts
+/// (60 s grace, recorded-descendant PIDs only — D-08).
+pub fn processes_tick(state: &Arc<AppState>) {
+    let now = Timestamp::now().millis();
+    let mut confirmed = Vec::new();
+    {
+        let Ok(mut collector) = state.resources.lock() else {
+            return;
+        };
+        collector.tick(&state.supervisor, now);
+        let tracked = state.orphans.tracked_pids();
+        if !tracked.is_empty() {
+            collector.refresh_pids(&tracked);
+            confirmed = state.orphans.poll(now, |pid| collector.lookup(pid));
+        }
+    }
+    if confirmed.is_empty() {
+        return;
+    }
+    // Tier-1 sweep: only Accounts the user opted in, only recorded
+    // descendants, only past the 60 s auto grace.
+    auto_cleanup_sweep(state, now, &confirmed);
+}
+
+/// Runs the opted-in auto-cleanup over the freshly confirmed orphans
+/// past [`juggler_supervisor::AUTO_CLEANUP_GRACE_MS`]. Notify-only by
+/// default: an Account without the opt-in is never touched here.
+pub fn auto_cleanup_sweep(
+    state: &Arc<AppState>,
+    now: i64,
+    confirmed: &[juggler_supervisor::Orphan],
+) {
+    for orphan in confirmed {
+        if now - orphan.parent_exit_ms < juggler_supervisor::AUTO_CLEANUP_GRACE_MS {
+            continue;
+        }
+        let opted_in = account_cleanup_opt_in(state, &orphan.session);
+        if !opted_in {
+            continue;
+        }
+        if !state.orphans.allows(&orphan.session, orphan.pid) {
+            continue; // fail closed even inside the sweep
+        }
+        let outcome =
+            juggler_supervisor::stop_pid_ladder(orphan.pid, Duration::from_secs(5), |pid| {
+                juggler_supervisor::process_alive(pid).is_some()
+            });
+        state.orphans.record_stop(orphan.pid, outcome.clone());
+        if let Some(journal) = state.supervisor.journal_ref() {
+            let _ = journal.record_killed(
+                &orphan.session,
+                orphan.pid,
+                "auto-tier1",
+                outcome.state_label(),
+            );
+        }
+    }
+}
+
+/// Resolves an Instance's Account opt-in (session → launch settings →
+/// account). Unknown links read as not opted-in (fail closed).
+fn account_cleanup_opt_in(state: &Arc<AppState>, session: &SessionId) -> bool {
+    let Ok(storage) = state.storage.lock() else {
+        return false;
+    };
+    let Ok(record) = storage.sessions().get(session) else {
+        return false;
+    };
+    let Ok(recipe) = storage.profiles().get(&record.profile) else {
+        return false;
+    };
+    storage
+        .accounts()
+        .get(&recipe.account)
+        .is_ok_and(|account| account.cleanup_opt_in)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -2122,6 +2627,7 @@ mod tests {
                 label: "Work Max".into(),
                 plan: None,
                 state_dir: std::env::temp_dir().join("aij-e401-account-state"),
+                cleanup_opt_in: false,
             })
             .expect("seed account");
         for (id, model) in [("rec-1", Some("opus")), ("rec-2", None)] {
@@ -2319,6 +2825,7 @@ mod tests {
                 label: "Bench".into(),
                 plan: None,
                 state_dir: std::env::temp_dir().join("aij-e401-bench"),
+                cleanup_opt_in: false,
             })
             .expect("seed account");
         storage

@@ -45,6 +45,31 @@ enum Entry {
         signal: Option<i32>,
         at: i64,
     },
+    /// AJ-E410: the descendant snapshot recorded at exit — the durable
+    /// allow-list for orphan stops (kills only ever touch these PIDs).
+    Descendants {
+        session: String,
+        root_pid: u32,
+        clean: bool,
+        rows: Vec<JournalDescendant>,
+        at: i64,
+    },
+    /// AJ-E410 / D-08: the audit trail for every kill the app performs
+    /// (manual orphan stops and opted-in Tier-1 auto-cleanup alike).
+    Killed {
+        session: String,
+        pid: u32,
+        trigger: String,
+        outcome: String,
+        at: i64,
+    },
+}
+
+/// One recorded descendant row (journal form).
+#[derive(Serialize, Deserialize)]
+struct JournalDescendant {
+    pid: u32,
+    name: String,
 }
 
 #[derive(Default)]
@@ -140,6 +165,62 @@ impl Journal {
         })
     }
 
+    /// Records the descendant snapshot taken at exit (AJ-E410) — the
+    /// durable allow-list for orphan stops.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SupervisorError::Journal`] on write failures.
+    pub fn record_descendants(
+        &self,
+        session: &SessionId,
+        root_pid: u32,
+        clean: bool,
+        rows: &[crate::orphans::DescendantRow],
+    ) -> Result<(), SupervisorError> {
+        self.append(&Entry::Descendants {
+            session: session.to_string(),
+            root_pid,
+            clean,
+            rows: rows
+                .iter()
+                .map(|row| JournalDescendant {
+                    pid: row.pid,
+                    name: row.name.clone(),
+                })
+                .collect(),
+            at: juggler_core::model::Timestamp::now().millis(),
+        })
+    }
+
+    /// Audit-logs one kill (D-08: every kill is journal-recorded — who
+    /// (`trigger`: `manual` / `auto-tier1`), what, when, outcome).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SupervisorError::Journal`] on write failures.
+    pub fn record_killed(
+        &self,
+        session: &SessionId,
+        pid: u32,
+        trigger: &str,
+        outcome: &str,
+    ) -> Result<(), SupervisorError> {
+        self.append(&Entry::Killed {
+            session: session.to_string(),
+            pid,
+            trigger: trigger.to_string(),
+            outcome: outcome.to_string(),
+            at: juggler_core::model::Timestamp::now().millis(),
+        })
+    }
+
+    /// The journal's durable path (evidence/audit reads).
+    #[must_use]
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
     /// Replays the journal and returns processes that were spawned without a
     /// recorded exit **and** are still alive. Zombies count as dead.
     ///
@@ -183,6 +264,10 @@ impl Journal {
                         last.exited = true;
                     }
                 }
+                // Descendant snapshots and kill audit rows are not
+                // adoption state — recorded for the allow-list/audit
+                // readers, skipped by the replay.
+                Entry::Descendants { .. } | Entry::Killed { .. } => {}
             }
         }
         let alive = alive_pids();

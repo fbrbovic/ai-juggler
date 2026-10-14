@@ -236,7 +236,7 @@
 - Req.7: `quota_forecast_label(quota_used_pct, pct_burned_last_5_min)` renders `~L-Hm at current rate · Est` (±33% range) or `not burning`; the command passes burn 0.0 today (deltas unobservable until AJ-E606+) — honest idle, wired for the future feed.
 - Req.6: CPU/RAM footnote names the AJ-E410 collector; fixtures are provider-shape-agnostic JSONL (`tests/fixtures/`), with Codex `token_usage_record` / ZCode `model_usage` shapes deferred to their adapter tasks (E5/E6) rather than guessed.
 
-### AJ-E410 Processes tab, resource collector, and orphan (left-behind) contract | Status: TODO | Priority P0 | Effort L | Depends: AJ-E406,AJ-E401
+### AJ-E410 Processes tab, resource collector, and orphan (left-behind) contract | Status: DONE-EVIDENCED (zcode-primary, 2026-10-13) | Priority P0 | Effort L | Depends: AJ-E406,AJ-E401
 **Goal**: Collect per-tree CPU/RAM (I-07 sparkline source), render the live Processes tree for every selection, and surface orphaned descendants after Instance exit with verified stop actions.
 **User story**: As a developer whose dev server outlived its agent, I want `Orphaned - left behind (2)` with PIDs and a verified Stop, so that zombies stop eating my machine (expected-worfklow.md:17-18).
 **Requirements**:
@@ -255,6 +255,13 @@
 **Files to touch**: `crates/juggler-supervisor/src/supervisor.rs:341,435,557`, `crates/juggler-supervisor/src/journal.rs:22,151`, `crates/juggler-supervisor/src/lifecycle.rs`, `crates/juggler-app/src/commands.rs:503,733`, `ui/src/screens/WorkPanels.tsx`, `docs/SPEC.md:225,231-235` (read only).
 **Research basis**: pass2/04 §5.1 Processes row + orphan contract (lines 301, 383-403), §7.3 (482-494); SPEC.md:225,234; expected-worfklow.md:15-18; decision-log D-08 (notify-only default, Clean-safe opt-in).
 **Handover note**: Zero setpgid/killpg exists under crates/ today (pass2 05 §2) — attribution is ppid-map + journal, not process groups; do not claim tree-kill safety beyond recorded descendants. Coordinate PID-identity verification (pid reuse) with the E5 cleanup epic before wiring `Stop all`.
+*Implementation mapping (corrected in this task's PR per the claiming protocol)*:
+- Engine: new `crates/juggler-supervisor/src/orphans.rs` (tracker + TERM→KILL ladder + `verify_owner`) + `LiveStatsCollector` upgraded to the 2 s tick model (per-tree `ProcessRow`s + 150-sample rings); journal gains `descendants` (durable allow-list) and `killed` (D-08 audit) entries — `supervision.jsonl` stays append-only, old readers skip new tags.
+- Wiring: `processes_tick` (2 s) joins the read-model ticks; the lifecycle forwarder calls `record_exit_snapshot` on every Exited (clean exits recorded, never surfaced); commands `instance_processes` / `orphan_stop` / `orphan_stop_all` / `orphan_verify` / `account_set_cleanup` registered; `Account.cleanup_opt_in` lands via schema v7 (additive, default 0).
+- Staggering: one sampler thread + one sysinfo table means the per-tree herd cannot exist by construction — targeted refreshes of known pids every 2 s, full-table discovery every 5th tick (+3 warmup ticks); overhead gate measures targeted-tick mean at 20 trees against the 1%-of-2s budget. Req.2's `descendants()` is realised as the ppid-map walk inside the collector (the old `Supervisor::descendants` one-shot helper remains for compatibility).
+- UI: `ProcessesTab` (live tree + orphans + confirms) and read-only `AggregateProcesses` rollups in the E406 shell; the tab's data source is the injectable `ProcessesBridge` seam (default = real bridge) because vitest 5's mocker did not intercept this panel's dynamic-import site; Quality/Performance gains `CPU / RAM now` (Measured) + `2s sampling` footnote — completing E409 Req.6.
+- `Stop all` ships guarded by the recorded-descendant allow-list only; PID-identity verification (pid reuse, port re-probe) stays the E5/AJ-E503 seam per the handover note — no tree-kill safety claimed beyond recorded descendants.
+- Fixtures: fake-harness gains `--spawn-child PROG --child-args "…" [--child-ignore-term]` (stdio null; the ignore-term variant wraps in `bash -c "trap '' TERM; exec …"` — SIG_IGN survives exec; workspace forbids unsafe code so no pre_exec).
 
 ### AJ-E411 Subscription-expiry warning hook (manual renewal date, D-12) | Status: TODO | Priority P1 | Effort M | Depends: AJ-E401,AJ-E408
 **Goal**: Add the optional user-entered renewal date per Account, its approaching-expiry warning on row + Account inspector, and the gated research hook for any future sanctioned source.

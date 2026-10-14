@@ -38,6 +38,7 @@ fn test_account(state_dir: &std::path::Path) -> juggler_core::model::Account {
         label: "Fake".into(),
         plan: None,
         state_dir: state_dir.to_path_buf(),
+        cleanup_opt_in: false,
     }
 }
 

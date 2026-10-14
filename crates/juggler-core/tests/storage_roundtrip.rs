@@ -50,6 +50,7 @@ fn arb_account() -> impl Strategy<Value = Account> {
             label,
             plan: plan.map(PlanTier::new),
             state_dir: PathBuf::from(state_dir),
+            cleanup_opt_in: false,
         })
 }
 
@@ -178,6 +179,7 @@ fn seed_chain(storage: &Storage) -> (Account, Profile) {
         label: "Seed".into(),
         plan: Some(PlanTier::new("max-20x")),
         state_dir: PathBuf::from("/tmp/seed"),
+        cleanup_opt_in: false,
     };
     let profile = Profile {
         id: ProfileId::new("seed-profile"),
@@ -529,8 +531,8 @@ fn v4_database_upgrades_in_place_to_v5_with_identical_values() {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     assert_eq!(
-        version, 6,
-        "v4 → current (v6, AJ-E405 attention) exactly once, on open"
+        version, 7,
+        "v4 → current (v7, AJ-E410 cleanup opt-in) exactly once, on open"
     );
 
     let account = storage.accounts().get(&AccountId::new("acc-1")).unwrap();
@@ -557,7 +559,7 @@ fn v4_database_upgrades_in_place_to_v5_with_identical_values() {
         .raw_conn()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 6);
+    assert_eq!(version, 7);
     assert!(storage.sessions().get(&SessionId::new("sess-1")).is_ok());
 }
 
