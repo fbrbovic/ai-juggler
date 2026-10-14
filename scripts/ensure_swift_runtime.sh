@@ -4,8 +4,10 @@
 # with FULL Xcode toolchains only. CI is unaffected (Linux verify never
 # links it; build-macos compiles but never runs the binary). This
 # script makes local `cargo test/run` work without Xcode by (a) linking
-# the CLT static compat lib and (b) providing a stub for the dylib load
-# command (the bridge uses none of its symbols) plus an rpath to it.
+# the CLT static compat lib and (b) providing a link-time stub for the
+# dylib load command — at RUNTIME the OS's shared-cache copy under
+# /usr/lib/swift wins (rpath order below), supplying the real Swift
+# Concurrency symbols the bridge calls.
 # No-op on non-macOS and when a full Xcode is selected.
 set -euo pipefail
 
@@ -32,5 +34,11 @@ if [ ! -f "$STUB" ]; then
         -install_name @rpath/libswift_Concurrency.dylib -x c -
 fi
 
+# rpath ORDER is load-bearing (AJ-E415 real-capture fix): /usr/lib/swift
+# comes FIRST — the OS provides libswift_Concurrency.dylib from the dyld
+# shared cache even without a file on disk (verified: dlopen +
+# swift_task_create resolve). The empty stub in target/debug stays as a
+# LINK-time satisfier only; at runtime the OS runtime wins, so the
+# bridge's _swift_task_* calls land on real symbols instead of NULL.
 # Exported by callers via $(scripts/ensure_swift_runtime.sh).
-echo "RUSTFLAGS=-C link-arg=-L$CLT_SWIFT -C link-arg=-lswiftCompatibility56 -C link-arg=-Wl,-rpath,$REPO_ROOT/target/debug"
+echo "RUSTFLAGS=-C link-arg=-L$CLT_SWIFT -C link-arg=-lswiftCompatibility56 -C link-arg=-Wl,-rpath,/usr/lib/swift -C link-arg=-Wl,-rpath,$REPO_ROOT/target/debug"

@@ -36,13 +36,90 @@ fn cpu_percent() -> Option<f32> {
         .ok()
 }
 
+/// Launches TextEdit with the probe document and waits for the
+/// window to settle — permission-free (a System Events window-name
+/// poll needs Accessibility; `pgrep` + a settle delay does not).
+/// Returns the doc path; cleanup quits TextEdit ONLY when this test
+/// started it, else leaves the app as it was found.
+fn launch_probe_window() -> Option<(std::path::PathBuf, bool, Option<u32>)> {
+    let was_running = std::process::Command::new("pgrep")
+        .arg("-x")
+        .arg("TextEdit")
+        .status()
+        .is_ok_and(|code| code.success());
+    let doc = std::env::temp_dir().join("aij-e415-probe");
+    std::fs::write(&doc, "AJ-E415 real-capture probe\n").ok()?;
+    let _ = std::process::Command::new("open").arg(&doc).status();
+    // The titled window (named after the file) appears with the app.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        let running = std::process::Command::new("pgrep")
+            .arg("-x")
+            .arg("TextEdit")
+            .status()
+            .is_ok_and(|code| code.success());
+        if running {
+            std::thread::sleep(Duration::from_millis(1_500));
+            let pid = std::process::Command::new("pgrep")
+                .arg("-x")
+                .arg("TextEdit")
+                .output()
+                .ok()
+                .and_then(|out| {
+                    String::from_utf8_lossy(&out.stdout)
+                        .trim()
+                        .split('\n')
+                        .next()
+                        .and_then(|first| first.trim().parse::<u32>().ok())
+                });
+            return Some((doc, was_running, pid));
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    None
+}
+
+fn close_probe_window(doc: &std::path::Path, was_running: bool) {
+    if was_running {
+        // Best-effort close of just our document (Automation grant
+        // permitting); a pre-existing instance is never quit.
+        let _ = std::process::Command::new("osascript")
+            .args([
+                "-e",
+                "tell application \"TextEdit\" to close (every document whose name is \"aij-e415-probe.txt\") saving no",
+            ])
+            .status();
+    } else {
+        let _ = std::process::Command::new("pkill")
+            .arg("-x")
+            .arg("TextEdit")
+            .status();
+    }
+    let _ = std::fs::remove_file(doc);
+}
+
 #[test]
 #[ignore = "drives real ScreenCaptureKit; local evidence run only"]
 fn real_capture_record() {
     let source = ScreenshotSource;
+    let probe = launch_probe_window();
+    if let Some((_, _, Some(pid))) = &probe {
+        println!("[record] probe window up: TextEdit pid {pid}");
+    }
+    if probe.is_none() {
+        println!(
+            "[record] probe window unavailable — continuing with the denied/idle enumeration probe"
+        );
+    }
+    let probe_pid = match &probe {
+        Some((_, _, pid)) => *pid,
+        None => None,
+    };
     let identity = juggler_core::model::WindowIdentity {
-        pid: 0, // forces the by-pid miss; the source falls back to its
-        // content enumeration — with no grant this is the denied probe
+        // The REAL TextEdit pid when the probe is up (title disambiguates
+        // its window from any user document); without the probe a pid of 0
+        // can never match — the empty/denied enumeration signature.
+        pid: probe_pid.unwrap_or(0),
         bundle_id: Some("com.apple.TextEdit".into()),
         title: Some("aij-e415-probe".into()),
         cgwindow_id: None,
@@ -82,8 +159,16 @@ fn real_capture_record() {
                 [PreviewEvent::Phase { phase, .. }] if *phase == juggler_app::preview::PreviewPhase::Denied
             ));
             println!("[record] driver emitted exactly one Denied phase, no frames");
+            if let Some((doc, was_running, _)) = &probe {
+                close_probe_window(doc, *was_running);
+            }
         }
-        Err(other) => panic!("unexpected capture error: {other:?}"),
+        Err(other) => {
+            if let Some((doc, was_running, _)) = &probe {
+                close_probe_window(doc, *was_running);
+            }
+            panic!("unexpected capture error: {other:?}");
+        }
         Ok(png) => {
             // The granted-machine live record: one real frame.
             assert!(
@@ -109,6 +194,9 @@ fn real_capture_record() {
             println!(
                 "[record] 2 s polling: {frames} frames; cpu before={before:?}% during={during:?}% after={after:?}%"
             );
+            if let Some((doc, was_running, _)) = &probe {
+                close_probe_window(doc, *was_running);
+            }
         }
     }
 }

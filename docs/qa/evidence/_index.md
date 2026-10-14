@@ -24,7 +24,7 @@
 | AJ-E412 | PASS12 | 2026-10-14 | [manifest](AJ-E412/manifest.md) |
 | AJ-E413 | PASS11 | 2026-10-14 | [manifest](AJ-E413/manifest.md) |
 | AJ-E414 | PASS13 | 2026-10-14 | [manifest](AJ-E414/manifest.md) |
-| AJ-E415 | PASS7 | 2026-10-14 | [manifest](AJ-E415/manifest.md) |
+| AJ-E415 | PASS13 | 2026-10-13 | [manifest](AJ-E415/manifest.md) |
 | AJ-E501 | PASS10 | 2026-10-14 | [manifest](AJ-E501/manifest.md) |
 | AJ-E502 | PASS8 | 2026-10-13 | [manifest](AJ-E502/manifest.md) |
 | AJ-E503 | PASS9 | 2026-10-13 | [manifest](AJ-E503/manifest.md) |

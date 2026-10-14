@@ -2185,6 +2185,7 @@ dependencies = [
  "juggler-adapter",
  "juggler-adapters",
  "juggler-core",
+ "juggler-scap-init",
  "juggler-supervisor",
  "screencapturekit",
  "serde",
@@ -2219,6 +2220,13 @@ version = "0.0.1"
 [[package]]
 name = "juggler-link"
 version = "0.0.1"
+
+[[package]]
+name = "juggler-scap-init"
+version = "0.0.1"
+dependencies = [
+ "screencapturekit",
+]
 
 [[package]]
 name = "juggler-supervisor"

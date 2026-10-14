@@ -369,7 +369,7 @@
 - Outcomes (Req.5): copy-exact `Focused window` / `App opened — window not found` / `App not running — Relaunch?` as text on the Instance (+ targeted window title).
 - Evidence: `docs/qa/evidence/AJ-E414/` — 12/12 tier unit tests (two-window fixture 10/10 with trap-order asserts), 9/9 desktop integration, real two-window TextEdit record (this machine: degraded tier 10/10 in 118–189 ms; the granted-machine focused record awaits the maintainer's Accessibility toggle — same command re-run); gallery `_gallery/14-focus/` (4 captures, vision-verified).
 
-### AJ-E415 Desktop live preview — read-only window mirror in the panel | Status: BLOCKED — real capture needs one `unsafe` CoreGraphics init the workspace `unsafe_code = "forbid"` law forbids (binding gap; maintainer decision required — evidence: docs/qa/evidence/AJ-E415/manifest.md) | Priority P1 | Effort L | Depends: AJ-E413, AJ-E414
+### AJ-E415 Desktop live preview — read-only window mirror in the panel | Status: DONE-EVIDENCED (evidence: docs/qa/evidence/AJ-E415/manifest.md — complete via D-17, 2026-10-13) | Priority P1 | Effort L | Depends: AJ-E413, AJ-E414
 **Goal**: Show a live, read-only ScreenCaptureKit preview of a desktop instance's window inside its panel, so its state is glanceable without switching away; clicking the preview focuses the real window.
 **User story**: As a user supervising a desktop agent, I want to see whether it is working, stuck or asking something, without leaving Juggler.
 **Requirements**:
@@ -597,3 +597,19 @@ implementers most often shortcut:
 
 *End of E4 task file. Source of truth for scope disputes: decision-log
 D-06/D-07/D-12 first, then pass2/04 section cited in the task, then SPEC.*
+
+*D-17 unblock mapping (2026-10-13, this task's completion PR)*:
+- Decision D-17 recorded (maintainer grant quoted) — the ONE audited
+  `unsafe` call lives in `crates/juggler-scap-init` (the only crate not
+  inheriting the workspace lint baseline; SAFETY audit in source).
+- The original crash had a second cause on CLT-only machines: the empty
+  `libswift_Concurrency.dylib` stub shadowed the OS runtime —
+  `ensure_swift_runtime.sh` now puts `/usr/lib/swift` FIRST in rpath
+  order (shared-cache runtime supplies real `_swift_task_*` symbols).
+- `ScreenshotSource` is live (init via the shim; empty-desktop
+  enumeration maps to `PermissionDenied` — macOS 15+ TCC filtering);
+  `ParkedSource` deleted; UI copy `Live preview is not supported on
+  this platform` for the remaining non-macOS phase.
+- Evidence: `real-capture-live.log` (LIVE PNG frames, 1.7–2.3% CPU
+  polling) + `sample-frame.png` (real 1280×505 capture) in
+  `docs/qa/evidence/AJ-E415/`.

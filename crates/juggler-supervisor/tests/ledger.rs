@@ -236,15 +236,30 @@ fn groups_own_descendants_and_flag_setsid_escapees() {
         .unwrap()
         .as_millis() as i64;
     let mut tick_n = 0_i64;
+    // AJ-E806 flake fix (CI Linux): the probe waits for the WHOLE
+    // fixture shape — the escaped flag AND the two in-group helpers —
+    // because full-scan discovery of each new pid is not simultaneous
+    // (python3's setsid startup lags the grandchild's), and an early
+    // exit on the flag alone raced the grandchild's first full scan.
     let flagged = wait_for(15_000, || {
         tick_n += 1;
         collector.tick(&supervisor, base_ms + tick_n * 2_000);
         store
             .rows_for_session(&session)
-            .map(|rows| rows.iter().any(|r| r.escaped_group && r.role == "helper"))
+            .map(|rows| {
+                let escaped = rows.iter().any(|r| r.escaped_group && r.role == "helper");
+                let contained = rows
+                    .iter()
+                    .filter(|r| r.role == "helper" && !r.escaped_group)
+                    .count();
+                escaped && contained >= 2
+            })
             .unwrap_or(false)
     });
-    assert!(flagged, "the setsid escapee was never flagged");
+    assert!(
+        flagged,
+        "the fixture shape never landed (escapee + 2 in-group)"
+    );
 
     let rows = store.rows_for_session(&session).unwrap();
     dump_rows(&rows);

@@ -1326,7 +1326,9 @@ fn emit_preview_event(app: &tauri::AppHandle, event: crate::preview::PreviewEven
                         .to_string()
                 }
                 crate::preview::PreviewPhase::Unsupported => {
-                    "Live preview is parked in this build — the capture runtime needs a platform decision (AJ-E415)".to_string()
+                    // D-17 unblocked macOS; this phase is now only the
+                    // honest non-macOS answer.
+                    "Live preview is not supported on this platform".to_string()
                 }
             };
             let _ = app.emit(
@@ -1432,12 +1434,16 @@ pub fn preview_start(
         let emit = move |event: crate::preview::PreviewEvent| {
             emit_preview_event(&app, event);
         };
-        // AJ-E415 binding note: the real `ScreenshotSource` is parked —
-        // the binding needs an `unsafe` CoreGraphics init the workspace
-        // law forbids (see preview.rs and the crash evidence). The
-        // honest parked phase renders instead; no fake frames.
+        // D-17: the REAL capture source on macOS — the audited init
+        // shim (crates/juggler-scap-init) satisfies the binding's init
+        // requirement inside the workspace's unsafe-free law. Other
+        // platforms keep the honest unsupported source.
+        #[cfg(target_os = "macos")]
         let source: std::sync::Arc<dyn crate::preview::CaptureSource> =
-            std::sync::Arc::new(crate::preview::ParkedSource);
+            std::sync::Arc::new(crate::preview::ScreenshotSource);
+        #[cfg(not(target_os = "macos"))]
+        let source: std::sync::Arc<dyn crate::preview::CaptureSource> =
+            std::sync::Arc::new(crate::preview::UnsupportedSource);
         let driver = crate::preview::PreviewDriver {
             session_id: session.as_str(),
             identity,

@@ -127,11 +127,11 @@ describe("AJ-E415 desktop live preview (read-only mirror)", () => {
   it("unsupported platform renders the honest text and no frame", () => {
     const { view } = shell({
       frame: null,
-      phases: [state("unsupported", "Live preview is parked in this build — the capture runtime needs a platform decision (AJ-E415)")],
+      phases: [state("unsupported", "Live preview is not supported on this platform")],
     });
     const card = view.container.querySelector('[data-testid="desktop-preview"]')!;
     expect(card.querySelector('[data-testid="preview-unsupported"]')?.textContent)
-      .toContain("parked in this build");
+      .toContain("not supported on this platform");
     expect(card.querySelector('[data-testid="preview-frame"]')).toBeNull();
   });
 
