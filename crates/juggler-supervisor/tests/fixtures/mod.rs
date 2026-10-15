@@ -129,9 +129,18 @@ impl FixtureSet {
                 // full-triple verify flaps and the row flips
                 // `unverifiable`. bash is a stable real path on both
                 // platforms and still guesses TerminalShell.
+                //
+                // The trap logs through a FILE DESCRIPTOR opened once
+                // (no per-trap path re-parsing), marks itself
+                // installed, and the body sleeps in 1 s beats — the
+                // trap handler runs at the next beat even under
+                // deferred-handler semantics, and a stray long
+                // foreground child can never swallow it.
                 "shell" => format!(
-                    "bash -c 'trap \"echo TERM >> {trap}\" TERM; trap \"echo HUP >> {trap}\" HUP; \
-                     trap \"echo INT >> {trap}\" INT; touch {ready}; sleep 300' &"
+                    "bash -c 'exec 9>>{trap}; \
+                     trap \"echo TERM >&9\" TERM; trap \"echo HUP >&9\" HUP; \
+                     trap \"echo INT >&9\" INT; touch {ready}; \
+                     while :; do sleep 1; done' &"
                 ),
                 _ => unreachable!("fixture kind"),
             };
