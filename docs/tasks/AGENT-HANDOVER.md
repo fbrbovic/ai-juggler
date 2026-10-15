@@ -99,9 +99,14 @@ Process (this task system):
 4. Run the gates the task names (`just verify`, `cargo test
    --workspace`, `pnpm --dir ui build`, visual/a11y suites as they
    land). A red gate is a finding, not an obstacle to route around.
-   BATCH them (maintainer directive 2026-10-13): affected suites only
-   while iterating; ONE full chunked pass just before the PR — see
-   IMPLEMENTATION-AGENT-PROMPT.md §5 "Test batching strategy".
+   BATCH them (maintainer directive 2026-10-13, reinforced
+   2026-10-15): affected suites only while iterating; and PUSH/CI
+   are batched too — MULTIPLE tasks (or a whole phase) per push,
+   ONE full chunked pass + ONE PR + ONE CI watch per batch, never
+   per task, never per fix. See IMPLEMENTATION-AGENT-PROMPT.md §5
+   "Test batching strategy" (level b). If you are about to push and
+   the previous push was < a full task ago, STOP — you are
+   violating the directive.
 5. Store evidence as you go (AJ-E801 manifest), including failures;
    a failed run with analysis beats a curated green one.
 6. Flip to `DONE-EVIDENCED` only with evidence links in the same PR.
