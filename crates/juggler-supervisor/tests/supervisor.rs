@@ -180,7 +180,7 @@ fn process_tree_descendants_are_tracked() {
     let session = SessionId::new("s-tree");
 
     // sh spawns a child; the supervisor must see the whole tree.
-    supervisor
+    let spawned = supervisor
         .spawn(
             &session,
             &sh_spec("sleep 300 & sleep 300", workdir.path()),
@@ -197,6 +197,41 @@ fn process_tree_descendants_are_tracked() {
 
     supervisor.stop(&session, Duration::from_secs(5)).unwrap();
     wait_for_exit(&supervisor, &session);
+
+    // AJ-E507 Req.4: `stop` delegates to the TERM→grace→KILL ladder
+    // over the verified group — the helpers must die WITH the root
+    // (before E507 they outlived it and fell to the orphan
+    // reconciler; that was F-9). Probe every tracked pid until none
+    // answers `kill -0`.
+    let mut members = descendants;
+    members.push(spawned.pid);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut all_gone = false;
+    while std::time::Instant::now() < deadline {
+        if members.iter().all(|pid| !process_alive_via_kill(*pid)) {
+            all_gone = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let survivors = members
+        .iter()
+        .filter(|pid| process_alive_via_kill(**pid))
+        .collect::<Vec<_>>();
+    assert!(
+        all_gone,
+        "group members survived stop(): still alive {survivors:?}"
+    );
+}
+
+/// `kill -0` liveness probe (test-side; the ladder has its own).
+fn process_alive_via_kill(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 #[test]
@@ -427,4 +462,121 @@ fn live_stats_collector_batches_and_masks_first_cpu_sample() {
     assert_eq!(dead.child_count, 0);
     assert_eq!(dead.rss_bytes, 0);
     assert_eq!(dead.cpu_pct, Some(0.0));
+}
+
+// --- AJ-E507: the ladder primitive's outcome vocabulary -------------
+
+use juggler_supervisor::tree::{ProcessOutcome, terminate_group};
+
+fn kill9(pid: u32) {
+    let _ = std::process::Command::new("kill")
+        .arg("-9")
+        .arg(pid.to_string())
+        .status();
+}
+
+/// Spawns `script` DETACHED (double-fork style: an outer `/bin/sh`
+/// starts it, logs its pid, exits) and returns the pid. Targets must
+/// NOT be direct children of the test process — an unreaped zombie
+/// answers `kill -0` as alive and defeats the ladder's probes; the
+/// real fixture shape (helper reparented to launchd) probes honestly.
+fn detached_target(script: &str) -> (u32, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut outer = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!("( {script} ) & echo $! > target.pid; exit 0"))
+        .current_dir(dir.path())
+        .spawn()
+        .unwrap();
+    let _ = outer.wait();
+    let pid = std::fs::read_to_string(dir.path().join("target.pid"))
+        .unwrap()
+        .trim()
+        .parse::<u32>()
+        .unwrap();
+    (pid, dir)
+}
+
+#[test]
+fn ladder_reports_already_gone_for_dead_pids() {
+    // A pid that exited before the ladder ran: AlreadyGone, and
+    // AlreadyGone is SUCCESS (Req.6) — never an error.
+    let (pid, _dir) = detached_target("exec sleep 0.2");
+    std::thread::sleep(Duration::from_millis(700));
+    let outcome = terminate_group(Duration::from_secs(2), move || vec![pid], || false);
+    assert_eq!(outcome.members, vec![(pid, ProcessOutcome::AlreadyGone)]);
+    assert!(outcome.all_succeeded());
+    assert!(!outcome.cancelled);
+}
+
+#[test]
+fn ladder_exits_cooperative_helper_on_term() {
+    let (pid, _dir) = detached_target("exec sleep 30");
+    let outcome = terminate_group(Duration::from_secs(3), move || vec![pid], || false);
+    assert_eq!(outcome.members, vec![(pid, ProcessOutcome::ExitedOnTerm)]);
+    assert!(outcome.all_succeeded());
+    assert!(!process_alive_via_kill(pid));
+}
+
+/// A TERM-ignoring target that is READY before its pid returns
+/// (python installs SIG_IGN, then touches `ignorer.ready`): the
+/// ladder's TERM must never race the guard's installation — a shell
+/// `trap` has the same startup window, and dash's subshell trap
+/// handling differs from bash anyway.
+fn detached_ignorer() -> (u32, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let ready = dir.path().join("ignorer.ready");
+    let ready_path = ready.to_string_lossy().to_string();
+    let mut outer = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!(
+            "( exec python3 -c 'import signal,os,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); open(\"{ready_path}\", \"w\").close(); time.sleep(300)' ) & echo $! > target.pid; exit 0"
+        ))
+        .current_dir(dir.path())
+        .spawn()
+        .unwrap();
+    let _ = outer.wait();
+    let pid = std::fs::read_to_string(dir.path().join("target.pid"))
+        .unwrap()
+        .trim()
+        .parse::<u32>()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !ready.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        ready.exists(),
+        "ignorer never became ready — fixture broken"
+    );
+    (pid, dir)
+}
+
+#[test]
+fn ladder_escalates_to_kill_for_term_ignorer() {
+    // The helper ignores TERM and keeps running: the ladder must KILL
+    // it after grace and report `needed KILL` — the "Ignored SIGTERM"
+    // shape (Req.3).
+    let (pid, _dir) = detached_ignorer();
+    let outcome = terminate_group(Duration::from_millis(300), move || vec![pid], || false);
+    assert_eq!(outcome.members, vec![(pid, ProcessOutcome::NeededKill)]);
+    assert!(outcome.all_succeeded());
+    assert!(!process_alive_via_kill(pid));
+}
+
+#[test]
+fn ladder_cancel_mid_grace_leaves_survivor_running() {
+    // Cancel during grace: NO escalation, the survivor reports
+    // `TERM'd — outcome unknown`, and the process is still alive.
+    // (The target ignores TERM — cancelling does not unsend the
+    // signal, so an unguarded target would legitimately die from it.)
+    let (pid, _dir) = detached_ignorer();
+    let outcome = terminate_group(Duration::from_secs(30), move || vec![pid], || true);
+    assert_eq!(outcome.members, vec![(pid, ProcessOutcome::TermSent)]);
+    assert!(outcome.cancelled);
+    assert!(
+        process_alive_via_kill(pid),
+        "cancel must not escalate to KILL"
+    );
+    kill9(pid);
 }

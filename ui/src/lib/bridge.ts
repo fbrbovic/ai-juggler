@@ -814,6 +814,11 @@ export async function cleanupAuditExport(): Promise<string> {
 export type { CleanupRowInfo, EvidenceChainInfo, VerificationBadgeInfo } from "../components/ProcessRow";
 export type { CleanupGroupInfo } from "../screens/CleanupCentre";
 import type { CleanupInventoryData } from "../screens/CleanupCentre";
+import type {
+  KillExecuteData,
+  KillScope,
+  KillVerifyData,
+} from "../components/KillSheet";
 
 /** AJ-E506: the read-only inventory (Tier 0). */
 export async function cleanupInventory(filter: string): Promise<CleanupInventoryData> {
@@ -828,6 +833,83 @@ export async function cleanupInventory(filter: string): Promise<CleanupInventory
     );
   }
   return invoke<CleanupInventoryData>("cleanup_inventory", { filter });
+}
+
+/** AJ-E507: the kill sheet's step-1 verify (zero signalling). */
+export async function killVerify(sessionId: string, pid: number): Promise<KillVerifyData> {
+  if (!hasBackend) {
+    return (window as unknown as { __AIJ_KILL_VERIFY__?: (session: string, pid: number) => KillVerifyData })
+      .__AIJ_KILL_VERIFY__?.(sessionId, pid) ?? {
+      pid,
+      session: sessionId,
+      verified: false,
+      refusal: "This PID now belongs to a different program — Juggler will not touch it.",
+      exe_path: "?",
+      cmdline: "",
+      cwd: "",
+      ports: [],
+      pgid: null,
+      escaped_group: false,
+      members: [],
+      tree_pids: [],
+      platform: "TERM → grace → KILL",
+      grace_secs: 5,
+      provider: "unknown",
+      account_id: null,
+      project_id: null,
+    };
+  }
+  return invoke<KillVerifyData>("kill_verify", { sessionId, pid });
+}
+
+/** AJ-E507: the audited TERM→grace→KILL ladder (step 3). */
+export async function killExecute(
+  sessionId: string,
+  pid: number,
+  scope: KillScope,
+  attempt: string,
+  goalPort: number | null,
+): Promise<KillExecuteData> {
+  if (!hasBackend) {
+    const fixture = (
+      window as unknown as {
+        __AIJ_KILL_EXECUTE__?: (scope: KillScope, goalPort: number | null) => KillExecuteData;
+      }
+    ).__AIJ_KILL_EXECUTE__;
+    if (fixture !== undefined) {
+      return fixture(scope, goalPort);
+    }
+    // The countdown state's seam: a ladder that never resolves.
+    if ((window as unknown as { __AIJ_KILL_EXECUTE_PENDING__?: boolean }).__AIJ_KILL_EXECUTE_PENDING__) {
+      return new Promise<KillExecuteData>(() => {});
+    }
+    return {
+      refusal: null,
+      members: [{ pid, outcome: "already gone" }],
+      cancelled: false,
+      all_succeeded: true,
+      still_holding: [],
+      reoffer_pid: null,
+    };
+  }
+  return invoke<KillExecuteData>("kill_execute", { sessionId, pid, scope, attempt, goalPort });
+}
+
+/** AJ-E507: cancel a running ladder's grace window. */
+export async function killCancel(attempt: string): Promise<void> {
+  if (!hasBackend) {
+    return Promise.resolve();
+  }
+  return invoke("kill_cancel", { attempt });
+}
+
+/** AJ-E507: the grace window's per-process exit ticks. */
+export async function killLiveness(pids: number[]): Promise<boolean[]> {
+  if (!hasBackend) {
+    return (window as unknown as { __AIJ_KILL_LIVENESS__?: (pids: number[]) => boolean[] })
+      .__AIJ_KILL_LIVENESS__?.(pids) ?? pids.map(() => false);
+  }
+  return invoke<boolean[]>("kill_liveness", { pids });
 }
 
 /** AJ-E505: the port occupancy map. */

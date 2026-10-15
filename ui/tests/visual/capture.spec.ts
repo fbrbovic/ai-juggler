@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -1338,4 +1338,189 @@ for (const theme of THEMES) {
     );
     await page.screenshot({ path: resolve(GALLERY, `19-cleanup/history-empty-1440x900-${theme}.png`) });
   });
+}
+
+
+// ---------------------------------------------------------------------------
+// AJ-E507 — the verify-before-kill sheet: the three steps and every
+// state. All states ride the SAME needs-attention fixture (verified
+// orphan row holding :5173); the sheet is opened the real way — the
+// row's Terminate… affordance — never mounted out of context.
+// ---------------------------------------------------------------------------
+
+const KILL_VERIFY_OK = {
+  pid: 8123,
+  session: "s-1",
+  verified: true,
+  refusal: null,
+  exe_path: "/usr/local/bin/node",
+  cmdline: "node /srv/web/node_modules/.bin/vite dev",
+  cwd: "/srv/web",
+  ports: [5173],
+  pgid: 8100,
+  escaped_group: false,
+  members: [
+    {
+      pid: 8100,
+      pgid: 8100,
+      exe: "sh",
+      cmdline: "sh -c vite dev",
+      role_guess: "TerminalShell",
+      unsaved_state_warning: "Includes a TerminalShell that may hold unsaved state.",
+      from_ledger: true,
+    },
+    {
+      pid: 8123,
+      pgid: 8100,
+      exe: "node",
+      cmdline: "node vite dev",
+      role_guess: "DevServer",
+      unsaved_state_warning: null,
+      from_ledger: true,
+    },
+  ],
+  tree_pids: [8100, 8123],
+  platform: "TERM → grace → KILL",
+  grace_secs: 5,
+  provider: "claude-code",
+  account_id: "Work Max",
+  project_id: "web",
+};
+
+const KILL_VERIFY_FAILED = {
+  ...KILL_VERIFY_OK,
+  verified: false,
+  refusal: "This PID now belongs to a different program — Juggler will not touch it.",
+  members: [],
+};
+
+const KILL_EXECUTE_REPORT = {
+  refusal: null,
+  members: [
+    { pid: 8100, outcome: "already gone" },
+    { pid: 8123, outcome: "needed KILL" },
+  ],
+  cancelled: false,
+  all_succeeded: true,
+  still_holding: [{ port: 5173, pid: 9100, exe: "node" }],
+  reoffer_pid: 9100,
+};
+
+const KILL_EXECUTE_FREED = {
+  refusal: null,
+  members: [
+    { pid: 8123, outcome: "exited on TERM" },
+  ],
+  cancelled: false,
+  all_succeeded: true,
+  still_holding: [],
+  reoffer_pid: null,
+};
+
+const killSeams = (state: string) => ({
+  verify:
+    state === "verification-failed"
+      ? KILL_VERIFY_FAILED
+      : state === "windows-wording"
+        ? { ...KILL_VERIFY_OK, platform: "TerminateProcess only", grace_secs: 0 }
+        : KILL_VERIFY_OK,
+  pending: state === "grace-countdown",
+  execute: state === "outcome-report" ? KILL_EXECUTE_REPORT : KILL_EXECUTE_FREED,
+});
+
+for (const state of [
+  "verify-pid",
+  "verify-pgid",
+  "verify-tree",
+  "verification-failed",
+  "grace-countdown",
+  "outcome-report",
+  "outcome-freed",
+  "windows-wording",
+] as const) {
+  for (const theme of THEMES) {
+    for (const vp of [
+      { name: "1440x900", width: 1440, height: 900 },
+      { name: "1024x700", width: 1024, height: 700 },
+    ]) {
+      test(`kill-sheet — ${state} — ${vp.name} — ${theme}`, async ({ page }) => {
+        const seams = killSeams(state);
+        await page.addInitScript(
+          ({ fixture, t0, cleanup, theme, seams }) => {
+            (window as never as { __AIJ_FIXTURE__: unknown }).__AIJ_FIXTURE__ = fixture;
+            (window as never as { __AIJ_CLEANUP__: unknown }).__AIJ_CLEANUP__ = cleanup;
+            const w = window as never as Record<string, unknown>;
+            w.__AIJ_KILL_VERIFY__ = () => seams.verify;
+            // The countdown state leaves execute UNSET so the pending
+            // seam applies (a ladder that never resolves); every
+            // other state resolves with the report fixture.
+            if (!seams.pending) {
+              w.__AIJ_KILL_EXECUTE__ = () => seams.execute;
+            }
+            w.__AIJ_KILL_EXECUTE_PENDING__ = seams.pending;
+            // During the countdown the members are still alive (the
+            // per-process ticks show "running" → "exited" honestly).
+            w.__AIJ_KILL_LIVENESS__ = (pids: number[]) => pids.map(() => true);
+            localStorage.setItem("aij.theme", theme);
+            localStorage.setItem("aij.onboarding.dismissed", "1");
+            sessionStorage.setItem("aij.ready.skipped", "1");
+            Date.now = () => t0;
+          },
+          { fixture: allStatuses, t0: T0, cleanup: cleanupFixture("needs-attention"), theme, seams },
+        );
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await page.setViewportSize({ width: vp.width, height: vp.height });
+        await page.goto("/");
+        await page.getByRole("button", { name: "Cleanup" }).click();
+        await expect(page.getByTestId("cleanup-centre")).toBeVisible();
+        // The REAL entry: the verified orphan row's affordance.
+        await page.getByTestId("cleanup-kill-8123").click();
+        await expect(page.getByTestId("kill-sheet-8123")).toBeVisible();
+
+        if (state === "verification-failed") {
+          await expect(page.getByTestId("kill-refused-8123")).toContainText(
+            "This PID now belongs to a different program",
+          );
+          // No kill button in the failed-state DOM (Req.2 gate).
+          const confirm = await page.getByTestId("kill-confirm-8123").count();
+          if (confirm !== 0) throw new Error("kill button present in failed-state DOM");
+        } else if (state === "verify-pgid" || state === "verify-tree") {
+          await expect(page.getByTestId("kill-ready-8123")).toBeVisible();
+          await page
+            .getByTestId(`kill-scope-${state === "verify-pgid" ? "pgid" : "tree"}-8123`)
+            .check();
+          await expect(page.getByTestId("kill-member-8123")).toBeVisible();
+        } else if (state === "grace-countdown") {
+          await expect(page.getByTestId("kill-ready-8123")).toBeVisible();
+          await page.getByTestId("kill-confirm-8123").click();
+          // The spec's "grace countdown at 3 s" moment.
+          await expect(page.getByTestId("kill-countdown-8123")).toContainText("3s", {
+            timeout: 8_000,
+          });
+          await expect(page.getByTestId("kill-tick-8123")).toContainText("running");
+        } else if (state === "outcome-report" || state === "outcome-freed") {
+          await expect(page.getByTestId("kill-ready-8123")).toBeVisible();
+          await page.getByTestId("kill-confirm-8123").click();
+          await expect(page.getByTestId("kill-report-8123")).toBeVisible();
+          if (state === "outcome-report") {
+            await expect(page.getByTestId("kill-still-holding-8123")).toContainText(":5173");
+          } else {
+            await expect(page.getByTestId("kill-success-8123")).toContainText(":5173 is free.");
+          }
+        } else if (state === "windows-wording") {
+          await expect(page.getByTestId("kill-platform-8123")).toContainText(
+            "Windows: TerminateProcess only",
+          );
+        } else {
+          await expect(page.getByTestId("kill-ready-8123")).toBeVisible();
+          await expect(page.getByTestId("kill-confirm-8123")).toContainText(
+            "Terminate vite (PID 8123) and free :5173",
+          );
+        }
+        await page.screenshot({
+          path: resolve(GALLERY, `20-kill/${state}-${vp.name}-${theme}.png`),
+        });
+      });
+    }
+  }
 }

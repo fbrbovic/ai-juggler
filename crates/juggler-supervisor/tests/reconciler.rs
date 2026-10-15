@@ -98,7 +98,7 @@ fn orphan_surfaces_only_after_grace_and_two_ticks() {
     supervisor.set_orphan_grace("claude-code", 3);
 
     // Root + the vite-like outliver.
-    supervisor
+    let spawned = supervisor
         .spawn(&session, &sh_spec("sleep 300 & wait", dir.path()), &ctx())
         .unwrap();
     let mut collector = LiveStatsCollector::new();
@@ -113,8 +113,15 @@ fn orphan_surfaces_only_after_grace_and_two_ticks() {
     });
     assert!(landed, "helper landed in the ledger");
 
-    // Root exits (the stop ladder); the helper survives it.
-    supervisor.stop(&session, Duration::from_secs(5)).unwrap();
+    // Root dies WITHOUT the supervisor's ladder — since AJ-E507
+    // `stop()` TERMs the whole process group (helper included), the
+    // orphan scenario needs a root that dies some other way: an
+    // external SIGKILL to the root pid only (the crash shape the
+    // reconciler exists for). The helper survives it.
+    let _ = std::process::Command::new("kill")
+        .arg("-9")
+        .arg(spawned.pid.to_string())
+        .status();
     let root_exited = wait_for(5_000, || {
         store
             .session_rows(&session)

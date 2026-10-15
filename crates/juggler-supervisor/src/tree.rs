@@ -190,7 +190,7 @@ impl CoreLedgerStore {
     }
 }
 
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 impl LedgerStore for CoreLedgerStore {
     fn boot_id(&self) -> String {
@@ -407,6 +407,28 @@ pub fn verify_with(probe: &dyn IdentityProbe, pid: u32, expect: &ProcessIdentity
     Verification::Verified
 }
 
+/// Boot + start-time verification WITHOUT the exe comparison — for
+/// settled root identities whose exe legitimately moved across
+/// `exec` (the E503/E504 aliasing rule: a `/bin/sh` launch records
+/// `/bin/sh`, the kernel later reads `/bin/bash`). Sound for live
+/// handles we own: an un-reaped child's pid cannot be reused, so
+/// `(boot, start_time)` alone names the process.
+#[must_use]
+pub fn verify_start_time(pid: u32, expect: &ProcessIdentity) -> Verification {
+    let probe = OsIdentityProbe;
+    if probe.boot_id() != expect.boot_id {
+        return Verification::Unverifiable;
+    }
+    let Some(probed) = probe.probe(pid) else {
+        return Verification::Unverifiable;
+    };
+    if probed.start_time == expect.start_time {
+        Verification::Verified
+    } else {
+        Verification::Unverifiable
+    }
+}
+
 /// Adoption replay helper: a pid passes when ANY recorded identity
 /// fully verifies (the spawn-time record AND the post-`exec` settled
 /// record both name our process — a stranger can match neither,
@@ -428,6 +450,288 @@ pub fn verify_any(
         }
     }
     outcome
+}
+
+// --- AJ-E507: the verified TERM→grace→KILL ladder (pass2 §12) ------
+
+/// What the ladder targets: one verified process, or its whole
+/// process group (the deterministic-kill scope created at spawn,
+/// AJ-E502).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LadderScope {
+    /// One verified PID.
+    PidOnly(u32),
+    /// The verified PGID (every member enumerated and reported).
+    Pgid(u32),
+}
+
+/// One member's ladder outcome (Req.6's vocabulary — `AlreadyGone` is
+/// SUCCESS, never an error).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessOutcome {
+    /// Exited after SIGTERM.
+    ExitedOnTerm,
+    /// Survived TERM; needed SIGKILL.
+    NeededKill,
+    /// Gone before/at TERM — success.
+    AlreadyGone,
+    /// Alive even after SIGKILL (unreapable) — the honest failure.
+    Refused,
+    /// TERM delivered, grace cancelled before the outcome was known
+    /// (the caller aborted escalation; the audit row stays pending —
+    /// the same "TERM'd, outcome unknown" language E509 renders).
+    TermSent,
+}
+
+impl ProcessOutcome {
+    /// The stable API/UI label (one language with the audit history).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ExitedOnTerm => "exited on TERM",
+            Self::NeededKill => "needed KILL",
+            Self::AlreadyGone => "already gone",
+            Self::Refused => "refused",
+            Self::TermSent => "TERM'd — outcome unknown",
+        }
+    }
+}
+
+/// The ladder result: one outcome per member pid, plus whether the
+/// caller cancelled mid-grace (in which case no KILL was sent and the
+/// audit intent must stay pending — outcome unknown).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LadderOutcome {
+    /// `(pid, outcome)` per enumerated member (scope pid-only ⇒ one).
+    pub members: Vec<(u32, ProcessOutcome)>,
+    /// True when `cancelled` fired during the grace window: escalation
+    /// stopped, TERM survivors carry [`ProcessOutcome::TermSent`].
+    pub cancelled: bool,
+}
+
+impl LadderOutcome {
+    /// True when every member reached a success outcome
+    /// (`exited on TERM`, `needed KILL`, or `already gone`).
+    #[must_use]
+    pub fn all_succeeded(&self) -> bool {
+        self.members
+            .iter()
+            .all(|(_, outcome)| *outcome != ProcessOutcome::Refused)
+    }
+}
+
+/// The platform's ladder shape (the Windows sheet's verbatim wording
+/// source; `TerminateProcess`-only until the M7-5 bring-up).
+#[must_use]
+pub fn ladder_platform() -> &'static str {
+    if cfg!(target_os = "macos") || cfg!(target_os = "linux") {
+        "TERM → grace → KILL"
+    } else {
+        "TerminateProcess only"
+    }
+}
+
+/// The verified ladder primitive (pass2 §12): TERM the scope, poll
+/// through `grace` (checking `cancelled` each tick — the sheet's
+/// grace window is cancellable), KILL only survivors. `members_of`
+/// enumerates the scope (tests inject fixtures; production walks the
+/// live table for PGID membership or returns the single pid).
+///
+/// True when the pid is GONE — or a ZOMBIE: the image already died
+/// and only the parent's unreaped slot keeps `kill(pid, 0)`
+/// succeeding. Without this, the ladder would escalate on a corpse
+/// (SIGKILL a zombie, wait 2 s, report `refused` for a process that
+/// died on TERM). One targeted refresh.
+fn member_gone(pid: u32) -> bool {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate};
+    if !signal_pid(pid, Signal::Probe) {
+        return true;
+    }
+    let mut system = crate::new_system();
+    let target = sysinfo::Pid::from_u32(pid);
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[target]),
+        true,
+        ProcessRefreshKind::nothing(),
+    );
+    system
+        .process(target)
+        .is_none_or(|process| process.status() == sysinfo::ProcessStatus::Zombie)
+}
+
+/// This function SIGNALS — the caller MUST have verified identity
+/// this tick AND written the audit intent (AJ-E503/E509 gates).
+pub fn terminate_group<F, C>(grace: Duration, members_of: F, cancelled: C) -> LadderOutcome
+where
+    F: FnOnce() -> Vec<u32>,
+    C: Fn() -> bool,
+{
+    let members = members_of();
+    let mut outcomes: Vec<(u32, ProcessOutcome)> = Vec::new();
+    if members.is_empty() {
+        return LadderOutcome {
+            members: Vec::new(),
+            cancelled: false,
+        };
+    }
+    // Step 1: TERM every member; gone-before-TERM = AlreadyGone
+    // (zombies included — their image already exited).
+    let mut survivors = Vec::new();
+    for pid in &members {
+        if member_gone(*pid) {
+            outcomes.push((*pid, ProcessOutcome::AlreadyGone));
+        } else if signal_pid(*pid, Signal::Term) {
+            survivors.push(*pid);
+        } else {
+            outcomes.push((*pid, ProcessOutcome::AlreadyGone));
+        }
+    }
+    // Step 2: the visible grace window — cancellable at every tick.
+    let mut aborted = false;
+    let deadline = std::time::Instant::now() + grace;
+    while !survivors.is_empty() && std::time::Instant::now() < deadline {
+        if cancelled() {
+            aborted = true;
+            break;
+        }
+        let mut exited: Vec<u32> = Vec::new();
+        survivors.retain(|pid| {
+            let gone = member_gone(*pid);
+            if gone {
+                exited.push(*pid);
+            }
+            !gone
+        });
+        for pid in exited {
+            outcomes.push((pid, ProcessOutcome::ExitedOnTerm));
+        }
+        if !survivors.is_empty() {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    if aborted {
+        // The user stopped the ladder mid-grace: NO escalation, and
+        // the audit intent stays pending ("TERM'd, outcome unknown").
+        for pid in survivors.drain(..) {
+            outcomes.push((pid, ProcessOutcome::TermSent));
+        }
+        outcomes.sort_unstable_by_key(|(pid, _)| *pid);
+        return LadderOutcome {
+            members: outcomes,
+            cancelled: true,
+        };
+    }
+    // Step 3: grace expired — the survivors ignored SIGTERM. KILL
+    // them ("Ignored SIGTERM" in the sheet), then wait honestly.
+    let mut refused = Vec::new();
+    for pid in survivors.drain(..) {
+        signal_pid(pid, Signal::Kill);
+        refused.push(pid);
+    }
+    let kill_deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while std::time::Instant::now() < kill_deadline && !refused.is_empty() {
+        let mut died: Vec<u32> = Vec::new();
+        refused.retain(|pid| {
+            let gone = member_gone(*pid);
+            if gone {
+                died.push(*pid);
+            }
+            !gone
+        });
+        for pid in died {
+            outcomes.push((pid, ProcessOutcome::NeededKill));
+        }
+        if refused.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    for pid in refused {
+        outcomes.push((pid, ProcessOutcome::Refused));
+    }
+    outcomes.sort_unstable_by_key(|(pid, _)| *pid);
+    LadderOutcome {
+        members: outcomes,
+        cancelled: false,
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Signal {
+    Term,
+    Kill,
+    /// liveness probe (signal 0)
+    Probe,
+}
+
+#[cfg(unix)]
+fn signal_pid(pid: u32, signal: Signal) -> bool {
+    use nix::sys::signal::{self, Signal as NixSignal};
+    use nix::unistd::Pid;
+    let Ok(nix_pid) = i32::try_from(pid).map(Pid::from_raw) else {
+        return false;
+    };
+    let result = match signal {
+        Signal::Term => signal::kill(nix_pid, Some(NixSignal::SIGTERM)).map(|()| true),
+        Signal::Kill => signal::kill(nix_pid, Some(NixSignal::SIGKILL)).map(|()| true),
+        Signal::Probe => signal::kill(nix_pid, None).map(|()| true),
+    };
+    result.unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn signal_pid(_pid: u32, _signal: Signal) -> bool {
+    // Non-unix: the ladder is TerminateProcess-only (M7-5); no
+    // signal surface exists to fake here — the sheet says so.
+    false
+}
+
+/// Live command line + cwd for one pid — the verify sheet's
+/// re-read-NOW facts (pass2 §9.2 step 1). One targeted refresh
+/// (never a full scan); `None` = gone or unreadable, and the caller
+/// shows the recorded values with that caveat instead of guessing.
+#[must_use]
+pub fn live_details(pid: u32) -> Option<(String, String)> {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, UpdateKind};
+    let mut system = crate::new_system();
+    let target = sysinfo::Pid::from_u32(pid);
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[target]),
+        true,
+        ProcessRefreshKind::nothing()
+            .with_cmd(UpdateKind::Always)
+            .with_cwd(UpdateKind::Always),
+    );
+    let process = system.process(target)?;
+    let cmdline = process
+        .cmd()
+        .iter()
+        .map(|part| part.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let cwd = process
+        .cwd()
+        .map_or_else(String::new, |cwd| cwd.to_string_lossy().to_string());
+    Some((cmdline, cwd))
+}
+
+/// Production PGID membership: every pid whose live PGID matches,
+/// from one full-table scan (the kill path may scan; the tick's
+/// construction gate does not apply to it).
+#[must_use]
+#[allow(clippy::similar_names)] // pid/pgid are the kernel's own names
+pub fn pgid_members(pgid: u32) -> Vec<u32> {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate};
+    let mut system = crate::new_system();
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+    let mut members = Vec::new();
+    for sys_pid in system.processes().keys() {
+        let pid = sys_pid.as_u32();
+        if crate::group::pgid_of(pid) == Ok(pgid) {
+            members.push(pid);
+        }
+    }
+    members
 }
 
 #[cfg(test)]

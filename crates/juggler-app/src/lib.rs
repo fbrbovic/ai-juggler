@@ -59,6 +59,7 @@ pub const EVENT_PREVIEW_FRAME: &str = "preview://frame";
 pub const EVENT_PREVIEW_STATE: &str = "preview://state";
 
 /// Builds and runs the desktop application.
+#[allow(clippy::too_many_lines)] // the command registry is one flat list by design
 pub fn run() {
     let data_dir = bootstrap_data_dir();
     let app_state = Arc::new(state::AppState::init(data_dir).unwrap_or_else(|error| {
@@ -138,6 +139,10 @@ pub fn run() {
             commands::orphan_stop,
             commands::orphan_stop_all,
             commands::orphan_verify,
+            commands::kill_verify,
+            commands::kill_execute,
+            commands::kill_cancel,
+            commands::kill_liveness,
             commands::account_set_cleanup,
             commands::account_set_renewal,
             commands::desktop_launch,

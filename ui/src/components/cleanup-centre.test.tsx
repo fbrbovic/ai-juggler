@@ -103,20 +103,59 @@ describe("CleanupCentre (AJ-E506)", () => {
     view.unmount();
   });
 
-  it("ships ZERO kill controls — no stop/kill buttons anywhere in the tree", async () => {
-    const bridge: CleanupBridge = { load: () => Promise.resolve(data()) };
+  it("AJ-E507: kill affordance on verified live rows ONLY — never on unverifiable/exited", async () => {
+    const withUnverifiable = data({
+      groups: [
+        {
+          session: "sess-orphan",
+          provider: "claude-code",
+          account: "Work Max",
+          project: "web",
+          machine: "machine-local",
+          healthy: false,
+          rows: [
+            row(),
+            row({
+              pid: 9100,
+              state: "unverifiable",
+              state_label: "Unverifiable — will not be touched",
+              evidence: {
+                root_pid: 8100,
+                parent_pid: 8100,
+                pgid: 9100,
+                escaped_group: true,
+                verification: { verdict: "unverifiable", detail: "differs" },
+                first_seen: 1,
+                last_seen: 2,
+              },
+            }),
+            row({
+              pid: 9200,
+              state: "exited",
+              state_label: "Exited",
+              evidence: {
+                root_pid: 8100,
+                parent_pid: 8100,
+                pgid: 8100,
+                escaped_group: false,
+                verification: { verdict: "unknown", detail: "exited" },
+                first_seen: 1,
+                last_seen: 2,
+              },
+            }),
+          ],
+        },
+      ],
+    });
+    const bridge: CleanupBridge = { load: () => Promise.resolve(withUnverifiable) };
     const view = render(<CleanupCentre bridge={bridge} />);
     await waitFor(() => expect(view.getByTestId("cleanup-group-sess-orphan")).toBeTruthy());
-    const killish = view.container.textContent?.toLowerCase() ?? "";
-    for (const banned of ["stop process", "kill", "terminate", "free this port"]) {
-      expect(killish).not.toContain(banned);
-    }
-    // The only buttons: group/toggle/filter controls.
-    const described = view.container.querySelectorAll("button");
-    for (const button of Array.from(described)) {
-      const label = button.textContent?.toLowerCase() ?? "";
-      expect(label).not.toMatch(/stop|kill|terminate/);
-    }
+    // The verified orphan offers the staged sheet…
+    expect(view.getByTestId("cleanup-kill-8123").textContent).toContain("Terminate");
+    // …the unverifiable and exited rows render NO affordance at all
+    // (not disabled — absent; Req.2).
+    expect(view.queryByTestId("cleanup-kill-9100")).toBeNull();
+    expect(view.queryByTestId("cleanup-kill-9200")).toBeNull();
     view.unmount();
   });
 
@@ -287,7 +326,7 @@ describe("ProcessRow evidence expansion (AJ-E506 Req.4)", () => {
     expect(text).toContain("first-seen parent 8100");
     expect(text).toContain("matches the root (contained)");
     expect(text).toContain("verified — start-time and exe match the live process");
-    expect(text).toContain("Read-only (Tier 0)");
+    expect(text).toContain("never a one-click kill");
     view.unmount();
   });
 

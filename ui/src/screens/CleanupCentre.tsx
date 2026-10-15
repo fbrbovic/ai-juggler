@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { KillSheet, type KillBridge } from "../components/KillSheet";
 import { Button, CleanupEmpty, ProcessRow, type CleanupRowInfo } from "../components/ProcessRow";
 
 /**
- * AJ-E506: the global Cleanup Centre — a READ-ONLY inventory (Tier 0,
- * D-08 default): what Instances left behind, what it costs, and WHY
- * Juggler thinks it is theirs. Zero signalling: no kill control is
- * registered, rendered, or keyboard-reachable (Req.7 — not even a
- * disabled preview, which would train the wrong trust model).
+ * AJ-E506/E507: the global Cleanup Centre — the read-only inventory
+ * (Tier 0, D-08 default: what Instances left behind, what it costs,
+ * and WHY Juggler thinks it is theirs) plus the ONE manual kill path:
+ * verified rows offer `Terminate…`, which opens the staged
+ * AJ-E507 sheet (verify → scope → consequence-named confirm). No
+ * automatic signalling exists here (that is AJ-E508's tiers, opt-in
+ * per Account); Unverifiable rows offer nothing at all.
  *
  * Reached from the top-right global menus (ADR-0007); ⌘⇧C opens it,
  * ⌘F focuses the filter. Healthy trees collapse by default so
@@ -70,7 +73,10 @@ export const defaultCleanupBridge: CleanupBridge = {
     import("../lib/bridge").then((bridge) => bridge.cleanupInventory(filter)),
 };
 
-function GroupBlock(props: { group: CleanupGroupInfo }) {
+function GroupBlock(props: {
+  group: CleanupGroupInfo;
+  onKill?: (row: CleanupRowInfo, session: string, trigger: HTMLElement) => void;
+}) {
   const group = props.group;
   const [collapsed, setCollapsed] = useState(group.healthy);
   return (
@@ -107,7 +113,15 @@ function GroupBlock(props: { group: CleanupGroupInfo }) {
       {!collapsed && (
         <ul className="mt-1">
           {group.rows.map((row) => (
-            <ProcessRow key={row.pid} row={row} />
+            <ProcessRow
+              key={row.pid}
+              row={row}
+              onKill={
+                props.onKill !== undefined
+                  ? (row, trigger) => props.onKill?.(row, group.session, trigger)
+                  : undefined
+              }
+            />
           ))}
         </ul>
       )}
@@ -115,12 +129,23 @@ function GroupBlock(props: { group: CleanupGroupInfo }) {
   );
 }
 
-export function CleanupCentre(props: { bridge?: CleanupBridge }) {
+export function CleanupCentre(props: {
+  bridge?: CleanupBridge;
+  killBridge?: KillBridge;
+}) {
   const bridge = props.bridge ?? defaultCleanupBridge;
+  const killBridge = props.killBridge;
   const [filter, setFilter] = useState<CleanupFilterId>("needs-attention");
   const [data, setData] = useState<CleanupInventoryData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [killTarget, setKillTarget] = useState<{
+    session: string;
+    pid: number;
+    goalPort: number | null;
+    trigger: HTMLElement;
+  } | null>(null);
   const filterRef = useRef<HTMLDivElement>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -138,7 +163,7 @@ export function CleanupCentre(props: { bridge?: CleanupBridge }) {
     return () => {
       alive = false;
     };
-  }, [filter, bridge]);
+  }, [filter, bridge, reloadKey]);
 
   const visibleGroups = useMemo(() => data?.groups ?? [], [data]);
 
@@ -147,7 +172,7 @@ export function CleanupCentre(props: { bridge?: CleanupBridge }) {
       <div className="flex items-center gap-2">
         <h2 className="text-sm font-semibold tracking-wide">Cleanup Centre</h2>
         <span className="rounded-full border border-hairline px-1.5 py-[1px] text-[9.5px] text-muted">
-          read-only · Tier 0
+          Tier 0 observe · verified manual kills
         </span>
         {/* ⌘F lands here (2.1.1/2.4.7 keyboard-complete + visible). */}
         <div
@@ -211,10 +236,38 @@ export function CleanupCentre(props: { bridge?: CleanupBridge }) {
         )}
         <div className="flex flex-col gap-2">
           {visibleGroups.map((group) => (
-            <GroupBlock key={group.session} group={group} />
+            <GroupBlock
+              key={group.session}
+              group={group}
+              onKill={(row, session, trigger) =>
+                setKillTarget({
+                  session,
+                  pid: row.pid,
+                  goalPort:
+                    row.ports !== null && row.ports.split(",").length === 1
+                      ? Number(row.ports)
+                      : null,
+                  trigger,
+                })
+              }
+            />
           ))}
         </div>
       </div>
+
+      {killTarget !== null && (
+        <KillSheet
+          session={killTarget.session}
+          pid={killTarget.pid}
+          goalPort={killTarget.goalPort}
+          trigger={killTarget.trigger}
+          bridge={killBridge}
+          onClose={(refresh) => {
+            setKillTarget(null);
+            if (refresh) setReloadKey((key) => key + 1);
+          }}
+        />
+      )}
 
       <p className="text-[10px] text-faint" data-testid="cleanup-glossary">
         An <dfn>orphan</dfn> is a process still running after its Instance closed; a{" "}
