@@ -368,3 +368,63 @@ for (const theme of ["dark", "light"] as const) {
     expect(serious).toHaveLength(0);
   });
 }
+
+// AJ-E512: axe-core 0 critical/serious on the passive alert surfaces
+// (hog alert with its staged-sheet affordance + the idle nudge).
+for (const theme of ["dark", "light"] as const) {
+  test(`alerts — hog + idle — axe 0 critical/serious — ${theme}`, async ({ page }) => {
+    await page.addInitScript(
+      ({ fixture, t0, theme: t, alerts }) => {
+        const w = window as unknown as Record<string, unknown>;
+        w.__AIJ_FIXTURE__ = fixture;
+        w.__AIJ_CLEANUP_ALERTS__ = alerts;
+        localStorage.setItem("aij.theme", t);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+        Date.now = () => t0;
+      },
+      {
+        fixture: allStatuses,
+        t0: T0,
+        theme,
+        alerts: {
+          alerts: [
+            {
+              kind: "hog",
+              text: "node (vite) under Work Max holds 3.1 GiB — review in Cleanup Centre.",
+              pid: 8123,
+              session: "s-1",
+            },
+            {
+              kind: "idle",
+              text: "python3 has been idle for 2h — review it in the Cleanup Centre.",
+              pid: 8124,
+              session: "s-1",
+            },
+          ],
+        },
+      },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Cleanup" }).click();
+    await expect(page.getByTestId("hog-alert-8123")).toBeVisible();
+    const results = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+      .analyze();
+    const serious = results.violations.filter((v) =>
+      ["serious", "critical"].includes(v.impact ?? ""),
+    );
+    if (serious.length > 0) {
+      const summary = serious
+        .map(
+          (v) =>
+            `${v.id} (${v.impact}): ${v.nodes.map((n) => n.target.join(" ")).slice(0, 3).join(", ")}`,
+        )
+        .join("\n");
+      throw new Error(`axe violations on the alert surfaces (${theme}):\n${summary}`);
+    }
+    expect(serious).toHaveLength(0);
+  });
+}

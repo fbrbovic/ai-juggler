@@ -818,6 +818,32 @@ export type { CleanupRowInfo, EvidenceChainInfo, VerificationBadgeInfo } from ".
 export type { CleanupGroupInfo } from "../screens/CleanupCentre";
 import type { CleanupInventoryData } from "../screens/CleanupCentre";
 
+/** AJ-E512: one passive Cleanup Centre alert (hog / idle nudge). */
+export interface CleanupAlertData {
+  kind: "hog" | "idle" | string;
+  text: string;
+  pid: number;
+  session: string;
+}
+
+/** AJ-E512: the passive alert set (hog alerts + idle-orphan nudges). */
+export interface CleanupAlertsData {
+  alerts: CleanupAlertData[];
+}
+
+/** AJ-E512: reads the passive alerts (hog alerts name the top helper;
+ * idle nudges fire once per orphan). Purely passive — no alert
+ * carries a signal path; the hog alert routes to the staged sheet. */
+export async function cleanupAlerts(): Promise<CleanupAlertsData> {
+  if (!hasBackend) {
+    return (
+      (window as unknown as { __AIJ_CLEANUP_ALERTS__?: CleanupAlertsData })
+        .__AIJ_CLEANUP_ALERTS__ ?? { alerts: [] }
+    );
+  }
+  return invoke<CleanupAlertsData>("cleanup_alerts");
+}
+
 /** AJ-E508: the automation status (banners + pause + Tier-2 notices). */
 export interface CleanupStatusData {
   paused: boolean;

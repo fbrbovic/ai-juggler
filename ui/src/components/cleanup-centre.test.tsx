@@ -551,3 +551,114 @@ describe("Cleanup automation status (AJ-E508)", () => {
     view.unmount();
   });
 });
+
+describe("AJ-E512 passive alerts (hog + idle nudge)", () => {
+  const KILL_VERIFY_OK = {
+    pid: 8123,
+    session: "sess-orphan",
+    verified: true,
+    refusal: null,
+    exe_path: "/usr/local/bin/node",
+    cmdline: "node vite dev",
+    cwd: "/srv/web",
+    ports: [5173],
+    pgid: 8100,
+    escaped_group: false,
+    members: [
+      {
+        pid: 8123,
+        pgid: 8100,
+        exe: "node",
+        cmdline: "node vite dev",
+        role_guess: "DevServer",
+        unsaved_state_warning: null,
+        from_ledger: true,
+      },
+    ],
+    tree_pids: [8100, 8123],
+    platform: "TERM → grace → KILL",
+    grace_secs: 5,
+    provider: "claude-code",
+    account_id: "Work Max",
+    project_id: "web",
+  };
+
+  it("renders the hog alert verbatim as a status message and stages the verified sheet", async () => {
+    const view = render(
+      <CleanupCentre
+        bridge={{ load: () => Promise.resolve(data()) }}
+        alertsBridge={{
+          load: () =>
+            Promise.resolve({
+              alerts: [
+                {
+                  kind: "hog",
+                  text: "node (vite) under Work Max holds 3.1 GiB — review in Cleanup Centre.",
+                  pid: 8123,
+                  session: "sess-orphan",
+                },
+              ],
+            }),
+        }}
+        killBridge={{
+          verify: async () => KILL_VERIFY_OK as never,
+          execute: async () =>
+            ({ refusal: null, members: [], cancelled: false, all_succeeded: true, still_holding: [], reoffer_pid: null }) as never,
+          cancel: async () => undefined,
+          liveness: async (pids: number[]) => pids.map(() => false),
+        }}
+      />,
+    );
+    await waitFor(() => expect(view.getByTestId("cleanup-alerts")).toBeTruthy());
+    // A status message, not a dialog — and the exact backend text.
+    const region = view.getByRole("status", { name: "Passive cleanup alerts" });
+    expect(region.getAttribute("aria-live")).toBe("polite");
+    expect(view.getByTestId("hog-alert-8123").textContent).toContain(
+      "node (vite) under Work Max holds 3.1 GiB — review in Cleanup Centre.",
+    );
+    // Staging opens the SAME verified sheet the rows use — the only
+    // kill path (app prepares, user executes).
+    fireEvent.click(view.getByTestId("hog-stage-8123"));
+    await waitFor(() => expect(view.getByTestId("kill-sheet-8123")).toBeTruthy());
+    view.unmount();
+  });
+
+  it("renders the idle nudge passively — no action inside it", async () => {
+    const view = render(
+      <CleanupCentre
+        bridge={{ load: () => Promise.resolve(data()) }}
+        alertsBridge={{
+          load: () =>
+            Promise.resolve({
+              alerts: [
+                {
+                  kind: "idle",
+                  text: "python3 has been idle for 2h — review it in the Cleanup Centre.",
+                  pid: 8124,
+                  session: "sess-orphan",
+                },
+              ],
+            }),
+        }}
+      />,
+    );
+    await waitFor(() => expect(view.getByTestId("idle-nudge-8124")).toBeTruthy());
+    expect(view.getByTestId("idle-nudge-8124").textContent).toContain(
+      "has been idle for 2h",
+    );
+    expect(view.getByTestId("idle-nudge-8124").querySelector("button")).toBeNull();
+    view.unmount();
+  });
+
+  it("hides the region entirely when there are no alerts", async () => {
+    const view = render(
+      <CleanupCentre
+        bridge={{ load: () => Promise.resolve(data()) }}
+        alertsBridge={{ load: () => Promise.resolve({ alerts: [] }) }}
+      />,
+    );
+    await waitFor(() => expect(view.getByTestId("cleanup-group-sess-orphan")).toBeTruthy());
+    expect(view.queryByTestId("cleanup-alerts")).toBeNull();
+    view.unmount();
+  });
+});

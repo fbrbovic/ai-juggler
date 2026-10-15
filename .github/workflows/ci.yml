@@ -98,6 +98,13 @@ jobs:
         run: cargo build --workspace
       - name: Build (x86_64 cross-check)
         run: cargo build --workspace --target x86_64-apple-darwin
+      # AJ-E512: the collateral suite is a REQUIRED gate on macOS too
+      # (Linux runs it via `verify`'s workspace tests) — zero-signal
+      # assertions on real processes with trap logs, never UI state.
+      - name: Collateral suite (AJ-E512)
+        run: |
+          cargo test -p juggler-supervisor --test collateral
+          cargo test -p juggler-app --test guardrails
 
   build-linux:
     name: build-linux

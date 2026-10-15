@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -1832,3 +1832,147 @@ for (const theme of THEMES) {
     });
   });
 }
+
+
+// ---------------------------------------------------------------------------
+// AJ-E512 — the passive alert surfaces: the hog alert (exact copy +
+// staged sheet pre-fill) and the idle-orphan nudge, plus the recorded
+// keyboard-only pass (open Centre → review hog → stage sheet → Esc).
+// ---------------------------------------------------------------------------
+
+const HOG_ALERT = {
+  kind: "hog",
+  text: "node (vite) under Work Max holds 3.1 GiB — review in Cleanup Centre.",
+  pid: 8123,
+  session: "s-1",
+};
+const IDLE_ALERT = {
+  kind: "idle",
+  text: "python3 has been idle for 2h — review it in the Cleanup Centre.",
+  pid: 8124,
+  session: "s-1",
+};
+
+for (const theme of THEMES) {
+  for (const vp of [
+    { name: "1440x900", width: 1440, height: 900 },
+    { name: "1024x700", width: 1024, height: 700 },
+  ]) {
+    test(`alerts — hog alert + staged sheet — ${vp.name} — ${theme}`, async ({ page }) => {
+      await seedRecoveryPage(page, theme, {
+        __AIJ_CLEANUP__: cleanupFixture("needs-attention"),
+        __AIJ_CLEANUP_ALERTS__: { alerts: [HOG_ALERT] },
+        __AIJ_KILL_VERIFY__: () => ({
+          pid: 8123,
+          session: "s-1",
+          verified: true,
+          refusal: null,
+          exe_path: "/usr/local/bin/node",
+          cmdline: "node vite dev",
+          cwd: "/srv/web",
+          ports: [5173],
+          pgid: 8100,
+          escaped_group: false,
+          members: [
+            {
+              pid: 8123, pgid: 8100, exe: "node", cmdline: "node vite dev",
+              role_guess: "DevServer", unsaved_state_warning: null, from_ledger: true,
+            },
+          ],
+          tree_pids: [8100, 8123],
+          platform: "TERM → grace → KILL",
+          grace_secs: 5,
+          provider: "claude-code",
+          account_id: "Work Max",
+          project_id: "web",
+        }),
+        __AIJ_KILL_EXECUTE__: () => ({
+          refusal: null,
+          members: [{ pid: 8123, outcome: "exited on TERM" }],
+          cancelled: false,
+          all_succeeded: true,
+          still_holding: [],
+          reoffer_pid: null,
+        }),
+      });
+      await page.getByRole("button", { name: "Cleanup" }).click();
+      await expect(page.getByTestId("cleanup-alerts")).toBeVisible();
+      await expect(page.getByTestId("hog-alert-8123")).toContainText(
+        "node (vite) under Work Max holds 3.1 GiB — review in Cleanup Centre.",
+      );
+      // A status message, not a dialog.
+      await expect(
+        page.getByRole("status", { name: "Passive cleanup alerts" }),
+      ).toHaveAttribute("aria-live", "polite");
+      await page.getByTestId("hog-stage-8123").click();
+      await expect(page.getByTestId("kill-sheet-8123")).toBeVisible();
+      await page.screenshot({ path: resolve(GALLERY, `23-alerts/hog-staged-${vp.name}-${theme}.png`) });
+    });
+
+    test(`alerts — idle nudge (passive, no action) — ${vp.name} — ${theme}`, async ({ page }) => {
+      await seedRecoveryPage(page, theme, {
+        __AIJ_CLEANUP__: cleanupFixture("needs-attention"),
+        __AIJ_CLEANUP_ALERTS__: { alerts: [IDLE_ALERT] },
+      });
+      await page.getByRole("button", { name: "Cleanup" }).click();
+      await expect(page.getByTestId("idle-nudge-8124")).toBeVisible();
+      await expect(page.getByTestId("idle-nudge-8124")).toContainText(
+        "has been idle for 2h",
+      );
+      await expect(page.getByTestId("idle-nudge-8124").locator("button")).toHaveCount(0);
+      await page.screenshot({ path: resolve(GALLERY, `23-alerts/idle-nudge-${vp.name}-${theme}.png`) });
+    });
+
+    test(`alerts — mixed gate-day state — ${vp.name} — ${theme}`, async ({ page }) => {
+      await seedRecoveryPage(page, theme, {
+        __AIJ_CLEANUP__: cleanupFixture("needs-attention"),
+        __AIJ_CLEANUP_ALERTS__: { alerts: [HOG_ALERT, IDLE_ALERT] },
+      });
+      await page.getByRole("button", { name: "Cleanup" }).click();
+      await expect(page.getByTestId("hog-alert-8123")).toBeVisible();
+      await expect(page.getByTestId("idle-nudge-8124")).toBeVisible();
+      await expect(page.getByTestId("cleanup-row-8124")).toContainText("hog");
+      await page.screenshot({ path: resolve(GALLERY, `23-alerts/mixed-${vp.name}-${theme}.png`) });
+    });
+  }
+}
+
+// The recorded keyboard-only pass (AJ-E512 visual testing): open the
+// Centre → Tab to the hog alert's stage button → Enter opens the
+// verified sheet → Esc closes it → focus RETURNS to the stage button
+// (2.4.3). No pointer input anywhere in the pass.
+test("alerts — keyboard-only pass: review hog, stage sheet, Esc returns focus", async ({ page }) => {
+  await seedRecoveryPage(page, "dark", {
+    __AIJ_CLEANUP__: cleanupFixture("needs-attention"),
+    __AIJ_CLEANUP_ALERTS__: { alerts: [HOG_ALERT] },
+    __AIJ_KILL_VERIFY__: () => ({
+      pid: 8123, session: "s-1", verified: true, refusal: null,
+      exe_path: "/usr/local/bin/node", cmdline: "node vite dev", cwd: "/srv/web",
+      ports: [5173], pgid: 8100, escaped_group: false,
+      members: [
+        { pid: 8123, pgid: 8100, exe: "node", cmdline: "node vite dev",
+          role_guess: "DevServer", unsaved_state_warning: null, from_ledger: true },
+      ],
+      tree_pids: [8100, 8123], platform: "TERM → grace → KILL", grace_secs: 5,
+      provider: "claude-code", account_id: "Work Max", project_id: "web",
+    }),
+  });
+  await page.getByRole("button", { name: "Cleanup" }).click();
+  await expect(page.getByTestId("hog-alert-8123")).toBeVisible();
+  const stage = page.getByTestId("hog-stage-8123");
+  // Keyboard-only traversal: Tab until the stage button owns focus.
+  for (let i = 0; i < 30; i += 1) {
+    const focused = await page.evaluate(
+      () => document.activeElement?.getAttribute("data-testid") ?? "",
+    );
+    if (focused === "hog-stage-8123") break;
+    await page.keyboard.press("Tab");
+  }
+  await expect(stage).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("kill-sheet-8123")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("kill-sheet-8123")).toHaveCount(0);
+  await expect(stage).toBeFocused();
+  await page.screenshot({ path: resolve(GALLERY, "23-alerts/keyboard-pass-1440x900-dark.png") });
+});

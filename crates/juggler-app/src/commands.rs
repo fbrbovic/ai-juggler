@@ -3739,7 +3739,11 @@ pub fn port_inventory_inner(state: &Arc<AppState>) -> PortInventoryInfo {
 #[allow(clippy::similar_names)] // state/stats read naturally here
 fn hog_facts(state: &Arc<AppState>, now_ms: i64) -> Vec<HogFactInfo> {
     const HOG_WINDOW_MS: i64 = 60_000;
-    const HELPER_RSS_LIMIT: u64 = 2 * 1024 * 1024 * 1024;
+    // AJ-E512: the thresholds are settings-backed (defaults per SPEC
+    // §10) so tests can lower them without faking gigabytes; the
+    // production values never change here.
+    let helper_rss_limit = setting_u64(state, "hog_helper_rss_limit_mb", 2_048) * 1024 * 1024;
+    let cpu_pct_limit = setting_f64(state, "hog_cpu_pct", 90.0);
     let Some(collector) = state.resources.lock().ok() else {
         return Vec::new();
     };
@@ -3766,7 +3770,7 @@ fn hog_facts(state: &Arc<AppState>, now_ms: i64) -> Vec<HogFactInfo> {
         }
         let cpu_sustained = in_window
             .iter()
-            .all(|sample| sample.cpu_pct.is_some_and(|cpu| cpu > 90.0));
+            .all(|sample| sample.cpu_pct.is_some_and(|cpu| cpu > cpu_pct_limit));
         if cpu_sustained {
             facts.push(HogFactInfo {
                 pid: 0, // tree-level: the Cleanup Centre resolves the
@@ -3803,7 +3807,7 @@ fn hog_facts(state: &Arc<AppState>, now_ms: i64) -> Vec<HogFactInfo> {
         }
         // Single-helper RSS: the live rows of the tree (root excluded).
         for row in collector.rows(session).into_iter().flatten().skip(1) {
-            if row.rss_bytes > HELPER_RSS_LIMIT {
+            if row.rss_bytes > helper_rss_limit {
                 facts.push(HogFactInfo {
                     pid: row.pid,
                     session: session.as_str().to_string(),
@@ -5050,6 +5054,23 @@ pub fn auto_cleanup_sweep(state: &Arc<AppState>, now: i64) {
         return;
     }
     let machine = local_machine_id(state);
+    // AJ-E512 Req.3: a hog is NEVER auto-signalled at any tier —
+    // Tier 3 is alert + staged sheet only (E508), so the sweep stands
+    // down for hog-flagged pids (and hog-flagged trees) entirely; the
+    // manual E507 sheet stays the only path.
+    // Hog facts ride the REAL clock (`now` here is the sweep's
+    // SCHEDULE clock — often minutes in the future in tests, which
+    // would empty the 60 s ring window and un-hog everything).
+    let hog_facts_now = hog_facts(state, now_millis());
+    let hog_pids: std::collections::HashSet<u32> = hog_facts_now
+        .iter()
+        .filter(|hog| hog.pid != 0)
+        .map(|hog| hog.pid)
+        .collect();
+    let hog_sessions: std::collections::HashSet<String> = hog_facts_now
+        .iter()
+        .map(|hog| hog.session.clone())
+        .collect();
     // One candidates read: every ORPHANED row of this machine's
     // sessions, grouped by session with its root row (the exit-kind
     // source and the pacing clock).
@@ -5093,6 +5114,9 @@ pub fn auto_cleanup_sweep(state: &Arc<AppState>, now: i64) {
         let settings = account_tier_settings(state, &SessionId::new(session_id.clone()));
         for row in candidates {
             let Some(orphan_pid) = row.pid else { continue };
+            if hog_pids.contains(&orphan_pid) || hog_sessions.contains(&session_id) {
+                continue; // hog: alert + staged sheet only, never a signal
+            }
             let candidate = juggler_supervisor::tree::TierCandidate {
                 pid: orphan_pid,
                 role_guess: guess_role(&row.exe_path, &row.cmdline_trunc).to_string(),
@@ -5307,6 +5331,205 @@ pub struct Tier2NoticeInfo {
     pub cmdline_trunc: String,
     /// The window's end, epoch ms.
     pub deadline_ms: i64,
+}
+
+/// Reads a u64 app setting with a default (AJ-E512 test seams for
+/// the hog/idle thresholds; production defaults are the arguments).
+fn setting_u64(state: &Arc<AppState>, key: &str, default: u64) -> u64 {
+    state
+        .storage
+        .lock()
+        .ok()
+        .and_then(|storage| storage.app_settings().get(key).ok().flatten())
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(default)
+}
+
+/// Reads an f64 app setting with a default (same seam as
+/// [`setting_u64`]).
+fn setting_f64(state: &Arc<AppState>, key: &str, default: f64) -> f64 {
+    state
+        .storage
+        .lock()
+        .ok()
+        .and_then(|storage| storage.app_settings().get(key).ok().flatten())
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or(default)
+}
+
+/// One passive Cleanup Centre alert (AJ-E512 Req.3). `role=status`
+/// surfaces in the UI — never a focus-stealing dialog.
+#[derive(Clone, Debug, serde::Serialize, PartialEq)]
+pub struct CleanupAlertInfo {
+    /// `hog` (resource alert, staged-sheet eligible) or `idle` (the
+    /// once-per-orphan nudge).
+    pub kind: String,
+    /// The exact copy (byte-asserted in tests; one language with the
+    /// Rust suite).
+    pub text: String,
+    /// The helper pid the alert names (0 when unresolvable).
+    pub pid: u32,
+    /// The Instance it belonged to.
+    pub session: String,
+}
+
+/// The passive alert set: hog alerts (exact template) + idle-orphan
+/// nudges (fired at most ONCE per orphan — the once-flag is persisted
+/// the moment the nudge is computed).
+#[derive(Clone, Debug, serde::Serialize, PartialEq, Default)]
+pub struct CleanupAlertsInfo {
+    /// Hog alerts first (actionable), then idle nudges.
+    pub alerts: Vec<CleanupAlertInfo>,
+}
+
+/// Formats bytes the way the alert copy needs (GiB one decimal, MiB
+/// whole).
+#[must_use]
+pub fn rss_text(bytes: u64) -> String {
+    #[allow(clippy::cast_precision_loss)] // display rounding, not math
+    let gib = bytes as f64 / 1_073_741_824.0;
+    if bytes >= 1024 * 1024 * 1024 {
+        format!("{gib:.1} GiB")
+    } else {
+        format!("{} MiB", bytes / (1024 * 1024))
+    }
+}
+
+/// Formats an age the way the nudge copy needs.
+fn age_text(ms: i64) -> String {
+    let mins = ms / 60_000;
+    if mins < 60 {
+        format!("{mins}m")
+    } else {
+        format!("{}h", mins / 60)
+    }
+}
+
+/// Computes the passive alerts (AJ-E512 Req.3): for every hog-flagged
+/// tree, ONE alert naming its TOP-RSS helper (NN/g: name the helper,
+/// not just the Instance), and — once per orphan — an idle nudge
+/// (CPU≈0 + age only). Purely passive: no alert carries a signal
+/// path; the hog alert's pid routes to the STAGED E507 sheet
+/// (app prepares, user executes).
+pub fn cleanup_alerts_inner(state: &Arc<AppState>) -> CleanupAlertsInfo {
+    let now = now_millis();
+    let machine = local_machine_id(state);
+    let mut alerts = Vec::new();
+
+    // Hog alerts: top-RSS live helper per hog-flagged session.
+    let facts = hog_facts(state, now);
+    let mut hog_sessions: Vec<String> = facts.iter().map(|f| f.session.clone()).collect();
+    hog_sessions.sort();
+    hog_sessions.dedup();
+    if !hog_sessions.is_empty() {
+        let Some(collector) = state.resources.lock().ok() else {
+            return CleanupAlertsInfo { alerts };
+        };
+        for session in hog_sessions {
+            let top = collector
+                .rows(&SessionId::new(session.clone()))
+                .into_iter()
+                .flatten()
+                .skip(1) // the root
+                .max_by_key(|row| row.rss_bytes);
+            let Some(top) = top else { continue };
+            let helper = top.name.rsplit('/').next().unwrap_or(&top.name).to_string();
+            let instance = instance_label_for(state, &session);
+            alerts.push(CleanupAlertInfo {
+                kind: "hog".into(),
+                text: format!(
+                    "{helper} under {instance} holds {} — review in Cleanup Centre.",
+                    rss_text(top.rss_bytes)
+                ),
+                pid: top.pid,
+                session: session.clone(),
+            });
+        }
+    }
+
+    // Idle nudges: orphaned helpers, CPU≈0, aged past the threshold —
+    // fired at most ONCE per orphan (persisted flag).
+    let min_age = setting_u64(state, "idle_nudge_min_age_ms", 3_600_000).cast_signed();
+    for row in local_ledger_rows(state) {
+        if row.state != "orphaned" || row.machine_id != machine.as_str() || row.role != "helper" {
+            continue;
+        }
+        let Some(pid) = row.pid else { continue };
+        let cpu_ok = state
+            .resources
+            .lock()
+            .ok()
+            .and_then(|collector| {
+                collector
+                    .rows(&SessionId::new(row.session_id.clone()))
+                    .into_iter()
+                    .flatten()
+                    .find(|live| live.pid == pid)
+                    .map(|live| live.cpu_pct.is_none_or(|cpu| cpu < 1.0))
+            })
+            .unwrap_or(true);
+        if !cpu_ok {
+            continue;
+        }
+        let age = now - row.started_at.map(|s| s * 1000).unwrap_or_default();
+        if age < min_age {
+            continue;
+        }
+        let flag = format!("idle_nudge:{}:{pid}", row.session_id);
+        let already = state
+            .storage
+            .lock()
+            .ok()
+            .and_then(|storage| storage.app_settings().get(&flag).ok().flatten())
+            .is_some();
+        if already {
+            continue;
+        }
+        if let Ok(storage) = state.storage.lock() {
+            let _ = storage.app_settings().set(&flag, "1");
+        }
+        let helper = row
+            .exe_path
+            .rsplit('/')
+            .next()
+            .unwrap_or(&row.exe_path)
+            .to_string();
+        alerts.push(CleanupAlertInfo {
+            kind: "idle".into(),
+            text: format!(
+                "{helper} has been idle for {} — review it in the Cleanup Centre.",
+                age_text(age)
+            ),
+            pid,
+            session: row.session_id.clone(),
+        });
+    }
+    CleanupAlertsInfo { alerts }
+}
+
+/// The Instance's display label (account label → provider → session).
+fn instance_label_for(state: &Arc<AppState>, session: &str) -> String {
+    let lookup = (|| {
+        let storage = state.storage.lock().ok()?;
+        let record = storage
+            .sessions()
+            .get(&SessionId::new(session.to_string()))
+            .ok()?;
+        let recipe = storage.profiles().get(&record.profile).ok()?;
+        let account = storage.accounts().get(&recipe.account).ok()?;
+        Some(account.label.clone())
+    })();
+    lookup.unwrap_or_else(|| "its Instance".to_string())
+}
+
+/// Reads the passive Cleanup Centre alerts (AJ-E512 Req.3).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on read failure.
+#[tauri::command]
+pub fn cleanup_alerts(state: tauri::State<'_, Arc<AppState>>) -> AppResult<CleanupAlertsInfo> {
+    Ok(cleanup_alerts_inner(&state))
 }
 
 /// The cleanup automation's status (the centre's banners + the

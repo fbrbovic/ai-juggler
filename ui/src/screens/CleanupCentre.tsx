@@ -67,6 +67,17 @@ export type CleanupBridge = {
   load: (filter: string) => Promise<CleanupInventoryData>;
 };
 
+/** AJ-E512: the passive alerts source (hog alerts + idle nudges) —
+ * injectable for tests, defaulting to the bridge. */
+export type CleanupAlertsBridge = {
+  load: () => Promise<import("../lib/bridge").CleanupAlertsData>;
+};
+
+// Dynamic import (the vi.mock TDZ rule).
+export const defaultCleanupAlertsBridge: CleanupAlertsBridge = {
+  load: () => import("../lib/bridge").then((bridge) => bridge.cleanupAlerts()),
+};
+
 /** AJ-E508: the automation status surface (pause, suspension, the
  * Tier-2 Undo windows) — injectable for tests. */
 export type CleanupStatusBridge = {
@@ -151,9 +162,11 @@ export function CleanupCentre(props: {
   bridge?: CleanupBridge;
   killBridge?: KillBridge;
   statusBridge?: CleanupStatusBridge;
+  alertsBridge?: CleanupAlertsBridge;
 }) {
   const bridge = props.bridge ?? defaultCleanupBridge;
   const killBridge = props.killBridge;
+  const alertsBridge = props.alertsBridge ?? defaultCleanupAlertsBridge;
   const statusBridge = props.statusBridge ?? defaultCleanupStatusBridge;
   const [filter, setFilter] = useState<CleanupFilterId>("needs-attention");
   const [data, setData] = useState<CleanupInventoryData | null>(null);
@@ -212,6 +225,27 @@ export function CleanupCentre(props: {
       alive = false;
     };
   }, [filter, bridge, reloadKey]);
+
+  // AJ-E512 Req.3: the passive alerts (hog alerts + idle nudges) —
+  // `role=status` cards, never dialogs; a hog alert's only action is
+  // STAGING the verified sheet (app prepares, user executes).
+  const [alerts, setAlerts] = useState<
+    import("../lib/bridge").CleanupAlertData[] | null
+  >(null);
+  useEffect(() => {
+    let alive = true;
+    alertsBridge
+      .load()
+      .then((result) => {
+        if (alive) setAlerts(result.alerts);
+      })
+      .catch(() => {
+        /* alerts stay hidden on failure — never a false claim */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [alertsBridge, reloadKey]);
 
   const visibleGroups = useMemo(() => data?.groups ?? [], [data]);
 
@@ -326,6 +360,75 @@ export function CleanupCentre(props: {
         >
           Process tracking degraded — cleanup is read-only until restart.
         </p>
+      )}
+
+      {/* AJ-E512 Req.3: the passive alerts — status messages, never
+       * focus-stealing dialogs. A hog alert's only affordance STAGES
+       * the verified sheet for its helper (app prepares, user
+       * executes); idle nudges carry no action at all (once-only by
+       * the backend's persisted flag). */}
+      {(alerts?.length ?? 0) > 0 && (
+        <section
+          role="status"
+          aria-live="polite"
+          aria-label="Passive cleanup alerts"
+          className="flex flex-col gap-1.5"
+          data-testid="cleanup-alerts"
+        >
+          {alerts?.map((alert) =>
+            alert.kind === "hog" ? (
+              <p
+                key={`hog-${alert.pid}`}
+                className="flex items-center gap-2 rounded-lg border border-hairline bg-surface/60 p-2 text-[11px] text-ink"
+                data-testid={`hog-alert-${alert.pid}`}
+              >
+                <span aria-hidden="true" className="text-warning">
+                  ▲
+                </span>
+                <span className="min-w-0 flex-1">{alert.text}</span>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={(event) => {
+                    // Stage the sheet for the named helper — the row
+                    // must be in the loaded inventory (killable only
+                    // through the same verified path as every row).
+                    const target = (data?.groups ?? [])
+                      .flatMap((group) =>
+                        group.rows.map((row) => ({ row, session: group.session })),
+                      )
+                      .find(({ row }) => row.pid === alert.pid);
+                    if (!target) return;
+                    setKillTarget({
+                      session: target.session,
+                      pid: target.row.pid,
+                      goalPort:
+                        target.row.ports !== null &&
+                        target.row.ports.split(",").length === 1
+                          ? Number(target.row.ports)
+                          : null,
+                      trigger: event.currentTarget,
+                    });
+                  }}
+                  data-testid={`hog-stage-${alert.pid}`}
+                >
+                  Stage Terminate…
+                </Button>
+              </p>
+            ) : (
+              <p
+                key={`idle-${alert.pid}`}
+                className="rounded-lg border border-hairline bg-surface/40 p-2 text-[11px] text-muted"
+                data-testid={`idle-nudge-${alert.pid}`}
+              >
+                <span aria-hidden="true" className="mr-1">
+                  ○
+                </span>
+                {alert.text}
+              </p>
+            ),
+          )}
+        </section>
       )}
 
       {error !== null && (
