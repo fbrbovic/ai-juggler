@@ -673,15 +673,17 @@ where
 }
 
 #[derive(Clone, Copy)]
-enum Signal {
+pub(crate) enum Signal {
     Term,
     Kill,
     /// liveness probe (signal 0)
     Probe,
 }
 
+/// Sends one signal to one pid — the ONE platform seam (unix signals
+/// vs the TerminateProcess-only ladder, M7-5).
 #[cfg(unix)]
-fn signal_pid(pid: u32, signal: Signal) -> bool {
+pub(crate) fn signal_pid(pid: u32, signal: Signal) -> bool {
     use nix::sys::signal::{self, Signal as NixSignal};
     use nix::unistd::Pid;
     let Ok(nix_pid) = i32::try_from(pid).map(Pid::from_raw) else {
@@ -696,7 +698,7 @@ fn signal_pid(pid: u32, signal: Signal) -> bool {
 }
 
 #[cfg(not(unix))]
-fn signal_pid(_pid: u32, _signal: Signal) -> bool {
+pub(crate) fn signal_pid(_pid: u32, _signal: Signal) -> bool {
     // Non-unix: the ladder is TerminateProcess-only (M7-5); no
     // signal surface exists to fake here — the sheet says so.
     false

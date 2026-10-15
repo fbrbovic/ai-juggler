@@ -2194,14 +2194,10 @@ impl Supervisor {
         let kill_pid = pid;
         let force_kill: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
             // No std Child to `.kill()` — the adopted root is not our
-            // fork. The honest fallback: a direct KILL signal.
+            // fork. The honest fallback: a direct KILL through the ONE
+            // platform signal seam (unix signals / no-op off-unix).
             for member in crate::tree::pgid_members(kill_pid) {
-                if let Ok(raw) = i32::try_from(member) {
-                    let _ = nix::sys::signal::kill(
-                        nix::unistd::Pid::from_raw(raw),
-                        Some(nix::sys::signal::Signal::SIGKILL),
-                    );
-                }
+                let _ = crate::tree::signal_pid(member, crate::tree::Signal::Kill);
             }
         });
         let handle = Arc::new(ChildHandle {
