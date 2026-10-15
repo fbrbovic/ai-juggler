@@ -30,6 +30,7 @@
 | AJ-E503 | PASS9 | 2026-10-13 | [manifest](AJ-E503/manifest.md) |
 | AJ-E504 | PASS9 | 2026-10-13 | [manifest](AJ-E504/manifest.md) |
 | AJ-E505 | PASS9 | 2026-10-13 | [manifest](AJ-E505/manifest.md) |
+| AJ-E506 | PASS12 | 2026-10-13 | [manifest](AJ-E506/manifest.md) |
 | AJ-E801 | PASS5 | 2026-10-13 | [manifest](AJ-E801/manifest.md) |
 | AJ-E802 | PASS7 | 2026-10-13 | [manifest](AJ-E802/manifest.md) |
 | AJ-E806 | PASS4 | 2026-10-13 | [manifest](AJ-E806/manifest.md) |

@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -1118,4 +1118,134 @@ for (const theme of THEMES) {
     );
     await page.screenshot({ path: resolve(GALLERY, `18-ports/warning-sheet-1440x900-${theme}.png`) });
   });
+}
+
+
+// AJ-E506 Cleanup Centre captures: six states (needs-attention with
+// orphan+hog+collision, all-managed, re-adopted, unverifiable,
+// empty-success, ledger-degraded) × themes × sizes.
+const CLEANUP_ROW = (pid: number, state: string) => ({
+  pid,
+  pgid: 8100,
+  role: "helper",
+  state,
+  state_label:
+    state === "orphaned"
+      ? "Still running after its Instance closed"
+      : state === "adopted"
+        ? "Running — re-adopted"
+        : state === "unverifiable"
+          ? "Unverifiable — will not be touched"
+          : "Running",
+  role_guess: "python3 (guess)",
+  exe_path: "/usr/bin/python3",
+  cmdline: "python3 -m http.server 5173",
+  age_ms: 9_000_000,
+  rss_bytes: 48 * 1024 * 1024,
+  cpu_pct: 1.4,
+  ports: state === "orphaned" ? "5173" : null,
+  hog: pid === 8124,
+  hog_rules: pid === 8124 ? ["tree-rss>p95(provider)"] : [],
+  evidence: {
+    root_pid: 8100,
+    parent_pid: 8100,
+    pgid: 8100,
+    escaped_group: false,
+    verification: {
+      verdict: state === "unverifiable" ? "unverifiable" : "verified",
+      detail:
+        state === "unverifiable"
+          ? "live start-time or exe differs from the record"
+          : "start-time and exe match the live process",
+    },
+    first_seen: T0,
+    last_seen: T0 + 90_000,
+  },
+});
+
+function cleanupFixture(state: string) {
+  if (state === "empty") {
+    return { groups: [], clean_instances: 3, ledger_degraded: false };
+  }
+  if (state === "degraded") {
+    return { groups: [], clean_instances: 0, ledger_degraded: true };
+  }
+  // The FILTER states map to row states: needs-attention shows the
+  // orphan + the hog; re-adopted shows the adopted row; unverifiable
+  // shows the flagged one; all-managed shows the mix.
+  const firstState =
+    state === "needs-attention"
+      ? "orphaned"
+      : state === "re-adopted"
+        ? "adopted"
+        : "running";
+  const rows = [
+    CLEANUP_ROW(8123, firstState),
+    CLEANUP_ROW(8124, state === "unverifiable" ? "unverifiable" : "running"),
+  ];
+  return {
+    groups: [
+      {
+        session: "s-1",
+        provider: "claude-code",
+        account: "Work Max",
+        project: "web",
+        machine: "machine-local",
+        healthy: false,
+        rows,
+      },
+    ],
+    clean_instances: 2,
+    ledger_degraded: false,
+  };
+}
+
+for (const state of ["needs-attention", "all-managed", "re-adopted", "unverifiable", "empty", "degraded"]) {
+  for (const theme of THEMES) {
+    for (const vp of [
+      { name: "1440x900", width: 1440, height: 900 },
+      { name: "1024x700", width: 1024, height: 700 },
+    ]) {
+      test(`cleanup — ${state} — ${vp.name} — ${theme}`, async ({ page }) => {
+        await page.addInitScript(
+          ({ fixture, t0, cleanup, theme }) => {
+            (window as never as { __AIJ_FIXTURE__: unknown }).__AIJ_FIXTURE__ = fixture;
+            (window as never as { __AIJ_CLEANUP__: unknown }).__AIJ_CLEANUP__ = cleanup;
+            localStorage.setItem("aij.theme", theme);
+            localStorage.setItem("aij.onboarding.dismissed", "1");
+            sessionStorage.setItem("aij.ready.skipped", "1");
+            Date.now = () => t0;
+          },
+          { fixture: allStatuses, t0: T0, cleanup: cleanupFixture(state), theme },
+        );
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await page.setViewportSize({ width: vp.width, height: vp.height });
+        await page.goto("/");
+        // Reached from the TOP-RIGHT global menus (ADR-0007) — never
+        // a rail peer.
+        await page.getByRole("button", { name: "Cleanup" }).click();
+        await expect(page.getByTestId("cleanup-centre")).toBeVisible();
+        if (state === "needs-attention") {
+          await expect(page.getByTestId("cleanup-row-8123")).toContainText(
+            "Still running after its Instance closed",
+          );
+          await expect(page.getByTestId("cleanup-row-8124")).toContainText("hog");
+        }
+        if (state === "empty") {
+          await expect(page.getByTestId("cleanup-empty")).toContainText(
+            "Nothing left behind — 3 Instances running clean.",
+          );
+        }
+        if (state === "degraded") {
+          await expect(page.getByTestId("cleanup-degraded-banner")).toBeVisible();
+        }
+        if (state === "unverifiable") {
+          await expect(page.getByTestId("cleanup-state-8124")).toContainText(
+            "Unverifiable — will not be touched",
+          );
+        }
+        await page.screenshot({ path: resolve(GALLERY, `19-cleanup/${state}-${vp.name}-${theme}.png`) });
+      });
+    }
+  }
 }

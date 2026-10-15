@@ -3,6 +3,7 @@ import { Button, Card, Chip, QuotaBar, QuotaRing, StatCard } from "./components/
 import { SessionCard, WorkflowRail, type Freshness, type WorkTab } from "./components/WorkflowRail";
 import { GoToPalette } from "./components/GoToPalette";
 import { PortWarningSheet } from "./components/PortMap";
+import { CleanupCentre, focusCleanupFilter } from "./screens/CleanupCentre";
 import { launchPortWarning, type PortWarningInfo } from "./lib/bridge";
 import {
   IconFleet,
@@ -67,6 +68,9 @@ const GLOBAL_NAV = [
   { id: "accounts", label: "Accounts" },
   { id: "usage", label: "Usage" },
   { id: "fleet", label: "Fleet" },
+  // AJ-E506: the Cleanup Centre is a GLOBAL surface (ADR-0007) —
+  // never a rail peer of Projects/Instances/Sessions.
+  { id: "cleanup", label: "Cleanup" },
 ] as const;
 
 type GlobalId = (typeof GLOBAL_NAV)[number]["id"];
@@ -416,10 +420,19 @@ export default function App() {
         event.preventDefault();
         setGoToOpen((openNow) => !openNow);
       }
+      // AJ-E506: ⌘⇧C opens the Cleanup Centre; ⌘F focuses its filter.
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && !event.altKey && event.key.toLowerCase() === "c") {
+        event.preventDefault();
+        setGlobal("cleanup");
+      }
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "f" && global === "cleanup") {
+        event.preventDefault();
+        focusCleanupFilter();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [global]);
 
   const contextTitle =
     global !== null
@@ -563,7 +576,11 @@ export default function App() {
 
         {/* Content: detail panel (work mode) or global screen */}
         <main className="min-h-0 flex-1 overflow-hidden p-5">
-          {global === "accounts" ? (
+          {global === "cleanup" ? (
+            <div className="h-full">
+              <CleanupCentre />
+            </div>
+          ) : global === "accounts" ? (
             <div className="h-full overflow-y-auto">
               <ProfilesScreen
                 openTerminal={openLoginTerminal}

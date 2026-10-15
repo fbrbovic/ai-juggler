@@ -784,6 +784,22 @@ export interface PortWarningInfo {
   message: string;
 }
 
+/** AJ-E506: the read-only Cleanup Centre DTOs (zero kill fields). */
+export type { CleanupRowInfo, EvidenceChainInfo, VerificationBadgeInfo } from "../components/ProcessRow";
+export type { CleanupGroupInfo } from "../screens/CleanupCentre";
+import type { CleanupInventoryData } from "../screens/CleanupCentre";
+
+/** AJ-E506: the read-only inventory (Tier 0). */
+export async function cleanupInventory(filter: string): Promise<CleanupInventoryData> {
+  if (!hasBackend) {
+    return (
+      (window as unknown as { __AIJ_CLEANUP__?: CleanupInventoryData }).__AIJ_CLEANUP__
+        ?? { groups: [], clean_instances: 0, ledger_degraded: false }
+    );
+  }
+  return invoke<CleanupInventoryData>("cleanup_inventory", { filter });
+}
+
 /** AJ-E505: the port occupancy map. */
 export async function portInventory(): Promise<PortInventoryInfo> {
   if (!hasBackend) {
