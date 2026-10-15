@@ -234,7 +234,7 @@ Trap: a port hint list is a display hint, never ownership proof — identity sti
 - Hogs (Req.5): `hog_facts` — 60 s sustained window over the collector rings: helper >2 GiB, tree >90% core, tree > provider-p95 (≥3-peer floor); returned by `port_inventory`.
 - Evidence: `docs/qa/evidence/AJ-E505/` — full API JSON dumps (live/orphan/warning phases, unmanaged :8000 with zero kill ids), unit tests (unmanaged + recycled fixtures), gallery `_gallery/18-ports/` (inventory 4 classifications + collision sheet, both themes/sizes; icon+text never colour alone).
 
-### AJ-E506 Cleanup Centre (read-only) and per-Instance Processes view | Status: TODO | Priority P0 | Effort L | Depends: AJ-E504, AJ-E505
+### AJ-E506 Cleanup Centre (read-only) and per-Instance Processes view | Status: DONE-EVIDENCED (evidence: docs/qa/evidence/AJ-E506/manifest.md) | Priority P0 | Effort L | Depends: AJ-E504, AJ-E505
 
 **Goal**:
 Ship the global Cleanup Centre as a read-only inventory (Tier 0,
@@ -288,6 +288,14 @@ Unverifiable, empty-success, ledger-degraded. Method: pixel-diff against committ
 
 **Handover note**:
 Trap: do not "preview" kill buttons in this task — a rendered-but- disabled kill trains the wrong trust model and breaks the Tier-0 guardrail test in AJ-E508. Trap: the Instance panel embedding must reuse `ProcessRow`, not a copy; divergence here is how T3 survivors later get mislabelled as orphans.
+
+*Implementation mapping (recorded in this task's PR per the claiming protocol)*:
+- Backend: `cleanup_inventory(filter)` read command — rows grouped per Instance from the ledger (all states; history = exited within the 7-day retention), enriched with live RSS/CPU (the E504 collector), ports (`listens_on`), hog flags (E505 `hog_facts`), the pass2 §2 verbatim labels (`cleanup_state_label` — the ONE vocabulary), and the AJ-E503 query-time verification verdict; `clean_instances` drives the copy-exact empty state; `ledger_degraded` renders the E501 banner.
+- Shared row: `ui/src/components/ProcessRow.tsx` — icon+text state badge, hog badge, cmdline (truncated; full on expand), PID/PGID/age/RSS/CPU/ports, and the `Why does Juggler think this is mine?` expansion (root pid, first-seen parent, PGID contained/escaped, identity check, first/last seen). The Instance Processes tab embeds IT via the same bridge (`InstanceCleanupRows`) — no second data path.
+- Centre: `ui/src/screens/CleanupCentre.tsx` — global-nav entry (top-right, ADR-0007; never a rail peer), the EXACT four filters (needs-attention default), healthy trees collapsed by default, `aria-live=polite` filter announcements, copy-exact `Nothing left behind — {N} Instances running clean.`, the degraded banner + read-only chip, the D-09 glossary footer, ⌘⇧C/⌘F shortcuts.
+- Zero signalling (Req.7): the DTOs carry no kill fields by construction; the dogfood JSON is scanned for kill-ish keys (zero); the rendered tree is walked for stop/kill/terminate buttons (zero); `ProcessRow` imports no control primitives.
+- Evidence: `docs/qa/evidence/AJ-E506/` — live+orphan API JSON (full attribution + evidence chain), 163/163 UI, 137/137 visuals with `_gallery/19-cleanup/` (24 captures, six states × sizes × themes).
+- Known gap (documented): helpers whose root dies inside one tick interval before their first sighting are missed by the frozen tree (E510's journal recovery re-discovers them).
 
 ### AJ-E507 Verify-before-kill sheet and manual TERM→KILL ladder | Status: TODO | Priority P0 | Effort L | Depends: AJ-E503, AJ-E506
 

@@ -3,6 +3,7 @@ import { Button, Card, Chip, type ChipTone } from "./primitives";
 import { TerminalView } from "./TerminalView";
 import { DesktopPreview } from "./DesktopPreview";
 import { PortInventoryList } from "./PortMap";
+import { ProcessRow } from "./ProcessRow";
 import {
   IconFleet,
   IconJuggler,
@@ -2109,6 +2110,43 @@ function formatAge(ms: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
+/// The Instance panel's Cleanup rows (AJ-E506 Req.6): the global
+/// Centre's data, filtered to this Instance — same ProcessRow, same
+/// labels, no second data path.
+function InstanceCleanupRows(props: { sessionId: string }) {
+  const [rows, setRows] = useState<Array<import("./ProcessRow").CleanupRowInfo> | null>(null);
+  useEffect(() => {
+    let alive = true;
+    import("../lib/bridge")
+      .then((bridge) => bridge.cleanupInventory("all-managed"))
+      .then((data) => {
+        if (alive) {
+          setRows(
+            data.groups.find((group) => group.session === props.sessionId)?.rows ?? [],
+          );
+        }
+      })
+      .catch(() => {
+        if (alive) setRows([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [props.sessionId]);
+
+  if (rows === null || rows.length === 0) return null;
+  return (
+    <section className="mt-3" data-testid="instance-cleanup-rows">
+      <h4 className="text-[10.5px] font-medium text-ink">Ledger rows (read-only)</h4>
+      <ul className="mt-1">
+        {rows.map((row) => (
+          <ProcessRow key={row.pid} row={row} />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 /// The live Processes tab (AJ-E410): the tree table (PID / Process /
 /// CPU / RAM / Age / ⑂), the I-07 sparkline, and the orphan section
 /// with verified stop actions. Refreshes every 5 s; failures render a
@@ -2385,6 +2423,10 @@ function ProcessesTab(props: PanelProps & { readOnly?: boolean }) {
               )}
             </>
           )}
+          {/* AJ-E506: the SAME Cleanup rows as the global Centre
+          (one data path, one label vocabulary — the shared ProcessRow;
+          divergence here is how T3 survivors get mislabelled). */}
+          <InstanceCleanupRows sessionId={instance.id} />
           {/* AJ-E505: the machine-wide port occupancy map below the
           Instance tree — every listener classified, unmanaged rows
           display-only (the F3 collateral guard). */}
