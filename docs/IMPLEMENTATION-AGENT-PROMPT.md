@@ -176,19 +176,24 @@ Process:
    as those land. A red gate is a finding to fix, never to route
    around.
 
-   **Test batching strategy (maintainer directive, 2026-10-13 —
-   do NOT run the full workspace suite repeatedly):** while
-   iterating, run ONLY the directly-affected suites
-   (`cargo test -p <crate> --test <file>` for the files you
-   touched, plus `cargo check`/`clippy` for the crate) and the
-   matching UI file's `vitest run`. Run exactly ONE full pass —
-   `just verify` equivalents (fmt, clippy `-D warnings`, all
-   workspace tests, doc, evidence, terminology) chunked per test
-   binary on the CLT machine (the desktop suite alone needs ~80 s;
-   a single `just verify` exceeds tool timeouts) — immediately
-   before the PR, never after every feature or fix inside a task.
-   CI re-runs everything on the PR anyway; local repetition is
-   pure latency.
+   **Test batching strategy (maintainer directive, 2026-10-13,
+   REINFORCED 2026-10-15 after a violation — do NOT run the full
+   workspace suite repeatedly, and do NOT push per fix):** two
+   levels, both mandatory:
+   (a) *While iterating:* run ONLY the directly-affected suites
+   (`cargo test -p <crate> --test <file>` for the files touched,
+   plus `cargo check`/`clippy` for the crate) and the matching UI
+   file's `vitest run`.
+   (b) *Push + CI cadence:* implement MULTIPLE tasks (or a whole
+   phase) per batch — one full local pass (fmt, clippy
+   `-D warnings`, all workspace tests chunked per binary, doc,
+   evidence, terminology), ONE push, ONE PR, ONE CI watch per
+   BATCH, not per task and NEVER per fix. A CI-only failure found
+   in the batch's single run gets fixed locally and rides the NEXT
+   batch unless it blocks the merge (main stays green — that is
+   the only reason to re-push inside a batch). CI round-trips and
+   full-suite reruns are the single biggest time sink; treat each
+   one as budgeted and rare.
 6. Store evidence as you go using the AJ-E801 manifest (requirement,
    command, threshold, observed result, PASS/FAIL, commit SHA, date,
    reviewer). Include failures with analysis.

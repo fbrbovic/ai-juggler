@@ -98,6 +98,22 @@ jobs:
         run: cargo build --workspace
       - name: Build (x86_64 cross-check)
         run: cargo build --workspace --target x86_64-apple-darwin
+      # AJ-E512: the collateral suite is a REQUIRED gate on macOS too
+      # (Linux runs it via `verify`'s workspace tests) — zero-signal
+      # assertions on real processes with trap logs, never UI state.
+      - name: Collateral suite (AJ-E512)
+        run: |
+          cargo test -p juggler-supervisor --test collateral
+          # The app test binary links the Swift bridge; the runner has
+          # no libswift_Concurrency.dylib anywhere (toolchain, SDK, dyld
+          # cache). scripts/ensure_swift_runtime.sh's approach applies:
+          # an empty stub with the right install name in target/debug
+          # (already on the binary's rpath). These suites never CALL
+          # the bridge — the stub only satisfies the dyld load.
+          mkdir -p target/debug
+          echo "" | clang -dynamiclib -o target/debug/libswift_Concurrency.dylib \
+            -install_name @rpath/libswift_Concurrency.dylib -x c -
+          cargo test -p juggler-app --test guardrails
 
   build-linux:
     name: build-linux

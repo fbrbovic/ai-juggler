@@ -239,7 +239,13 @@ export function KillSheet(props: {
   }, [phase, verify, scope, props.pid, bridge]);
 
   // Esc cancels any step (incl. mid-grace); ⌘⏎ confirms ONLY the
-  // confirm step. Focus lands on the confirm button when ready.
+  // confirm step. Focus lands INSIDE the sheet from mount (the root
+  // container while verifying — otherwise a keyboard user cannot Esc
+  // the loading step), then on the confirm button when ready.
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    rootRef.current?.focus();
+  }, []);
   useEffect(() => {
     if (phase === "ready") confirmRef.current?.focus();
   }, [phase]);
@@ -302,7 +308,9 @@ export function KillSheet(props: {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-canvas/70 p-6 backdrop-blur-sm"
+      ref={rootRef}
+      tabIndex={-1}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-canvas/70 p-6 backdrop-blur-sm outline-none"
         onKeyDown={onKey}
         data-testid={`kill-sheet-${props.pid}`}
     >
