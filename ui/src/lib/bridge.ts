@@ -746,6 +746,62 @@ export async function instanceProcesses(sessionId: string): Promise<ProcessesInf
   return invoke<ProcessesInfo>("instance_processes", { sessionId });
 }
 
+/** AJ-E505: one port-inventory row (classification is the key). */
+export interface PortRowInfo {
+  port: number;
+  pid: number;
+  class: string;
+  session: string | null;
+  provider: string | null;
+  account: string | null;
+  project: string | null;
+  listener_age_ms: number | null;
+  name: string | null;
+  hint: string | null;
+  killable: boolean;
+}
+
+/** AJ-E505: the inventory response (honest probe note + hog facts). */
+export interface PortInventoryInfo {
+  rows: PortRowInfo[];
+  note: string | null;
+  hogs: Array<{
+    pid: number;
+    session: string;
+    provider: string;
+    rss_bytes: number;
+    cpu_pct: number | null;
+    rule: string;
+  }>;
+}
+
+/** AJ-E505: the pre-launch collision warning (copy-exact message). */
+export interface PortWarningInfo {
+  port: number;
+  pid: number;
+  instance: string;
+  age_ms: number;
+  message: string;
+}
+
+/** AJ-E505: the port occupancy map. */
+export async function portInventory(): Promise<PortInventoryInfo> {
+  if (!hasBackend) {
+    return (window as unknown as { __AIJ_PORTS__?: PortInventoryInfo }).__AIJ_PORTS__
+      ?? { rows: [], note: null, hogs: [] };
+  }
+  return invoke<PortInventoryInfo>("port_inventory");
+}
+
+/** AJ-E505: the launch pre-check — a warning NEVER blocks launch. */
+export async function launchPortWarning(projectId: string | null): Promise<PortWarningInfo | null> {
+  if (!hasBackend) {
+    return (window as unknown as { __AIJ_PORT_WARNING__?: PortWarningInfo }).__AIJ_PORT_WARNING__
+      ?? null;
+  }
+  return invoke<PortWarningInfo | null>("launch_port_warning", { projectId });
+}
+
 /** AJ-E410: stop one orphan (allow-list guarded, TERM→KILL ladder). */
 export async function orphanStop(sessionId: string, pid: number): Promise<StopOutcomeInfo> {
   if (!hasBackend) {

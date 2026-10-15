@@ -38,4 +38,9 @@ ignore = [
     # upstream. Risk assessed 2026-10-12: compile-time only, zero runtime
     # exposure. Remove when gtk-rs ships an update.
     "RUSTSEC-2024-0370",
+    # AJ-E505 (2026-10-13): `paste` is unmaintained (RUSTSEC-2024-0436,
+    # an UNMAINTAINED notice — no soundness/security vulnerability).
+    # Transitive via netstat2's netlink-packet chain; macro-only
+    # build-time code. Remove when netstat2 drops the netlink macro dep.
+    "RUSTSEC-2024-0436",
 ]

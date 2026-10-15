@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -1017,3 +1017,105 @@ test("determinism — two captures are byte-identical", async ({ page }) => {  c
     // already unlinked on success; no-op
   }
 });
+
+
+// AJ-E505 port-map captures: the inventory with all four
+// classifications (unmanaged muted, icon+text — never colour alone)
+// and the pre-launch collision sheet (copy-exact), both themes, two
+// sizes.
+const PORTS_FIXTURE = {
+  rows: [
+    {
+      port: 3000, pid: 4400, class: "managed-running", session: "s-2", provider: "claude-code",
+      account: "Team Max", project: "api", listener_age_ms: 65_000, name: "node", hint: "common dev server port", killable: true,
+    },
+    {
+      port: 5173, pid: 8123, class: "managed-orphan", session: "s-1", provider: "claude-code",
+      account: "Work Max", project: "web", listener_age_ms: 9_000_000, name: "python3", hint: "vite dev server port", killable: true,
+    },
+    {
+      port: 8080, pid: 5500, class: "re-adopted", session: "s-3", provider: "claude-code",
+      account: null, project: null, listener_age_ms: 250_000, name: "python3", hint: "common dev server port", killable: true,
+    },
+    {
+      port: 8000, pid: 6600, class: "not-managed", session: null, provider: null,
+      account: null, project: null, listener_age_ms: null, name: null, hint: "common dev server port", killable: false,
+    },
+  ],
+  note: null,
+  hogs: [],
+};
+
+for (const theme of THEMES) {
+  for (const vp of [
+    { name: "1440x900", width: 1440, height: 900 },
+    { name: "1024x700", width: 1024, height: 700 },
+  ]) {
+    test(`ports — inventory, four classifications — ${vp.name} — ${theme}`, async ({ page }) => {
+      await page.addInitScript(
+        ({ fixture, t0, ports, theme }) => {
+          (window as never as { __AIJ_FIXTURE__: unknown }).__AIJ_FIXTURE__ = fixture;
+          (window as never as { __AIJ_PORTS__: unknown }).__AIJ_PORTS__ = ports;
+          localStorage.setItem("aij.theme", theme);
+          localStorage.setItem("aij.onboarding.dismissed", "1");
+          sessionStorage.setItem("aij.ready.skipped", "1");
+          Date.now = () => t0;
+        },
+        { fixture: allStatuses, t0: T0, ports: PORTS_FIXTURE, theme },
+      );
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await page.getByRole("tab", { name: "Sessions" }).click();
+      await page.getByRole("button", { name: /Work Max/ }).first().click();
+      await page.getByRole("tab", { name: "Processes" }).click();
+      await expect(page.getByTestId("port-inventory")).toBeVisible();
+      await expect(page.getByTestId("port-row-5173")).toContainText("Managed orphan");
+      await expect(page.getByTestId("port-row-8000")).toContainText("Not managed by Juggler");
+      await page.screenshot({ path: resolve(GALLERY, `18-ports/inventory-${vp.name}-${theme}.png`) });
+    });
+  }
+}
+
+for (const theme of THEMES) {
+  test(`ports — pre-launch collision sheet — 1440x900 — ${theme}`, async ({ page }) => {
+    await page.addInitScript(
+      ({ fixture, t0, warning, theme }) => {
+        (window as never as { __AIJ_FIXTURE__: unknown }).__AIJ_FIXTURE__ = fixture;
+        (window as never as { __AIJ_PORT_WARNING__: unknown }).__AIJ_PORT_WARNING__ = warning;
+        localStorage.setItem("aij.theme", theme);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+        Date.now = () => t0;
+      },
+      {
+        fixture: allStatuses,
+        t0: T0,
+        theme,
+        warning: {
+          port: 5173,
+          pid: 8123,
+          instance: "claude-code (s-1a2b3c4d)",
+          age_ms: 9_000_000,
+          message: ":5173 is already held by an orphan from claude-code (s-1a2b3c4d) (2h).",
+        },
+      },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+    // Trigger a launch through the Instance Actions' Resume row —
+    // the pre-check returns the fixture warning and the sheet renders
+    // instead of spawning (launch is never blocked; the sheet offers
+    // Launch anyway).
+    await page.getByRole("tab", { name: "Sessions" }).click();
+    await page.getByRole("button", { name: /Work Max/ }).first().click();
+    await page.getByRole("tab", { name: "Actions" }).click();
+    await page.getByRole("button", { name: /Resume|Relaunch/ }).first().click();
+    await expect(page.getByTestId("port-warning-sheet")).toBeVisible();
+    await expect(page.getByTestId("port-warning-copy")).toContainText(
+      ":5173 is already held by an orphan",
+    );
+    await page.screenshot({ path: resolve(GALLERY, `18-ports/warning-sheet-1440x900-${theme}.png`) });
+  });
+}

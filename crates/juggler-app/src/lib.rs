@@ -131,6 +131,8 @@ pub fn run() {
             commands::terminal_snapshot,
             commands::instance_quality,
             commands::instance_processes,
+            commands::port_inventory,
+            commands::launch_port_warning,
             commands::orphan_stop,
             commands::orphan_stop_all,
             commands::orphan_verify,

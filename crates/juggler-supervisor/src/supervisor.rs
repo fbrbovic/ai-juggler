@@ -27,6 +27,12 @@ const DEFAULT_RING_CAPACITY: usize = 512 * 1024;
 /// [`Supervisor::set_orphan_grace`]; never lowered for demos.
 pub const DEFAULT_ORPHAN_GRACE_SECS: u64 = 30;
 
+/// Listener-table ENUMERATION cadence (AJ-E505): every 5th tick
+/// (10 s) — enumeration costs ~90 ms on a loaded box and the tick
+/// budget is ≤100 ms p95; the per-tick JOIN uses the cached table and
+/// query paths always probe fresh.
+const PORT_PROBE_EVERY: u32 = 5;
+
 /// How long a finished session's `ChildHandle` stays in the children
 /// map after exit (AJ-E504 Req.4, F-6): the window the UI may still
 /// read the retained output tail; after it the handle (and its ring)
@@ -245,6 +251,19 @@ pub struct LiveStatsCollector {
     /// Consecutive agreeing orphan-candidate ticks per helper row
     /// (AJ-E504 Req.3: two-tick confirmation kills flap).
     orphan_agree: HashMap<(u32, String), u32>,
+    /// The last listener probe error text, when degraded (AJ-E505:
+    /// surfaced honestly by the inventory; retried at the tick
+    /// cadence — never a storm).
+    ports_degraded: Option<String>,
+    /// The last enumerated listener table (AJ-E505): ENUMERATION is
+    /// throttled to every `PORT_PROBE_EVERY` tick — on a loaded box it
+    /// costs ~90 ms and the ≤100 ms tick budget governs — while the
+    /// JOIN (listeners × ledger pids) still runs every tick on the
+    /// cached table. Query paths (inventory/warning) always probe
+    /// fresh.
+    cached_listeners: Vec<crate::ports::Listener>,
+    /// Tick index of the last enumeration.
+    last_port_probe_tick: u32,
 }
 
 impl Default for LiveStatsCollector {
@@ -260,6 +279,9 @@ impl Default for LiveStatsCollector {
             last_ledger_upsert: HashMap::new(),
             absence: HashMap::new(),
             orphan_agree: HashMap::new(),
+            ports_degraded: None,
+            cached_listeners: Vec::new(),
+            last_port_probe_tick: 0,
         }
     }
 }
@@ -306,7 +328,12 @@ impl LiveStatsCollector {
         self.rebuild_trees(&roots, &table.parents, now_ms);
         supervisor.publish_table(std::sync::Arc::clone(&table));
         self.ledger_upserts(supervisor, now_ms);
-        self.reconcile(supervisor, &table, now_ms);
+        // ONE candidates read per tick feeds BOTH the reconciler and
+        // the listener join (a second identical query measurably
+        // stalls under disk pressure — the tick budget governs).
+        let candidates = Self::fetch_candidates(supervisor);
+        self.reconcile(supervisor, &table, &candidates, now_ms);
+        self.join_ports(supervisor, &table, &candidates, now_ms);
         Self::sweep_finished(supervisor, now_ms);
         let sampled = self.sampled;
         self.sampled = true;
@@ -419,27 +446,19 @@ impl LiveStatsCollector {
         }
     }
 
-    /// The reconciler pass (AJ-E504 Req.2/3): re-verifies candidate
-    /// rows against the tick's OWN table (zero per-row probes),
-    /// patches helper exits by two-tick absence, and flags orphans
-    /// only after grace + two consecutive agreeing ticks. Single-row
-    /// state patches only — helper bulk writes stay in the batched
-    /// upsert transaction (AJ-E501's contract).
-    #[allow(clippy::too_many_lines)] // one pass per tick; splitting would hide the state machine
-    fn reconcile(&mut self, supervisor: &Supervisor, table: &ProcessTable, now_ms: i64) {
-        use juggler_core::storage::STATE_RUNNING;
-
+    /// The tick's candidate rows: every `running|orphaned` row on
+    /// every machine with spawn contexts — fetched ONCE per tick and
+    /// shared by the reconciler and the listener join (a second
+    /// identical query measurably stalls under disk pressure).
+    fn fetch_candidates(supervisor: &Supervisor) -> Vec<juggler_core::storage::LedgerRow> {
         let Some(ledger) = supervisor.ledger.clone() else {
-            return;
+            return Vec::new();
         };
         let contexts = supervisor
             .spawn_contexts
             .lock()
             .map(|contexts| contexts.clone())
             .unwrap_or_default();
-        let boot_id = ledger.boot_id();
-
-        // Machines with spawn contexts, each queried once per tick.
         let machines: Vec<juggler_core::model::MachineId> = {
             let mut seen = std::collections::HashSet::new();
             contexts
@@ -456,9 +475,37 @@ impl LiveStatsCollector {
                 supervisor
                     .ledger_degraded
                     .store(true, std::sync::atomic::Ordering::SeqCst);
-                return; // read failed: this tick reconciles nothing
+                return Vec::new(); // read failed: this tick reconciles nothing
             }
         }
+        candidates
+    }
+
+    /// The reconciler pass (AJ-E504 Req.2/3): re-verifies candidate
+    /// rows against the tick's OWN table (zero per-row probes),
+    /// patches helper exits by two-tick absence, and flags orphans
+    /// only after grace + two consecutive agreeing ticks. Single-row
+    /// state patches only — helper bulk writes stay in the batched
+    /// upsert transaction (AJ-E501's contract).
+    #[allow(clippy::too_many_lines)] // one pass per tick; splitting would hide the state machine
+    fn reconcile(
+        &mut self,
+        supervisor: &Supervisor,
+        table: &ProcessTable,
+        candidates: &[juggler_core::storage::LedgerRow],
+        now_ms: i64,
+    ) {
+        use juggler_core::storage::STATE_RUNNING;
+
+        let Some(ledger) = supervisor.ledger.clone() else {
+            return;
+        };
+        let contexts = supervisor
+            .spawn_contexts
+            .lock()
+            .map(|contexts| contexts.clone())
+            .unwrap_or_default();
+        let boot_id = ledger.boot_id();
 
         // Live-owned roots: unfinished handles + running ROOT rows.
         let mut live_roots: std::collections::HashSet<u32> = supervisor
@@ -467,7 +514,7 @@ impl LiveStatsCollector {
             .filter(|(_, _, finished)| !finished)
             .map(|(_, pid, _)| pid)
             .collect();
-        for row in &candidates {
+        for row in candidates {
             if row.role == "root"
                 && row.state == STATE_RUNNING
                 && let Some(pid) = row.pid
@@ -483,7 +530,7 @@ impl LiveStatsCollector {
             by_session
                 .entry(row.session_id.clone())
                 .or_default()
-                .push(row);
+                .push(row.clone());
         }
 
         for (session_id, rows) in by_session {
@@ -597,6 +644,100 @@ impl LiveStatsCollector {
         }
     }
 
+    /// The listener join (AJ-E505 Req.2): the JOIN runs every tick on
+    /// the cached listener table; ENUMERATION is throttled to every
+    /// [`PORT_PROBE_EVERY`] ticks (its ~90 ms loaded-box cost would
+    /// breach the ≤100 ms tick budget — the budget governs; ports
+    /// change rarely and query paths probe fresh anyway). A probe
+    /// failure degrades until the next enumeration attempt (the
+    /// throttle is the retry bound — never a storm).
+    fn join_ports(
+        &mut self,
+        supervisor: &Supervisor,
+        table: &ProcessTable,
+        candidates: &[juggler_core::storage::LedgerRow],
+        now_ms: i64,
+    ) {
+        #[cfg(unix)]
+        use crate::ports::NetstatProbe;
+        use crate::ports::PortProbe as _;
+        let Some(ledger) = supervisor.ledger.clone() else {
+            return;
+        };
+        if self.ticks.saturating_sub(self.last_port_probe_tick) >= PORT_PROBE_EVERY {
+            self.last_port_probe_tick = self.ticks;
+            #[cfg(unix)]
+            let probe = NetstatProbe;
+            #[cfg(not(unix))]
+            let probe = crate::ports::UnsupportedProbe;
+            match probe.listeners() {
+                Ok(listeners) => {
+                    self.cached_listeners = listeners;
+                    self.ports_degraded = None;
+                }
+                Err(error) => {
+                    self.ports_degraded = Some(error.to_string());
+                    return;
+                }
+            }
+        }
+        let listeners = self.cached_listeners.clone();
+        let boot_id = ledger.boot_id();
+        let by_pid: HashMap<u32, Vec<u16>> = {
+            let mut map: HashMap<u32, Vec<u16>> = HashMap::new();
+            for listener in listeners {
+                map.entry(listener.pid).or_default().push(listener.port);
+            }
+            map
+        };
+        // Candidate rows + live roots: every pid the ledger could
+        // still own a listener for (the reconciler's shared read).
+        let mut pids: Vec<(u32, String)> = supervisor
+            .live_roots()
+            .into_iter()
+            .filter(|(_, _, finished)| !finished)
+            .map(|(_, pid, _)| (pid, boot_id.clone()))
+            .collect();
+        // The reconciler's candidates (fetched once per tick).
+        for row in candidates {
+            if let Some(pid) = row.pid {
+                pids.push((pid, row.boot_id.clone()));
+            }
+        }
+        let mut entries = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for (pid, row_boot) in pids {
+            if !seen.insert(pid) {
+                continue;
+            }
+            // Only pids PRESENT in the listener table get a write;
+            // absent pids keep their stored value (no clearing churn).
+            if table.facts.contains_key(&pid)
+                && let Some(ports) = by_pid.get(&pid).filter(|ports| !ports.is_empty())
+            {
+                let csv = ports
+                    .iter()
+                    .map(u16::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",");
+                entries.push((pid, row_boot, csv));
+            }
+        }
+        if entries.is_empty() {
+            return;
+        }
+        let refs: Vec<(u32, &str, &str)> = entries
+            .iter()
+            .map(|(pid, boot, ports)| (*pid, boot.as_str(), ports.as_str()))
+            .collect();
+        if ledger.apply_ports(&refs).is_err() {
+            supervisor
+                .ledger_degraded
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        let _ = now_ms;
+    }
+
     /// Evicts finished `ChildHandle`s past the output-retention
     /// window (AJ-E504 Req.4, F-6): stopped Instances leave no
     /// phantom Running rows and rings do not grow for the process
@@ -680,6 +821,15 @@ impl LiveStatsCollector {
             tree.ring.truncate(RING_CAPACITY);
             self.stats.insert((*session).clone(), stats);
         }
+    }
+
+    /// The listener-probe degrade note for the LAST tick, when the
+    /// platform has no probe or the OS call failed (AJ-E505: the
+    /// inventory shows `ports unknown on this platform` honestly —
+    /// never an empty map presented as truth).
+    #[must_use]
+    pub fn ports_note(&self) -> Option<String> {
+        self.ports_degraded.clone()
     }
 
     /// Cached batched stats from the last tick (no refresh — the read
@@ -1733,6 +1883,21 @@ impl Supervisor {
         }
     }
 
+    /// Spawn contexts as `(session, ctx)` pairs (AJ-E505: the hog
+    /// rules walk per-Provider populations).
+    #[must_use]
+    pub fn spawn_contexts_snapshot(&self) -> Vec<(SessionId, crate::tree::SpawnContext)> {
+        self.spawn_contexts
+            .lock()
+            .map(|contexts| {
+                contexts
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// The last published process-table snapshot (`None` before the
     /// first tick — callers then take the counted cold-path scan).
     #[must_use]
@@ -1838,11 +2003,24 @@ impl Supervisor {
     /// Sessions from previous app runs whose processes are still alive
     /// (journal adoption; spec §5.3 crash re-adoption).
     pub fn alive_adopted_sessions(&self) -> Vec<SessionId> {
-        self.journal
+        let adopted: Vec<SessionId> = self
+            .journal
             .as_ref()
             .and_then(|journal| journal.adopt_orphans().ok())
             .map(|adopted| adopted.into_iter().map(|process| process.session).collect())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        // AJ-E505: sessions THIS supervisor already supervises are NOT
+        // adopted — their journal records are simply not yet exited.
+        // (Adoption is for restart survivors; double-counting live
+        // sessions misclassified every port row as `re-adopted`.)
+        if let Ok(children) = self.children.lock() {
+            adopted
+                .into_iter()
+                .filter(|session| !children.contains_key(session))
+                .collect()
+        } else {
+            adopted
+        }
     }
 
     /// The supervision journal, when one is open (descendant snapshots

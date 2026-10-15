@@ -24,3 +24,6 @@ tempfile = "3.27.0"
 
 [target."cfg(unix)".dependencies]
 nix = { version = "0.31.3", features = ["signal", "process"] }
+# AJ-E505: the listener table via the low-level OS APIs (libproc /
+# netlink) — lsof/netstat shell-outs are banned (pass2 §7).
+netstat2 = "0.11"

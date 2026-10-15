@@ -132,6 +132,14 @@ pub trait LedgerStore: Send + Sync {
     /// [`LedgerError::Store`] on store failure.
     fn session_rows(&self, session: &SessionId) -> Result<Vec<LedgerRow>, LedgerError>;
 
+    /// Batched listener join (AJ-E505): sets `listens_on` per row in
+    /// ONE transaction per tick.
+    ///
+    /// # Errors
+    ///
+    /// [`LedgerError::Store`] on store failure.
+    fn apply_ports(&self, entries: &[(u32, &str, &str)]) -> Result<(), LedgerError>;
+
     /// Retention prune (exited rows only).
     ///
     /// # Errors
@@ -247,6 +255,12 @@ impl LedgerStore for CoreLedgerStore {
     fn session_rows(&self, session: &SessionId) -> Result<Vec<LedgerRow>, LedgerError> {
         self.repo
             .rows_for_session(session.as_str())
+            .map_err(|e| LedgerError::Store(e.to_string()))
+    }
+
+    fn apply_ports(&self, entries: &[(u32, &str, &str)]) -> Result<(), LedgerError> {
+        self.repo
+            .apply_ports(entries)
             .map_err(|e| LedgerError::Store(e.to_string()))
     }
 

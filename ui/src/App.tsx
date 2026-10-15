@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, Card, Chip, QuotaBar, QuotaRing, StatCard } from "./components/primitives";
 import { SessionCard, WorkflowRail, type Freshness, type WorkTab } from "./components/WorkflowRail";
 import { GoToPalette } from "./components/GoToPalette";
+import { PortWarningSheet } from "./components/PortMap";
+import { launchPortWarning, type PortWarningInfo } from "./lib/bridge";
 import {
   IconFleet,
   IconJuggler,
@@ -136,6 +138,12 @@ export default function App() {
     { id: string; title: string; ended: boolean }[]
   >([]);
   const [newSession, setNewSession] = useState(false);
+  // AJ-E505: the pre-launch port collision (advisor informs, never
+  // blocks — Launch always proceeds on "Launch anyway").
+  const [portWarning, setPortWarning] = useState<{
+    warning: PortWarningInfo;
+    proceed: () => void;
+  } | null>(null);
   // AJ-E414: the "Go to instance…" palette — summoned by the global
   // hotkey (backend event) or in-app ⌘K; the binding is rebindable.
   const [goToOpen, setGoToOpen] = useState(false);
@@ -650,11 +658,26 @@ export default function App() {
               onOpenProject={selectProject}
               onOpenSession={selectSession}
               onLaunch={async (recipe, project) => {
-                const result = await launchSession(recipe.id, project.root);
-                if (result) {
-                  void refresh();
-                  selectSession(result.session_id);
+                const doLaunch = async () => {
+                  const result = await launchSession(recipe.id, project.root);
+                  if (result) {
+                    void refresh();
+                    selectSession(result.session_id);
+                  }
+                };
+                // AJ-E505 Req.4: warn BEFORE spawn when the project's
+                // learned dev port is held by a managed orphan; the
+                // launch itself is never blocked (SPEC §5.2 advisor).
+                try {
+                  const warning = await launchPortWarning(project.id ?? null);
+                  if (warning) {
+                    setPortWarning({ warning, proceed: () => void doLaunch() });
+                    return;
+                  }
+                } catch {
+                  // The pre-check is advisory: probe failures launch.
                 }
+                await doLaunch();
               }}
               onStopped={() => void refresh()}
               onHandover={async (sessionId, targetProfileId) => {
@@ -671,6 +694,20 @@ export default function App() {
           )}
         </main>
       </div>
+
+      {portWarning && (
+        <div className="pointer-events-auto absolute inset-x-0 top-3 z-40 mx-auto w-fit max-w-[560px]">
+          <PortWarningSheet
+            warning={portWarning.warning}
+            onFreePort={() => setPortWarning(null)}
+            onLaunchAnyway={() => {
+              const proceed = portWarning.proceed;
+              setPortWarning(null);
+              proceed();
+            }}
+          />
+        </div>
+      )}
 
       <GoToPalette
         open={goToOpen}
