@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -1681,4 +1681,154 @@ for (const theme of THEMES) {
       });
     });
   }
+}
+
+
+// ---------------------------------------------------------------------------
+// AJ-E510 — crash-recovery captures: the ONE-time restart summary (the
+// exact 2/1/1 drill text rides the __AIJ_RECOVERY__ seam), the
+// re-adopted Instance panel (the ↻ chip + the honest detached-terminal
+// notice on the Processes tab), and the Cleanup Centre's Re-adopted
+// filter with the distinct left-behind label.
+// ---------------------------------------------------------------------------
+
+const RECOVERY_SUMMARY = {
+  summary:
+    "2 Instances re-adopted, 1 helpers left behind, 1 processes could not be verified and were left alone.",
+  adopted: 2,
+  left_behind: 1,
+  unverifiable: 1,
+};
+
+const RECOVERY_CLEANUP = {
+  groups: [
+    {
+      session: "s-crash",
+      provider: "claude-code",
+      account: "Work Max",
+      project: "web",
+      machine: "machine-local",
+      healthy: false,
+      rows: [
+        {
+          pid: 8402, pgid: 8400, role: "root", state: "adopted",
+          state_label: "Running — re-adopted", down_period: false,
+          role_guess: "sh (guess)", exe_path: "/bin/sh", cmdline: "sh -c claude",
+          age_ms: 45 * 60_000, rss_bytes: 12_000_000, cpu_pct: 0.2, ports: null,
+          hog: false, hog_rules: [],
+          evidence: {
+            root_pid: 8402, parent_pid: null, pgid: 8400, escaped_group: false,
+            verification: { verdict: "verified", detail: "start-time matches the live process" },
+            first_seen: T0 - 45 * 60_000, last_seen: T0,
+          },
+        },
+        {
+          pid: 8301, pgid: 8300, role: "helper", state: "orphaned",
+          state_label: "left behind while Juggler was closed", down_period: true,
+          role_guess: "python3 (guess)", exe_path: "/usr/bin/python3",
+          cmdline: "python3 -m http.server 5173",
+          age_ms: 9_000_000, rss_bytes: 48 * 1024 * 1024, cpu_pct: 1.4, ports: "5173",
+          hog: false, hog_rules: [],
+          evidence: {
+            root_pid: 8300, parent_pid: 8300, pgid: 8300, escaped_group: false,
+            verification: { verdict: "verified", detail: "start-time and exe match the live process" },
+            first_seen: T0 - 9_000_000, last_seen: T0,
+          },
+        },
+      ],
+    },
+  ],
+  clean_instances: 1,
+  ledger_degraded: false,
+};
+
+async function seedRecoveryPage(
+  page: import("@playwright/test").Page,
+  theme: string,
+  seams: Record<string, unknown>,
+) {
+  await page.addInitScript(
+    ({ fixture, t0, theme: t, seams: s }) => {
+      const w = window as unknown as Record<string, unknown>;
+      w.__AIJ_FIXTURE__ = fixture;
+      for (const [key, value] of Object.entries(s)) {
+        w[key] = value;
+      }
+      localStorage.setItem("aij.theme", t);
+      localStorage.setItem("aij.onboarding.dismissed", "1");
+      sessionStorage.setItem("aij.ready.skipped", "1");
+      Date.now = () => t0;
+    },
+    { fixture: allStatuses, t0: T0, theme, seams },
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+}
+
+for (const theme of THEMES) {
+  test(`recovery — one-time summary dialog — 1440x900 — ${theme}`, async ({ page }) => {
+    await seedRecoveryPage(page, theme, { __AIJ_RECOVERY__: RECOVERY_SUMMARY });
+    const dialog = page.getByTestId("recovery-summary");
+    await expect(dialog).toBeVisible();
+    // The exact drill text (one source of truth with the Rust test).
+    await expect(page.getByTestId("recovery-summary-text")).toHaveText(RECOVERY_SUMMARY.summary);
+    await expect(dialog).toContainText("stays suspended for 24 hours");
+    await page.screenshot({
+      path: resolve(GALLERY, `22-recovery/summary-dialog-1440x900-${theme}.png`),
+    });
+  });
+
+  test(`recovery — adopted panel: chip + detached notice — 1440x900 — ${theme}`, async ({ page }) => {
+    // sess-2 (the running Work Max terminal) survived the crash and was
+    // re-adopted at restart.
+    await page.addInitScript(
+      ({ fixture, t0, theme: t }) => {
+        const w = window as unknown as Record<string, unknown>;
+        w.__AIJ_FIXTURE__ = {
+          ...fixture,
+          sessions: fixture.sessions.map((session: { id: string }) =>
+            session.id === "sess-2" ? { ...session, adopted: true } : session,
+          ),
+        };
+        localStorage.setItem("aij.theme", t);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+        Date.now = () => t0;
+      },
+      { fixture: allStatuses, t0: T0, theme },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+    await page.getByRole("tab", { name: "Sessions" }).click();
+    await page
+      .getByRole("button", { name: /Work Max/ })
+      .filter({ hasText: /running/i })
+      .first()
+      .click();
+    await expect(page.getByTestId("instance-adopted-chip")).toContainText("↻ re-adopted");
+    await page.getByRole("tab", { name: "Processes" }).click();
+    const notice = page.getByTestId("instance-detached-notice");
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText("Running — re-adopted after restart");
+    await expect(notice).toContainText("terminal is detached");
+    await page.screenshot({
+      path: resolve(GALLERY, `22-recovery/adopted-panel-1440x900-${theme}.png`),
+    });
+  });
+
+  test(`recovery — cleanup Re-adopted filter + left-behind label — 1440x900 — ${theme}`, async ({ page }) => {
+    await seedRecoveryPage(page, theme, { __AIJ_CLEANUP__: RECOVERY_CLEANUP });
+    await page.getByRole("button", { name: "Cleanup" }).click();
+    await expect(page.getByTestId("cleanup-centre")).toBeVisible();
+    await page.getByRole("radio", { name: "Re-adopted" }).click();
+    await expect(page.getByTestId("cleanup-state-8402")).toContainText("Running — re-adopted");
+    await expect(page.getByTestId("cleanup-state-8301")).toContainText(
+      "left behind while Juggler was closed",
+    );
+    await page.screenshot({
+      path: resolve(GALLERY, `22-recovery/cleanup-readopted-1440x900-${theme}.png`),
+    });
+  });
 }

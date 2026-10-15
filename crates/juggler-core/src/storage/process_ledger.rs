@@ -94,6 +94,10 @@ pub struct LedgerRow {
     /// root PGID at reconcile time — AJ-E502 Req.4). Sticky once set:
     /// containment is void for this row, forever.
     pub escaped_group: bool,
+    /// True when the row was orphaned by CRASH RECOVERY (AJ-E510
+    /// Req.2): its root died while Juggler was closed — the distinct
+    /// `left behind while Juggler was closed` marker. Sticky.
+    pub down_period: bool,
     /// When the Intent row was first written, epoch ms.
     pub first_seen: i64,
     /// Last update, epoch ms.
@@ -162,6 +166,7 @@ impl ProcessLedgerRepo {
                 exit_kind TEXT,
                 reaped_by_us INTEGER,
                 escaped_group INTEGER NOT NULL DEFAULT 0,
+                down_period INTEGER NOT NULL DEFAULT 0,
                 first_seen INTEGER NOT NULL,
                 last_seen INTEGER NOT NULL
             );
@@ -172,11 +177,12 @@ impl ProcessLedgerRepo {
             CREATE INDEX IF NOT EXISTS process_ledger_state_last_seen
                 ON process_ledger(state, last_seen);",
         )?;
-        // v13's `escaped_group` column on a LEGACY v12 file is added by
-        // the main store's migration (`Storage::open` always runs before
-        // this repo in the app; two writers for one ALTER would race to
-        // "duplicate column"). This CREATE only builds standalone
-        // ledgers (supervisor tests), already in the v13 shape.
+        // v13's `escaped_group` and v16's `down_period` columns on a
+        // LEGACY file are added by the main store's migration
+        // (`Storage::open` always runs before this repo in the app; two
+        // writers for one ALTER would race to "duplicate column"). This
+        // CREATE only builds standalone ledgers (supervisor tests),
+        // already in the v16 shape.
         Ok(Self {
             conn: std::sync::Mutex::new(conn),
         })
@@ -464,6 +470,47 @@ impl ProcessLedgerRepo {
     /// # Errors
     ///
     /// Returns [`CoreError::Storage`] on SQLite failures.
+    /// Crash recovery's variant (AJ-E510 Req.2): same state flip,
+    /// plus the sticky down-period marker.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::Storage`] on SQLite failures.
+    pub fn mark_orphaned_down(
+        &self,
+        pid: u32,
+        boot_id: &str,
+        now_ms: i64,
+    ) -> Result<(), CoreError> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE process_ledger SET
+                 state = ?2, last_seen = ?3, down_period = 1
+             WHERE rowid IN (
+                 SELECT rowid FROM process_ledger
+                 WHERE pid = ?1 AND boot_id = ?4 AND state = ?5 AND role = ?6
+                 ORDER BY first_seen DESC LIMIT 1
+             )",
+            params![
+                pid,
+                STATE_ORPHANED,
+                now_ms,
+                boot_id,
+                STATE_RUNNING,
+                ROLE_HELPER
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Flips a RUNNING helper row to `orphaned` (AJ-E504 Req.3):
+    /// root exited, grace elapsed, two ticks agreed. The row stays a
+    /// candidate; an orphan that later exits flips to `exited` via
+    /// [`ProcessLedgerRepo::mark_exited`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::Storage`] on SQLite failures.
     pub fn mark_orphaned(&self, pid: u32, boot_id: &str, now_ms: i64) -> Result<(), CoreError> {
         let conn = self.lock()?;
         conn.execute(
@@ -577,6 +624,7 @@ fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LedgerRow> {
         exit_kind: row.get("exit_kind")?,
         reaped_by_us: row.get::<_, Option<i64>>("reaped_by_us")?.map(|v| v != 0),
         escaped_group: row.get::<_, i64>("escaped_group")? != 0,
+        down_period: row.get::<_, i64>("down_period")? != 0,
         first_seen: row.get("first_seen")?,
         last_seen: row.get("last_seen")?,
     })

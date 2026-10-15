@@ -253,7 +253,18 @@ export function RightInspector({
     kind === "instance" && data.instance ? (
       (() => {
         const view = statusTone(data.instance.status);
-        return <Chip tone={view.tone}>{view.label}</Chip>;
+        return (
+          <span className="flex items-center gap-1.5">
+            <Chip tone={view.tone}>{view.label}</Chip>
+            {/* AJ-E510: the re-adopted marker + the honest terminal
+             * note — output from before the crash is unavailable. */}
+            {data.instance.adopted && (
+              <span data-testid="instance-adopted-chip">
+                <Chip tone="accent">↻ re-adopted</Chip>
+              </span>
+            )}
+          </span>
+        );
       })()
     ) : null;
 
@@ -2250,6 +2261,19 @@ function ProcessesTab(props: PanelProps & { readOnly?: boolean }) {
 
   if (!instance) return <HonestEmpty tab="processes" task="AJ-E410" />;
 
+  // AJ-E510 Req.4: the detached notice for re-adopted Instances — the
+  // pre-crash terminal output is gone; the verified stop path (the
+  // E507 sheet) is the way to end it.
+  const adoptedNotice = instance.adopted ? (
+    <Card className="flex flex-col gap-1 p-3" data-testid="instance-detached-notice">
+      <p className="text-[11.5px] font-medium text-ink">Running — re-adopted after restart</p>
+      <p className="text-[10.5px] text-muted">
+        The terminal is detached: output from before the app closed is not available. Stop
+        runs through the verified sheet (Terminate… on a row below).
+      </p>
+    </Card>
+  ) : null;
+
   if (error) {
     return (
       <Card className="flex flex-col gap-2 p-4" data-testid="processes-error" role="alert">
@@ -2333,6 +2357,7 @@ function ProcessesTab(props: PanelProps & { readOnly?: boolean }) {
 
   return (
     <div className="flex flex-col gap-3" data-testid="processes-tab">
+      {adoptedNotice}
       <div className="flex items-center justify-between gap-2">
         <p className="text-[10px] text-muted">2s sampling · 5s refresh · Measured</p>
         {lastSpark && (

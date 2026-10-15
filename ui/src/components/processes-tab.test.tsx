@@ -76,7 +76,7 @@ const fixtures: Record<string, ProcessesInfo> = {
     orphans: [],
     unavailable_reason: null,
   },
-  adopted: {
+  unavailable: {
     rows: [],
     spark: [],
     orphans: [],
@@ -89,6 +89,7 @@ Object.assign(e410.processes, fixtures);
 function instance(id: string, overrides: Partial<InstanceInfo> = {}): InstanceInfo {
   return {
     id,
+    adopted: false,
     launch_recipe_id: "p-1",
     provider: "claude-code",
     account_id: "a1",
@@ -245,7 +246,7 @@ describe("AJ-E410 Processes tab (§7.3 + orphan contract)", () => {
   });
 
   it("adopted/desktop-kind sessions render resources unavailable — never zeroed rows", async () => {
-    const { container } = processesShell(instance("adopted"));
+    const { container } = processesShell(instance("unavailable"));
     await waitFor(() => expect(container.querySelector('[data-testid="processes-unavailable"]')).not.toBeNull());
     expect(container.querySelector('[data-testid="processes-unavailable"]')!.textContent).toContain(
       "resources unavailable",
@@ -293,5 +294,30 @@ describe("AJ-E410 Processes tab (§7.3 + orphan contract)", () => {
       ...(e410.processes.tree as ProcessesInfo),
       orphans: (e410.processes.tree as ProcessesInfo).orphans.filter((orphan) => orphan.pid !== REFUSED_PID),
     };
+  });
+});
+
+describe("AJ-E510 re-adopted Instances (crash recovery)", () => {
+  it("shows the ↻ re-adopted chip and the detached-notice card leading the processes tab", async () => {
+    const { container } = processesShell(instance("tree", { adopted: true }));
+    await waitFor(() => expect(container.querySelector('[data-testid="processes-tab"] table')).not.toBeNull());
+    const chip = container.querySelector('[data-testid="instance-adopted-chip"]');
+    expect(chip?.textContent).toBe("↻ re-adopted");
+    const notice = container.querySelector('[data-testid="instance-detached-notice"]');
+    expect(notice?.textContent).toContain("Running — re-adopted after restart");
+    expect(notice?.textContent).toContain(
+      "The terminal is detached: output from before the app closed is not available.",
+    );
+    expect(notice?.textContent).toContain("verified sheet");
+    // The notice LEADS the tab — the user reads why output is missing
+    // before any row.
+    expect(container.querySelector('[data-testid="processes-tab"]')!.firstElementChild).toBe(notice);
+  });
+
+  it("a supervised (never-adopted) Instance shows neither chip nor notice", async () => {
+    const { container } = processesShell(instance("tree", { adopted: false }));
+    await waitFor(() => expect(container.querySelector('[data-testid="processes-tab"] table')).not.toBeNull());
+    expect(container.querySelector('[data-testid="instance-adopted-chip"]')).toBeNull();
+    expect(container.querySelector('[data-testid="instance-detached-notice"]')).toBeNull();
   });
 });

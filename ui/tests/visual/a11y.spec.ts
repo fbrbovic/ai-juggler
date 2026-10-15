@@ -311,3 +311,60 @@ for (const theme of ["dark", "light"] as const) {
     expect(serious).toHaveLength(0);
   });
 }
+
+// AJ-E510: axe-core 0 critical/serious on the one-time restart summary
+// dialog (modal semantics + focus land inside it) — the crash moment's
+// first surface.
+for (const theme of ["dark", "light"] as const) {
+  test(`recovery — summary dialog — axe 0 critical/serious — ${theme}`, async ({ page }) => {
+    await page.addInitScript(
+      ({ fixture, t0, theme: t, recovery }) => {
+        const w = window as unknown as Record<string, unknown>;
+        w.__AIJ_FIXTURE__ = fixture;
+        w.__AIJ_RECOVERY__ = recovery;
+        localStorage.setItem("aij.theme", t);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+        Date.now = () => t0;
+      },
+      {
+        fixture: allStatuses,
+        t0: T0,
+        theme,
+        recovery: {
+          summary:
+            "2 Instances re-adopted, 1 helpers left behind, 1 processes could not be verified and were left alone.",
+          adopted: 2,
+          left_behind: 1,
+          unverifiable: 1,
+        },
+      },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+    await expect(page.getByTestId("recovery-summary")).toBeVisible();
+    // Focus is INSIDE the dialog (not lost behind the overlay).
+    const focusInDialog = await page.evaluate(() => {
+      const dialog = document.querySelector('[data-testid="recovery-summary"]');
+      return dialog !== null && dialog.contains(document.activeElement);
+    });
+    if (!focusInDialog) throw new Error("focus did not land inside the recovery dialog");
+    const results = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+      .analyze();
+    const serious = results.violations.filter((v) =>
+      ["serious", "critical"].includes(v.impact ?? ""),
+    );
+    if (serious.length > 0) {
+      const summary = serious
+        .map(
+          (v) =>
+            `${v.id} (${v.impact}): ${v.nodes.map((n) => n.target.join(" ")).slice(0, 3).join(", ")}`,
+        )
+        .join("\n");
+      throw new Error(`axe violations on the recovery dialog (${theme}):\n${summary}`);
+    }
+    expect(serious).toHaveLength(0);
+  });
+}

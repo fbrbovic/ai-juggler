@@ -125,6 +125,13 @@ cwd: string,
  */
 kind: string, 
 /**
+ * True when crash recovery re-adopted this Instance's verified
+ * root (AJ-E510): `Running — re-adopted`, terminal detached
+ * (output from before the crash is unavailable), stop via the
+ * AJ-E507 sheet.
+ */
+adopted: boolean, 
+/**
  * Owning project id, when the cwd resolved to a tracked project.
  */
 project_id: string | null, 

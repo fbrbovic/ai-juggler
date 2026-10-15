@@ -30,6 +30,7 @@ function mk(id: string, overrides: Partial<InstanceInfo> = {}): InstanceInfo {
   return {
     id,
     launch_recipe_id: "p-1",
+    adopted: false,
     provider: "claude-code",
     account_id: "claude-work",
     account_label: "Work Max",

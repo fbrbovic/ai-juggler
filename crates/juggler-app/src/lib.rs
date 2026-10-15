@@ -149,6 +149,8 @@ pub fn run() {
             commands::cleanup_resume_after_crash,
             commands::cleanup_tiers_get,
             commands::cleanup_tiers_set,
+            commands::recovery_summary_get,
+            commands::recovery_summary_dismiss,
             commands::account_set_cleanup,
             commands::account_set_renewal,
             commands::desktop_launch,

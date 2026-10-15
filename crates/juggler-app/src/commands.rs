@@ -336,6 +336,11 @@ pub struct InstanceInfo {
     pub cwd: String,
     /// Instance kind: `terminal` | `desktop`.
     pub kind: String,
+    /// True when crash recovery re-adopted this Instance's verified
+    /// root (AJ-E510): `Running — re-adopted`, terminal detached
+    /// (output from before the crash is unavailable), stop via the
+    /// AJ-E507 sheet.
+    pub adopted: bool,
     /// Owning project id, when the cwd resolved to a tracked project.
     pub project_id: Option<String>,
     /// The native conversation inside this Instance, once discovered
@@ -1625,8 +1630,9 @@ pub fn sessions_list(state: tauri::State<'_, Arc<AppState>>) -> AppResult<Vec<In
     // code path ever holds the storage and collector locks together.
     let live = live_stats_of(state.inner());
     let labels = desktop_isolation_labels(&state.registry);
+    let adopted = state.supervisor.alive_adopted_sessions();
     let storage = lock_storage(&state)?;
-    session_infos(&storage, &live, &labels)
+    session_infos(&storage, &live, &labels, &adopted)
 }
 
 /// Stops a session via the supervisor ladder (grace, then kill).
@@ -2063,7 +2069,12 @@ pub fn emit_sessions(app: &tauri::AppHandle, state: &Arc<AppState>) -> AppResult
     let live = live_stats_of(state);
     let sessions = {
         let storage = state.storage.lock().map_err(|_| AppError::StatePoisoned)?;
-        session_infos(&storage, &live, &desktop_isolation_labels(&state.registry))?
+        session_infos(
+            &storage,
+            &live,
+            &desktop_isolation_labels(&state.registry),
+            &state.supervisor.alive_adopted_sessions(),
+        )?
     };
     let _ = app.emit(crate::EVENT_SESSIONS_UPDATED, sessions);
     Ok(())
@@ -2382,6 +2393,7 @@ pub fn session_infos_snapshot(storage: &Storage) -> AppResult<Vec<InstanceInfo>>
         storage,
         &LiveStatsMap::new(),
         &std::collections::BTreeMap::new(),
+        &[],
     )
 }
 
@@ -2432,6 +2444,7 @@ fn session_infos(
     storage: &Storage,
     live: &LiveStatsMap,
     desktop_labels: &std::collections::BTreeMap<String, String>,
+    adopted_ids: &[juggler_core::model::SessionId],
 ) -> AppResult<Vec<InstanceInfo>> {
     let (account_index, recipe_index) = session_join_indexes(storage)?;
     Ok(storage
@@ -2455,6 +2468,7 @@ fn session_infos(
                 live.get(&record.id.to_string()).copied()
             };
             InstanceInfo {
+                adopted: adopted_ids.contains(&record.id),
                 id: record.id.to_string(),
                 launch_recipe_id: record.profile.to_string(),
                 provider,
@@ -2804,6 +2818,7 @@ pub fn projects_list_impl(state: &Arc<AppState>) -> AppResult<Vec<ProjectInfo>> 
         &storage,
         &live_stats,
         &desktop_isolation_labels(&state.registry),
+        &state.supervisor.alive_adopted_sessions(),
     )?;
     // Statuses that mean "occupying the project right now".
     let live = |status: &str| matches!(status, "starting" | "running");
@@ -3313,8 +3328,13 @@ pub struct CleanupRow {
     pub role: String,
     /// Ledger state (`running` | `orphaned` | `unverifiable` | `exited`).
     pub state: String,
-    /// The pass2 §2 label, VERBATIM.
+    /// The pass2 §2 label, VERBATIM — except down-period orphans,
+    /// which carry the AJ-E510 label `left behind while Juggler was
+    /// closed` (their root died while the app was not running).
     pub state_label: String,
+    /// True for helpers of roots that died while Juggler was closed
+    /// (AJ-E510 Req.2) — the distinct down-period marker.
+    pub down_period: bool,
     /// Role guess — always labelled a guess (E504 note).
     pub role_guess: String,
     /// Executable path (truncated for display, full on expand).
@@ -3567,12 +3587,21 @@ pub fn cleanup_inventory_inner(state: &Arc<AppState>, filter: &str) -> CleanupIn
                 continue;
             }
             let live = live_rows.get(&pid);
+            // AJ-E510 Req.2: the durable down-period marker (set by
+            // crash recovery) — distinct from live-session orphans.
+            let down_period = effective_state == "orphaned" && row.down_period;
+            let state_label = if down_period {
+                "left behind while Juggler was closed".to_string()
+            } else {
+                cleanup_state_label(effective_state).to_string()
+            };
             rows.push(CleanupRow {
                 pid,
                 pgid: row.pgid,
                 role: row.role.clone(),
                 state: effective_state.to_string(),
-                state_label: cleanup_state_label(effective_state).to_string(),
+                state_label,
+                down_period,
                 role_guess: format!("{} (guess)", row.exe_path.rsplit('/').next().unwrap_or("?")),
                 exe_path: row.exe_path.clone(),
                 cmdline: row.cmdline_trunc.clone(),
@@ -5294,6 +5323,91 @@ pub struct CleanupStatusInfo {
     pub tier2_pending: Vec<Tier2NoticeInfo>,
 }
 
+/// The one-time recovery summary (AJ-E510 Req.3): present exactly
+/// once per crash — the second relaunch (no new findings) re-shows
+/// nothing.
+#[derive(Clone, Debug, serde::Serialize, PartialEq)]
+pub struct RecoverySummaryInfo {
+    /// The exact template text.
+    pub summary: String,
+    /// `{a}` — Instances re-adopted (stoppable through the E507 path).
+    pub adopted: usize,
+    /// `{b}` — helpers left behind while Juggler was closed.
+    pub left_behind: usize,
+    /// `{c}` — processes that could not be verified (left alone).
+    pub unverifiable: usize,
+}
+
+/// Reads the unconsumed recovery summary, if one is pending (shown
+/// once, then dismissed forever until a new recovery finds something).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on read failure.
+#[tauri::command]
+pub fn recovery_summary_get(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> AppResult<Option<RecoverySummaryInfo>> {
+    recovery_summary_get_arc(&state)
+}
+
+/// The Arc-based core (tests call this directly).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on read failure.
+pub fn recovery_summary_get_arc(state: &Arc<AppState>) -> AppResult<Option<RecoverySummaryInfo>> {
+    let storage = lock_storage_arc(state)?;
+    let Some(summary) = storage
+        .app_settings()
+        .get("recovery_summary")
+        .map_err(AppError::from)?
+        .filter(|text| !text.is_empty())
+    else {
+        return Ok(None);
+    };
+    let consumed = storage
+        .app_settings()
+        .get("recovery_summary_consumed")
+        .map_err(AppError::from)?
+        .is_some_and(|value| value == "1");
+    if consumed {
+        return Ok(None);
+    }
+    // Counts ride the text's shape (written by the same template).
+    let count = |part: Option<&str>| {
+        part.and_then(|text| text.split_whitespace().next())
+            .and_then(|n| n.parse::<usize>().ok())
+            .unwrap_or_default()
+    };
+    let mut fields = summary.split(',');
+    let adopted = count(fields.next());
+    let left_behind = count(fields.next());
+    let unverifiable = count(fields.next());
+    Ok(Some(RecoverySummaryInfo {
+        summary,
+        adopted,
+        left_behind,
+        unverifiable,
+    }))
+}
+
+/// Dismisses the summary (the only way it goes away; no permanent
+/// dismiss shortcut exists by design).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on write failure.
+#[tauri::command]
+pub fn recovery_summary_dismiss(state: tauri::State<'_, Arc<AppState>>) -> AppResult<()> {
+    let storage = lock_storage_arc(&state)?;
+    storage
+        .app_settings()
+        .set("recovery_summary_consumed", "1")
+        .map_err(AppError::from)?;
+    Ok(())
+}
+
 /// Reads the automation status (Tier 0 is always the fallback — this
 /// surface never signals).
 ///
@@ -5832,7 +5946,7 @@ mod tests {
         .into_iter()
         .collect();
         let rows =
-            session_infos(&storage, &live, &std::collections::BTreeMap::new()).expect("rows");
+            session_infos(&storage, &live, &std::collections::BTreeMap::new(), &[]).expect("rows");
         let full = row(&rows, "sess-full");
 
         assert_eq!(full.account_id.as_deref(), Some("acc-1"));
@@ -5874,6 +5988,7 @@ mod tests {
             &storage,
             &LiveStatsMap::new(),
             &std::collections::BTreeMap::new(),
+            &[],
         )
         .expect("rows");
 
@@ -5935,7 +6050,7 @@ mod tests {
             "claude-code".to_string(),
             "Single-account app — Juggler tracks, cannot isolate".to_string(),
         )]);
-        let rows = session_infos(&storage, &LiveStatsMap::new(), &labels).expect("rows");
+        let rows = session_infos(&storage, &LiveStatsMap::new(), &labels, &[]).expect("rows");
         assert_eq!(
             row(&rows, "sess-desk").isolation_label.as_deref(),
             Some("Single-account app — Juggler tracks, cannot isolate")
@@ -5948,6 +6063,7 @@ mod tests {
             &storage,
             &LiveStatsMap::new(),
             &std::collections::BTreeMap::new(),
+            &[],
         )
         .expect("rows");
         assert_eq!(row(&bare, "sess-desk").isolation_label, None);
@@ -6002,6 +6118,7 @@ mod tests {
                 &storage,
                 &LiveStatsMap::new(),
                 &std::collections::BTreeMap::new(),
+                &[],
             )
             .expect("rows");
             assert_eq!(rows.len(), 50);
@@ -6023,6 +6140,7 @@ mod tests {
             &storage,
             &LiveStatsMap::new(),
             &std::collections::BTreeMap::new(),
+            &[],
         )
         .expect("rows");
         let vocabulary: Vec<&str> = rows.iter().map(|row| row.status.as_str()).collect();

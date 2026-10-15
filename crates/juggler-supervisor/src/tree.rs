@@ -124,6 +124,16 @@ pub trait LedgerStore: Send + Sync {
     /// [`LedgerError::Store`] on store failure.
     fn mark_orphaned(&self, pid: u32, boot_id: &str) -> Result<(), LedgerError>;
 
+    /// Flips a running helper row to `orphaned` AND sets the durable
+    /// `down_period` marker (AJ-E510): the helper survived, but its
+    /// root died while Juggler itself was closed. Only recovery
+    /// writes this — the tick ladder uses [`LedgerStore::mark_orphaned`].
+    ///
+    /// # Errors
+    ///
+    /// [`LedgerError::Store`] on store failure.
+    fn mark_orphaned_down(&self, pid: u32, boot_id: &str) -> Result<(), LedgerError>;
+
     /// Every row of one session, all states (the reconciler's
     /// root-exit facts + tests/evidence dumps).
     ///
@@ -249,6 +259,12 @@ impl LedgerStore for CoreLedgerStore {
     fn mark_orphaned(&self, pid: u32, boot_id: &str) -> Result<(), LedgerError> {
         self.repo
             .mark_orphaned(pid, boot_id, now_ms())
+            .map_err(|e| LedgerError::Store(e.to_string()))
+    }
+
+    fn mark_orphaned_down(&self, pid: u32, boot_id: &str) -> Result<(), LedgerError> {
+        self.repo
+            .mark_orphaned_down(pid, boot_id, now_ms())
             .map_err(|e| LedgerError::Store(e.to_string()))
     }
 
@@ -657,15 +673,17 @@ where
 }
 
 #[derive(Clone, Copy)]
-enum Signal {
+pub(crate) enum Signal {
     Term,
     Kill,
     /// liveness probe (signal 0)
     Probe,
 }
 
+/// Sends one signal to one pid — the ONE platform seam (unix signals
+/// vs the TerminateProcess-only ladder, M7-5).
 #[cfg(unix)]
-fn signal_pid(pid: u32, signal: Signal) -> bool {
+pub(crate) fn signal_pid(pid: u32, signal: Signal) -> bool {
     use nix::sys::signal::{self, Signal as NixSignal};
     use nix::unistd::Pid;
     let Ok(nix_pid) = i32::try_from(pid).map(Pid::from_raw) else {
@@ -680,7 +698,7 @@ fn signal_pid(pid: u32, signal: Signal) -> bool {
 }
 
 #[cfg(not(unix))]
-fn signal_pid(_pid: u32, _signal: Signal) -> bool {
+pub(crate) fn signal_pid(_pid: u32, _signal: Signal) -> bool {
     // Non-unix: the ladder is TerminateProcess-only (M7-5); no
     // signal surface exists to fake here — the sheet says so.
     false

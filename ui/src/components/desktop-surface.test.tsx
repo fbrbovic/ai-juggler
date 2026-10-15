@@ -53,6 +53,7 @@ function mk(overrides: Partial<InstanceInfo> = {}): InstanceInfo {
   return {
     id: "sess-desktop-1",
     launch_recipe_id: "p-3",
+    adopted: false,
     provider: "fake-desktop",
     account_id: "fake-desk",
     account_label: "Fake Desk",
