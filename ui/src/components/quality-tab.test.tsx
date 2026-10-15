@@ -54,6 +54,7 @@ function instance(id: string, overrides: Partial<InstanceInfo> = {}): InstanceIn
   return {
     id,
     launch_recipe_id: "p-1",
+    adopted: false,
     provider: "claude-code",
     account_id: "a1",
     account_label: "Work Max",

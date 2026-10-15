@@ -475,7 +475,7 @@ Trap: AJ-E507/E508 depend on this contract even though they are listed around it
 - Commands/UI: `cleanup_status/pause_set/tier2_decide/resume_after_crash/tiers_get/tiers_set`; `TierToggles` in the account panel (exact labels), the Centre's pause button + `Automatic cleanup is paused.` banner + suspended banner + Re-confirm, Tier-2 notice cards with aria-live countdown and Undo/Keep.
 - Tests/evidence: `tests/tiers.rs` 8/8 (default-guardrail, drill with MCP untouched, pause, per-Account isolation, tier2 undo+lapse, demote, suspension, toggle persistence) + evaluator matrix; UI 180/180; `21-tiers` gallery (12) + 2 axe gates (one contrast fix); `docs/qa/evidence/AJ-E508/`.
 
-### AJ-E510 Juggler-crash recovery: re-adoption with stop control | Status: TODO | Priority P0 | Effort L | Depends: AJ-E501, AJ-E503, AJ-E504
+### AJ-E510 Juggler-crash recovery: re-adoption with stop control | Status: DONE-EVIDENCED (evidence: docs/qa/evidence/AJ-E510/manifest.md) | Priority P0 | Effort L | Depends: AJ-E501, AJ-E503, AJ-E504
 
 **Goal**: On relaunch after a Juggler crash, re-adopt surviving roots WITH a working verified stop path, surface helpers orphaned while Juggler was down, and tell the user once what happened.
 
@@ -502,6 +502,14 @@ Trap: AJ-E507/E508 depend on this contract even though they are listed around it
 **Research basis**: pass2/05 §11.2 (lines 439-460), §3 F-1/F-3; SPEC §5.3 `docs/SPEC.md:251`; deep/08 §5 F-1/F-3.
 
 **Handover note**: Trap: T3 survivors are BY DESIGN (SPEC §5.3) — never route them through orphan tiers. Trap: identity data is least trustworthy right after a crash; that is why tier suspension is mandatory, not a nicety.
+
+*Implementation mapping (recorded in this task's PR per the claiming protocol)*:
+- Recovery pass (`supervisor.rs::recover` + `state.rs::run_startup_recovery`): candidate SESSIONS from the ledger's live-row scan, then each session's FULL rows (a root that died while Juggler was down is already `exited` — detached watcher threads keep exit-patching the durable ledger — so the live-row scan alone would drop its left-behind helpers). Roots verify by boot+start-time ONLY (the E504 aliasing rule — exe legitimately moves across `exec`); helpers verify the full triple. Verdicts: live+verified root → `register_adopted` (ChildHandle with no ring readers, no PTY, `force_kill` = verified PGID ladder — F-3 CLOSED, `stop` no longer `UnknownSession`); alive-but-unverifiable → `Unverifiable` (listed, never killed); dead → `exited (unknown)`.
+- Down-period helpers (Req.2): schema v16 `process_ledger.down_period` (durable across any number of further restarts; `mark_orphaned_down` on the `LedgerStore` trait writes it) — distinct from grace-based orphans; original first-seen attribution preserved; label override `left behind while Juggler was closed` in `cleanup_inventory`.
+- Summary (Req.3): exact template persisted to `app_settings` (`recovery_summary` + `recovery_summary_consumed`), read by `recovery_summary_get` (None once consumed — shown exactly once), dismissed only via `recovery_summary_dismiss`; audited as `actor=system:recovery`; ANY finding suspends Tiers 1-2 for 24 h (E508 Req.5).
+- Reconciliation: adopted-marker sessions (`alive_adopted_sessions` = the `adopted` map, the old journal-minus-supervised heuristic retired) stay Running; non-adopted running rows reconcile to Stopped as before.
+- UI: `InstanceInfo.adopted` → `↻ re-adopted` chip + `Running — re-adopted after restart` label; `RecoverySummaryDialog` (focus-on-open, Esc/Got-it dismiss, focus returns to the board, exact text — same string asserted in the Rust drill); Processes tab leads with the detached-terminal notice; Cleanup Centre `Re-adopted` filter + left-behind label; adopted rows killable through the E507 sheet only.
+- Tests/evidence: `tests/recovery.rs` crash drill (2/1/1 exact incl. forged-identity row, stop kills the verified tree, B stays adopted, forged row untouched, audit row, suspension, dismiss-once) in `docs/qa/evidence/AJ-E510/recovery-drill.txt`; UI 190/190; `22-recovery` gallery (6 captures) + axe gates; one contrast fix (dialog h2 `text-ink`).
 
 ### AJ-E511 Fleet-shaped ownership: machine identity on every process record | Status: TODO | Priority P1 | Effort M | Depends: AJ-E501
 

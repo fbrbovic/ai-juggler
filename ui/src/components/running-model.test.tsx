@@ -21,6 +21,7 @@ function instance(overrides: Partial<InstanceInfo> = {}): InstanceInfo {
   return {
     id: "sess-m",
     launch_recipe_id: "p-1",
+    adopted: false,
     provider: "claude-code",
     account_id: "a1",
     account_label: "Work Max",

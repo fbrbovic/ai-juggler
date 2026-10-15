@@ -23,6 +23,7 @@ const NOW = 1_728_800_000_000;
 const ended: InstanceInfo = {
   id: "sess-1",
   launch_recipe_id: "p-1",
+  adopted: false,
   provider: "claude-code",
   account_id: "claude-work",
   account_label: "Work Max",

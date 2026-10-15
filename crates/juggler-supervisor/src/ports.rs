@@ -304,6 +304,7 @@ mod tests {
             exit_kind: None,
             reaped_by_us: None,
             escaped_group: false,
+            down_period: false,
             first_seen: 1_000,
             last_seen: 1_000,
         }

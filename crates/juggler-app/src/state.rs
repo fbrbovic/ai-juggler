@@ -125,6 +125,11 @@ impl AppState {
         {
             supervisor.set_orphan_grace("", secs);
         }
+        // AJ-E510: the startup recovery pass (pass2 §11.2) — BEFORE
+        // reconciliation, so verified survivors get handles (stoppable
+        // through the E507 path, F-3 closed) and the marker set drives
+        // everything downstream.
+        let report = run_startup_recovery(&ledger, &supervisor, &storage, &audit);
         // Crash/restart reconciliation: sessions recorded running whose
         // processes did not survive the restart are marked stopped —
         // never a permanently fake "live" dot (survivors stay running).
@@ -145,10 +150,14 @@ impl AppState {
                 }
             }
         }
-        // AJ-E508 Req.5: a crash recovery (adopted survivors found at
-        // boot) suspends Tiers 1-2 for 24 h until the user re-confirms
-        // in the Cleanup Centre — shown, never silent.
-        if !adopted.is_empty() {
+        // AJ-E508 Req.5 (per AJ-E510): any recovery finding suspends
+        // Tiers 1-2 for 24 h until the user re-confirms in the Cleanup
+        // Centre — identity data is least trustworthy right after a
+        // crash, so the suspension is mandatory, not a nicety.
+        if !report.adopted.is_empty()
+            || !report.left_behind.is_empty()
+            || !report.unverifiable.is_empty()
+        {
             let suspended_until = now_epoch_ms() + 24 * 3_600_000;
             let _ = storage
                 .app_settings()
@@ -220,6 +229,104 @@ pub fn default_registry() -> AdapterRegistry {
         juggler_adapters::ClaudeCodeAdapter::new(),
     ));
     registry
+}
+
+/// The AJ-E510 startup recovery pass (pass2 §11.2): identity-verify the
+/// durable ledger's live rows, re-adopt verified survivors (handles with
+/// a working verified stop, F-3 closed), mark helpers of roots that died
+/// while Juggler was down `Orphaned` with their original attribution,
+/// and — when anything was found — persist the ONE-time summary and
+/// audit it as `actor=system:recovery`. Identity failures become
+/// `Unverifiable` (listed, never killed).
+fn run_startup_recovery(
+    ledger: &std::sync::Arc<juggler_supervisor::tree::CoreLedgerStore>,
+    supervisor: &juggler_supervisor::Supervisor,
+    storage: &Storage,
+    audit: &std::sync::Arc<juggler_core::storage::CleanupAuditRepo>,
+) -> juggler_supervisor::supervisor::RecoveryReport {
+    let machine = juggler_app_machine_id(storage);
+    // Candidate SESSIONS come from the live-row scan, but the pass
+    // reads each session's FULL rows — a root that died while Juggler
+    // was down is already `exited` (detached watcher threads patch the
+    // durable ledger), and its still-running helpers need that root
+    // context to be classified as left-behind.
+    let rows_by_session = {
+        use juggler_supervisor::tree::LedgerStore as _;
+        let mut sessions: Vec<juggler_core::model::SessionId> = Vec::new();
+        if let Ok(candidates) = ledger.candidates(&machine) {
+            for row in candidates {
+                let session = juggler_core::model::SessionId::new(row.session_id.clone());
+                if !sessions.contains(&session) {
+                    sessions.push(session);
+                }
+            }
+        }
+        sessions
+            .into_iter()
+            .filter_map(|session| {
+                ledger
+                    .session_rows(&session)
+                    .ok()
+                    .map(|rows| (session, rows))
+            })
+            .collect::<Vec<_>>()
+    };
+    let report = supervisor.recover(&rows_by_session);
+    if !report.adopted.is_empty()
+        || !report.left_behind.is_empty()
+        || !report.unverifiable.is_empty()
+    {
+        // Req.3: ONE summary, exact template, shown once, audited as
+        // actor=system:recovery.
+        let summary = format!(
+            "{} Instances re-adopted, {} helpers left behind, {} processes could not be verified and were left alone.",
+            report.adopted.len(),
+            report.left_behind.len(),
+            report.unverifiable.len()
+        );
+        let _ = storage.app_settings().set("recovery_summary", &summary);
+        let _ = storage.app_settings().set("recovery_summary_consumed", "0");
+        let _ = audit.intent(&juggler_core::storage::CleanupAuditRecord {
+            id: 0,
+            at_ms: juggler_core::model::Timestamp::now().millis(),
+            actor: "system:recovery".into(),
+            pid: 0,
+            pgid: None,
+            exe_path: "(recovery)".into(),
+            cmdline_hash: "(recovery)".into(),
+            cmdline_trunc: summary.clone(),
+            session_id: "(restart)".into(),
+            provider: "system".into(),
+            account_id: None,
+            project_id: None,
+            machine_id: machine.as_str().to_string(),
+            identity: "startup recovery pass (AJ-E510 §11.2)".into(),
+            scope: "summary".into(),
+            outcome: summary,
+            ports_before: None,
+            ports_after: None,
+        });
+    }
+    report
+}
+
+/// The local `MachineId` (generated + persisted on first read).
+fn juggler_app_machine_id(storage: &Storage) -> juggler_core::model::MachineId {
+    use juggler_core::model::MachineId;
+    if let Ok(Some(existing)) = storage.app_settings().get("local_machine_id")
+        && !existing.is_empty()
+    {
+        return MachineId::new(existing);
+    }
+    let generated = format!(
+        "machine-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or_default()
+    );
+    let _ = storage.app_settings().set("local_machine_id", &generated);
+    MachineId::new(generated)
 }
 
 /// Current epoch milliseconds (the suspension stamp).

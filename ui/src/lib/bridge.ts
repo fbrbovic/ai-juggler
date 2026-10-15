@@ -211,6 +211,7 @@ const MOCK_STATS: StatsInfo =
 const MOCK_SESSIONS: InstanceInfo[] = seeded.sessions ?? [
   {
     id: "sess-live-1",
+    adopted: false,
     launch_recipe_id: "p-1",
     provider: "claude-code",
     account_id: "claude-work",
@@ -245,6 +246,7 @@ const MOCK_SESSIONS: InstanceInfo[] = seeded.sessions ?? [
   },
   {
     id: "sess-done-1",
+    adopted: false,
     launch_recipe_id: "p-3",
     provider: "claude-code",
     account_id: "claude-personal",
@@ -275,6 +277,7 @@ const MOCK_SESSIONS: InstanceInfo[] = seeded.sessions ?? [
   },
   {
     id: "sess-done-2",
+    adopted: false,
     launch_recipe_id: "p-2",
     provider: "claude-code",
     account_id: "claude-work",
@@ -832,6 +835,31 @@ export interface CleanupStatusData {
 export interface CleanupTierSettingsData {
   tier1_opt_in: boolean;
   tier2_opt_in: boolean;
+}
+
+/** AJ-E510: the one-time recovery summary. */
+export interface RecoverySummaryData {
+  summary: string;
+  adopted: number;
+  left_behind: number;
+  unverifiable: number;
+}
+
+/** Reads the unconsumed recovery summary, if pending (shown once). */
+export async function recoverySummaryGet(): Promise<RecoverySummaryData | null> {
+  if (!hasBackend) {
+    return (window as unknown as { __AIJ_RECOVERY__?: RecoverySummaryData }).__AIJ_RECOVERY__
+      ?? null;
+  }
+  return invoke<RecoverySummaryData | null>("recovery_summary_get");
+}
+
+/** Dismisses the recovery summary (the only way it goes away). */
+export async function recoverySummaryDismiss(): Promise<void> {
+  if (!hasBackend) {
+    return Promise.resolve();
+  }
+  return invoke("recovery_summary_dismiss");
 }
 
 /** Reads the automation status (Tier 0's fallback — never signals). */

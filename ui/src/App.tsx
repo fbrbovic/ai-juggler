@@ -3,6 +3,7 @@ import { Button, Card, Chip, QuotaBar, QuotaRing, StatCard } from "./components/
 import { SessionCard, WorkflowRail, type Freshness, type WorkTab } from "./components/WorkflowRail";
 import { GoToPalette } from "./components/GoToPalette";
 import { PortWarningSheet } from "./components/PortMap";
+import { RecoverySummaryDialog } from "./components/RecoverySummaryDialog";
 import { CleanupCentre, focusCleanupFilter } from "./screens/CleanupCentre";
 import { launchPortWarning, type PortWarningInfo } from "./lib/bridge";
 import {
@@ -153,6 +154,17 @@ export default function App() {
   const [goToOpen, setGoToOpen] = useState(false);
   const [goToHotkey, setGoToHotkey] = useState("Alt+Space");
   const [wizard, setWizard] = useState(false);
+  // AJ-E510: the ONE-time crash-recovery summary — shown until
+  // dismissed; a second relaunch (no new findings) shows nothing.
+  const [recovery, setRecovery] = useState<
+    import("./lib/bridge").RecoverySummaryData | null
+  >(null);
+  useEffect(() => {
+    void import("./lib/bridge")
+      .then((bridge) => bridge.recoverySummaryGet())
+      .then((summary) => setRecovery(summary))
+      .catch(() => setRecovery(null));
+  }, []);
 
   useEffect(() => {
     void fetchAppInfo().then(setInfo);
@@ -574,8 +586,10 @@ export default function App() {
           </div>
         </header>
 
-        {/* Content: detail panel (work mode) or global screen */}
-        <main className="min-h-0 flex-1 overflow-hidden p-5">
+        {/* Content: detail panel (work mode) or global screen. tabIndex
+         * -1: programmatic focus target when overlays (AJ-E510
+         * recovery summary) dismiss and return focus to the board. */}
+        <main tabIndex={-1} className="min-h-0 flex-1 overflow-hidden p-5 outline-none">
           {global === "cleanup" ? (
             <div className="h-full">
               <CleanupCentre />
@@ -724,6 +738,16 @@ export default function App() {
             }}
           />
         </div>
+      )}
+
+      {recovery !== null && (
+        <RecoverySummaryDialog
+          summary={recovery}
+          onDismiss={() => {
+            setRecovery(null);
+            void import("./lib/bridge").then((bridge) => bridge.recoverySummaryDismiss());
+          }}
+        />
       )}
 
       <GoToPalette

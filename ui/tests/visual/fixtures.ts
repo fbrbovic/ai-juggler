@@ -44,6 +44,8 @@ const mk = (n: number, status: InstanceInfo["status"], label: string): InstanceI
     id: `sess-${n}`,
     launch_recipe_id: work ? "p-1" : "p-2",
     provider: "claude-code",
+    // AJ-E510: false by default; the recovery captures flip it per row.
+    adopted: false,
     account_id: work ? "claude-work" : "claude-personal",
     account_label: label,
     // AJ-E412: sess-8 carries the drift fixture (launched opus, observed

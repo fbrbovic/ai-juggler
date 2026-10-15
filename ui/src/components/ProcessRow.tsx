@@ -36,6 +36,8 @@ export interface CleanupRowInfo {
   role: string;
   state: string;
   state_label: string;
+  /** AJ-E510: helpers of roots that died while Juggler was closed. */
+  down_period?: boolean;
   role_guess: string;
   exe_path: string;
   cmdline: string;

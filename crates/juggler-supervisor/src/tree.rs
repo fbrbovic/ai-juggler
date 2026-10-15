@@ -124,6 +124,16 @@ pub trait LedgerStore: Send + Sync {
     /// [`LedgerError::Store`] on store failure.
     fn mark_orphaned(&self, pid: u32, boot_id: &str) -> Result<(), LedgerError>;
 
+    /// Flips a running helper row to `orphaned` AND sets the durable
+    /// `down_period` marker (AJ-E510): the helper survived, but its
+    /// root died while Juggler itself was closed. Only recovery
+    /// writes this — the tick ladder uses [`LedgerStore::mark_orphaned`].
+    ///
+    /// # Errors
+    ///
+    /// [`LedgerError::Store`] on store failure.
+    fn mark_orphaned_down(&self, pid: u32, boot_id: &str) -> Result<(), LedgerError>;
+
     /// Every row of one session, all states (the reconciler's
     /// root-exit facts + tests/evidence dumps).
     ///
@@ -249,6 +259,12 @@ impl LedgerStore for CoreLedgerStore {
     fn mark_orphaned(&self, pid: u32, boot_id: &str) -> Result<(), LedgerError> {
         self.repo
             .mark_orphaned(pid, boot_id, now_ms())
+            .map_err(|e| LedgerError::Store(e.to_string()))
+    }
+
+    fn mark_orphaned_down(&self, pid: u32, boot_id: &str) -> Result<(), LedgerError> {
+        self.repo
+            .mark_orphaned_down(pid, boot_id, now_ms())
             .map_err(|e| LedgerError::Store(e.to_string()))
     }
 

@@ -543,8 +543,8 @@ fn v4_database_upgrades_in_place_to_v5_with_identical_values() {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     assert_eq!(
-        version, 15,
-        "v4 → current (v15, AJ-E508 cleanup_settings) exactly once, on open"
+        version, 16,
+        "v4 → current (v16, AJ-E510 down_period) exactly once, on open"
     );
 
     let account = storage.accounts().get(&AccountId::new("acc-1")).unwrap();
@@ -571,7 +571,7 @@ fn v4_database_upgrades_in_place_to_v5_with_identical_values() {
         .raw_conn()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 15);
+    assert_eq!(version, 16);
     assert!(storage.sessions().get(&SessionId::new("sess-1")).is_ok());
 }
 
@@ -847,6 +847,7 @@ fn process_ledger_lifecycle_roundtrip() {
         exit_kind: None,
         reaped_by_us: None,
         escaped_group: false,
+        down_period: false,
         first_seen: 1_000,
         last_seen: 1_000,
     };
@@ -897,6 +898,7 @@ fn process_ledger_lifecycle_roundtrip() {
         exit_kind: None,
         reaped_by_us: None,
         escaped_group: escaped,
+        down_period: false,
         first_seen: 2_000,
         last_seen: 2_000,
     };
@@ -1060,7 +1062,7 @@ fn v12_ledger_upgrades_in_place_to_v13() {
         .raw_conn()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 15, "v12 → current (v15) exactly once, on open");
+    assert_eq!(version, 16, "v12 → current (v16) exactly once, on open");
     drop(storage);
 
     // …then the ledger repo opens the same file (CREATE no-ops, the
@@ -1070,6 +1072,10 @@ fn v12_ledger_upgrades_in_place_to_v13() {
     let rows = repo.rows_for_session("sess-old").unwrap();
     assert_eq!(rows.len(), 1);
     assert!(!rows[0].escaped_group, "v12 rows default to not-escaped");
+    assert!(
+        !rows[0].down_period,
+        "v12 rows default to not-left-behind (v16 column)"
+    );
     drop(repo);
     let repo = ProcessLedgerRepo::open(&file).unwrap();
     assert_eq!(repo.rows_for_session("sess-old").unwrap().len(), 1);

@@ -18,6 +18,7 @@ function mk(overrides: Partial<InstanceInfo> = {}): InstanceInfo {
   return {
     id: "sess-test",
     launch_recipe_id: "p-1",
+    adopted: false,
     provider: "claude-code",
     account_id: "claude-work",
     account_label: "Work Max",

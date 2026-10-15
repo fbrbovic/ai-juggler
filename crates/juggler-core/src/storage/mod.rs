@@ -229,8 +229,15 @@ INSERT INTO cleanup_settings (account_id, tier1_opt_in, tier2_opt_in)
     SELECT id, cleanup_opt_in, 0 FROM accounts WHERE cleanup_opt_in = 1;
 ";
 
+/// v16 (AJ-E510): durable down-period marker — a helper orphaned
+/// because its root died WHILE Juggler was closed, written only by
+/// the recovery pass. Drives the distinct cleanup label ("left
+/// behind while Juggler was closed") versus ordinary grace-based
+/// orphans, and survives any number of further restarts.
+const V16: &str = "ALTER TABLE process_ledger ADD COLUMN down_period INTEGER NOT NULL DEFAULT 0;";
+
 const MIGRATIONS: &[&str] = &[
-    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15,
+    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16,
 ];
 
 /// An opened AI Juggler database with typed repositories.

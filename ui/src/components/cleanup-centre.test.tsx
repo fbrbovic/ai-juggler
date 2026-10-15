@@ -224,6 +224,76 @@ describe("CleanupCentre (AJ-E506)", () => {
     );
     view.unmount();
   });
+
+  it("AJ-E510: a down-period helper shows the distinct left-behind label, not the live-session orphan one", async () => {
+    const bridge: CleanupBridge = {
+      load: () =>
+        Promise.resolve(
+          data({
+            groups: [
+              {
+                session: "sess-crash",
+                provider: "claude-code",
+                account: "Work Max",
+                project: "web",
+                machine: "machine-local",
+                healthy: false,
+                rows: [
+                  row({
+                    pid: 8301,
+                    state: "orphaned",
+                    down_period: true,
+                    state_label: "left behind while Juggler was closed",
+                  }),
+                ],
+              },
+            ],
+          }),
+        ),
+    };
+    const view = render(<CleanupCentre bridge={bridge} />);
+    await waitFor(() => expect(view.getByTestId("cleanup-row-8301")).toBeTruthy());
+    expect(view.getByTestId("cleanup-state-8301").textContent ?? "").toContain(
+      "left behind while Juggler was closed",
+    );
+    // Still the orphan icon class — the badge stays icon+text.
+    expect(view.getByTestId("cleanup-state-8301").textContent ?? "").toMatch(/⚑/);
+    view.unmount();
+  });
+
+  it("AJ-E510: a re-adopted Instance row reads Running — re-adopted with the ↻ badge", async () => {
+    const bridge: CleanupBridge = {
+      load: () =>
+        Promise.resolve(
+          data({
+            groups: [
+              {
+                session: "sess-adopted",
+                provider: "claude-code",
+                account: "Work Max",
+                project: "web",
+                machine: "machine-local",
+                healthy: false,
+                rows: [
+                  row({
+                    pid: 8402,
+                    state: "adopted",
+                    state_label: "Running — re-adopted",
+                  }),
+                ],
+              },
+            ],
+          }),
+        ),
+    };
+    const view = render(<CleanupCentre bridge={bridge} />);
+    await waitFor(() => expect(view.getByTestId("cleanup-state-8402")).toBeTruthy());
+    expect(view.getByTestId("cleanup-state-8402").textContent ?? "").toContain(
+      "Running — re-adopted",
+    );
+    expect(view.getByTestId("cleanup-state-8402").textContent ?? "").toMatch(/↻/);
+    view.unmount();
+  });
 });
 
 describe("Cleanup history (AJ-E509)", () => {

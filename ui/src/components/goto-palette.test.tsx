@@ -22,6 +22,7 @@ function mk(id: string, kind: "desktop" | "terminal", status: string, label: str
   return {
     id,
     launch_recipe_id: "p-1",
+    adopted: false,
     provider: "fake-desktop",
     account_id: "a-1",
     account_label: label,

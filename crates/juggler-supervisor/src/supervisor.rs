@@ -442,6 +442,7 @@ impl LiveStatsCollector {
                     exit_kind: None,
                     reaped_by_us: None,
                     escaped_group,
+                    down_period: false,
                     first_seen: now_ms,
                     last_seen: now_ms,
                 });
@@ -994,6 +995,46 @@ struct ChildExtras {
     exit_at_ms: Arc<AtomicI64>,
 }
 
+/// One re-adopted root (the recovery summary's `{a}` source).
+#[derive(Debug, Clone)]
+pub struct AdoptionRecord {
+    /// The Instance it belonged to.
+    pub session: SessionId,
+    /// The verified root pid.
+    pub pid: u32,
+    /// The program name (display).
+    pub program: String,
+}
+
+/// The startup recovery report (AJ-E510 Req.3): the one-time summary's
+/// exact counts.
+#[derive(Debug, Default)]
+pub struct RecoveryReport {
+    /// Verified live roots, handles rebuilt (stoppable).
+    pub adopted: Vec<AdoptionRecord>,
+    /// Live helpers whose roots died while Juggler was closed.
+    pub left_behind: Vec<u32>,
+    /// Alive rows that failed verification — listed, never killed.
+    pub unverifiable: Vec<u32>,
+}
+
+/// The row's identity facts as the E503 record (the verify input).
+fn row_identity(row: &juggler_core::storage::LedgerRow) -> crate::tree::ProcessIdentity {
+    crate::tree::ProcessIdentity {
+        pid: row.pid.unwrap_or(0),
+        pgid: row.pgid,
+        start_time: row.started_at.unwrap_or_default(),
+        exe: std::path::PathBuf::from(&row.exe_path),
+        boot_id: row.boot_id.clone(),
+    }
+}
+
+/// The root row's identity for the start-time-only liveness probe
+/// (E504's exec-aliasing rule: a root's exe moves legitimately).
+fn root_identity(root: &juggler_core::storage::LedgerRow) -> crate::tree::ProcessIdentity {
+    row_identity(root)
+}
+
 struct ChildHandle {
     pid: u32,
     /// The child's process-group id (AJ-E502, the ownership identity).
@@ -1046,6 +1087,11 @@ pub struct Supervisor {
     /// Spawn contexts (AJ-E501): helper rows inherit the root's
     /// provider/account/project/machine; kept for the ledger tick.
     spawn_contexts: Mutex<HashMap<SessionId, crate::tree::SpawnContext>>,
+    /// Sessions re-adopted by crash recovery (AJ-E510): the
+    /// `Running — re-adopted` marker set. These ARE supervised again
+    /// (stoppable through the E507 path) — the old heuristic "adopted
+    /// = journal-live minus supervised" could not say that.
+    adopted: Mutex<HashMap<SessionId, Arc<ChildHandle>>>,
     /// The reconciler's published process table (AJ-E504 Req.1):
     /// queries (`descendants`, chain walks) read this cached
     /// snapshot — never a fresh per-call scan.
@@ -1070,6 +1116,7 @@ impl Default for Supervisor {
             ledger_degraded: std::sync::atomic::AtomicBool::new(false),
             spawn_contexts: Mutex::new(HashMap::new()),
             children: Mutex::new(HashMap::new()),
+            adopted: Mutex::new(HashMap::new()),
             user_stopped: Mutex::new(Vec::new()),
             table: Mutex::new(None),
             orphan_grace_secs: Mutex::new(HashMap::new()),
@@ -1171,6 +1218,7 @@ impl Supervisor {
             exit_kind: None,
             reaped_by_us: None,
             escaped_group: false,
+            down_period: false,
             first_seen: now,
             last_seen: now,
         }
@@ -2060,25 +2108,150 @@ impl Supervisor {
 
     /// Sessions from previous app runs whose processes are still alive
     /// (journal adoption; spec §5.3 crash re-adoption).
-    pub fn alive_adopted_sessions(&self) -> Vec<SessionId> {
-        let adopted: Vec<SessionId> = self
-            .journal
-            .as_ref()
-            .and_then(|journal| journal.adopt_orphans().ok())
-            .map(|adopted| adopted.into_iter().map(|process| process.session).collect())
-            .unwrap_or_default();
-        // AJ-E505: sessions THIS supervisor already supervises are NOT
-        // adopted — their journal records are simply not yet exited.
-        // (Adoption is for restart survivors; double-counting live
-        // sessions misclassified every port row as `re-adopted`.)
-        if let Ok(children) = self.children.lock() {
-            adopted
-                .into_iter()
-                .filter(|session| !children.contains_key(session))
-                .collect()
-        } else {
-            adopted
+    /// One startup recovery pass (AJ-E510, pass2 §11.2): over the
+    /// ledger's live rows — (1) identity-verify each (failures become
+    /// `Unverifiable`: listed, never killed); (2) rebuild ADOPTED
+    /// handles for verified live roots (output unavailable, stop =
+    /// the verified group ladder through [`Supervisor::stop`] —
+    /// closing F-3); (3) helpers of roots that died while Juggler was
+    /// down enter `Orphaned` (their `reaped_by_us=false` root is the
+    /// `left behind while Juggler was closed` marker — attribution
+    /// preserved); (4) dead roots patch `exited`. Returns the report
+    /// for the one-time summary (Req.3) and the tier suspension.
+    #[allow(clippy::similar_names)] // pid/pgid are the kernel's own names
+    pub fn recover(
+        &self,
+        rows_by_session: &[(SessionId, Vec<juggler_core::storage::LedgerRow>)],
+    ) -> RecoveryReport {
+        use crate::tree::Verification;
+        let mut report = RecoveryReport::default();
+        for (session, rows) in rows_by_session {
+            let Some(root) = rows.iter().find(|row| row.role == "root") else {
+                continue;
+            };
+            let Some(root_pid) = root.pid else { continue };
+            let root_alive = crate::tree::verify_start_time(root_pid, &root_identity(root))
+                == Verification::Verified;
+
+            for row in rows {
+                let Some(pid) = row.pid else { continue };
+                if !matches!(row.state.as_str(), "running" | "orphaned") {
+                    continue;
+                }
+                let identity = row_identity(row);
+                // E504/E507's aliasing rule: a ROOT's exe legitimately
+                // moves across `exec` (`/bin/sh` records, the kernel
+                // later reads `/bin/bash`) — roots verify by
+                // boot + start time; helpers carry the kernel-true
+                // triple from the reconciler's table.
+                let verified = if row.role == "root" {
+                    crate::tree::verify_start_time(pid, &identity) == Verification::Verified
+                } else {
+                    crate::tree::verify(pid, &identity) == Verification::Verified
+                };
+                if row.role == "root" {
+                    if root_alive && verified {
+                        // (2) re-adopt with a working stop path.
+                        self.register_adopted(session, root);
+                        report.adopted.push(AdoptionRecord {
+                            session: session.clone(),
+                            pid,
+                            program: root.exe_path.clone(),
+                        });
+                    } else if crate::orphans::process_alive(pid).is_some() {
+                        // (1) alive but unverifiable: listed, never killed.
+                        self.ledger_write(|ledger| ledger.mark_unverifiable(pid, &row.boot_id));
+                        report.unverifiable.push(pid);
+                    } else {
+                        // (4) died while we were down.
+                        self.ledger_write(|ledger| {
+                            ledger.mark_exited(pid, &row.boot_id, "unknown", false)
+                        });
+                    }
+                } else if !verified {
+                    if crate::orphans::process_alive(pid).is_some() {
+                        self.ledger_write(|ledger| ledger.mark_unverifiable(pid, &row.boot_id));
+                        report.unverifiable.push(pid);
+                    }
+                } else if !root_alive {
+                    // (3) a live helper of a root that died while
+                    // Juggler was closed — the durable down-period
+                    // marker + original attribution.
+                    self.ledger_write(|ledger| ledger.mark_orphaned_down(pid, &row.boot_id));
+                    report.left_behind.push(pid);
+                }
+            }
         }
+        report
+    }
+
+    /// Registers an ADOPTED handle (AJ-E510, F-3): no ring readers, no
+    /// PTY (output from before the crash is honestly unavailable),
+    /// `finished` live — `stop()` now works through the same verified
+    /// group ladder as any supervised session.
+    fn register_adopted(&self, session: &SessionId, root: &juggler_core::storage::LedgerRow) {
+        let pid = root.pid.unwrap_or(0);
+        let kill_pid = pid;
+        let force_kill: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            // No std Child to `.kill()` — the adopted root is not our
+            // fork. The honest fallback: a direct KILL signal.
+            for member in crate::tree::pgid_members(kill_pid) {
+                if let Ok(raw) = i32::try_from(member) {
+                    let _ = nix::sys::signal::kill(
+                        nix::unistd::Pid::from_raw(raw),
+                        Some(nix::sys::signal::Signal::SIGKILL),
+                    );
+                }
+            }
+        });
+        let handle = Arc::new(ChildHandle {
+            pid,
+            pgid: root.pgid,
+            identity: Mutex::new(Some(row_identity(root))),
+            exit_at_ms: Arc::new(AtomicI64::new(0)),
+            ring: Arc::new(Mutex::new(OutputRing::new(DEFAULT_RING_CAPACITY))),
+            finished: Arc::new(AtomicBool::new(false)),
+            last_output_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            force_kill,
+            pty: None,
+        });
+        if let Ok(mut children) = self.children.lock() {
+            children.insert(session.clone(), Arc::clone(&handle));
+        }
+        if let Ok(mut adopted) = self.adopted.lock() {
+            adopted.insert(session.clone(), handle);
+        }
+        // The stop path reads the spawn context for nothing, but the
+        // reconciler's helper upserts DO — re-seed it from the root
+        // row's attribution so helpers keep their provider/account.
+        if let Ok(mut contexts) = self.spawn_contexts.lock() {
+            contexts
+                .entry(session.clone())
+                .or_insert_with(|| crate::tree::SpawnContext {
+                    provider: root.provider.clone(),
+                    account_id: root.account_id.clone(),
+                    project_id: root.project_id.clone(),
+                    machine: juggler_core::model::MachineId::new(root.machine_id.clone()),
+                    role: "root",
+                });
+        }
+    }
+
+    /// The re-adopted session set (AJ-E510): sessions whose verified
+    /// live roots got handles back at startup — the `Running —
+    /// re-adopted` marker for the Cleanup Centre, port map, and the
+    /// read-model reconciliation (they stay `Running`, never
+    /// `Stopped`).
+    pub fn alive_adopted_sessions(&self) -> Vec<SessionId> {
+        // AJ-E510: the marker set built by crash recovery — the
+        // re-adopted sessions ARE supervised again (stoppable via the
+        // E507 path); the pre-E510 heuristic (journal-live minus
+        // supervised) could not express that and double-counted live
+        // sessions (the AJ-E505 port-classification bug).
+        self.adopted
+            .lock()
+            .map(|adopted| adopted.keys().cloned().collect())
+            .unwrap_or_default()
     }
 
     /// The supervision journal, when one is open (descendant snapshots
