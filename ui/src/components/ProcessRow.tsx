@@ -1,5 +1,8 @@
 import { useState } from "react";
 
+// The Centre reuses the shared primitive; re-export keeps one source.
+export { Button } from "./primitives";
+
 /**
  * AJ-E506: the shared Cleanup row (the Cleanup Centre AND the
  * Instance Processes tab render THIS component — no copies, no

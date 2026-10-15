@@ -3356,6 +3356,16 @@ pub struct CleanupGroup {
     pub rows: Vec<CleanupRow>,
 }
 
+/// One Cleanup Centre history row (AJ-E509: the audit log's read
+/// shape, newest first).
+#[derive(Clone, Debug, serde::Serialize, PartialEq)]
+pub struct CleanupHistoryInfo {
+    /// The audit history (7 days), newest first.
+    pub rows: Vec<juggler_core::storage::AuditOutcomeInfo>,
+    /// The copy-exact empty note when there are no records.
+    pub empty_note: Option<String>,
+}
+
 /// The Cleanup Centre response.
 #[derive(Clone, Debug, serde::Serialize, PartialEq, Default)]
 pub struct CleanupInventoryInfo {
@@ -3365,6 +3375,9 @@ pub struct CleanupInventoryInfo {
     pub clean_instances: usize,
     /// True when the ledger is degraded (AJ-E501 banner + read-only).
     pub ledger_degraded: bool,
+    /// The History filter's audit rows (AJ-E509 Req.4; `None` for
+    /// every other filter).
+    pub history: Option<CleanupHistoryInfo>,
 }
 
 /// `pass2` §2 state labels, VERBATIM (Req.2).
@@ -3401,6 +3414,21 @@ pub fn cleanup_inventory(
 pub fn cleanup_inventory_inner(state: &Arc<AppState>, filter: &str) -> CleanupInventoryInfo {
     let now = now_millis();
     let degraded = state.supervisor.ledger_degraded();
+    // History (7 days) reads the AUDIT LOG (AJ-E509 Req.4) — the
+    // outcome vocabulary is one language with AJ-E507's.
+    if filter == "history" {
+        let since = now - 7 * 24 * 3_600_000;
+        let rows = state.audit.history(since).unwrap_or_default();
+        let empty_note = rows
+            .is_empty()
+            .then(|| "No cleanups yet — automatic cleanup is off by default.".to_string());
+        return CleanupInventoryInfo {
+            groups: Vec::new(),
+            clean_instances: 0,
+            ledger_degraded: degraded,
+            history: Some(CleanupHistoryInfo { rows, empty_note }),
+        };
+    }
     let adopted: std::collections::HashSet<String> = state
         .supervisor
         .alive_adopted_sessions()
@@ -3598,7 +3626,33 @@ pub fn cleanup_inventory_inner(state: &Arc<AppState>, filter: &str) -> CleanupIn
         groups,
         clean_instances: clean,
         ledger_degraded: degraded,
+        history: None,
     }
+}
+
+/// Exports the 7-day cleanup audit as JSONL (AJ-E509 Req.4). The
+/// first line is the redaction note (itself valid JSON): cmdlines are
+/// hashed; full command lines never persisted. User-initiated only.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on failure.
+#[tauri::command]
+pub fn cleanup_audit_export(state: tauri::State<'_, Arc<AppState>>) -> AppResult<String> {
+    Ok(cleanup_audit_export_inner(&state))
+}
+
+/// `cleanup_audit_export` sans-Tauri (tests + evidence).
+pub fn cleanup_audit_export_inner(state: &Arc<AppState>) -> String {
+    let since = now_millis() - 7 * 24 * 3_600_000;
+    let rows = state.audit.rows_since(since).unwrap_or_default();
+    let mut lines = vec![r#"{"note":"cleanup audit export — command lines are hashed and truncated; full cmdlines are never stored"}"#.to_string()];
+    for row in rows {
+        if let Ok(line) = serde_json::to_string(&row) {
+            lines.push(line);
+        }
+    }
+    lines.join("\n")
 }
 
 /// `port_inventory` sans-Tauri (tests + evidence runs).
@@ -3806,18 +3860,20 @@ pub fn launch_port_warning_inner(
 /// Stops one orphan: the allow-list guard refuses PIDs that were not
 /// recorded as descendants (fail closed, PROPOSAL.md:47), then the
 /// TERM→KILL ladder runs with the post-stop re-read built in (Req.6).
-/// Every kill lands in the journal's audit trail (D-08).
+/// Every kill lands in the journal's audit trail (D-08) AND the
+/// append-only cleanup audit (AJ-E509: intent before signal).
 ///
 /// # Errors
 ///
-/// Returns the typed [`AppError`] message when the Instance is unknown.
+/// [`AppError::AuditUnavailable`] when the audit intent fails (no
+/// audit, no kill); otherwise the typed stop outcome.
 #[tauri::command]
 pub fn orphan_stop(
     state: tauri::State<'_, Arc<AppState>>,
     session_id: String,
     pid: u32,
 ) -> AppResult<StopOutcomeInfo> {
-    Ok(orphan_stop_inner(&state, &SessionId::new(session_id), pid))
+    orphan_stop_inner(&state, &SessionId::new(session_id), pid)
 }
 
 /// Stops every confirmed orphan of one Instance (the confirm popover
@@ -3832,25 +3888,56 @@ pub fn orphan_stop_all(
     session_id: String,
 ) -> AppResult<Vec<StopOutcomeInfo>> {
     let session = SessionId::new(session_id);
-    Ok(state
-        .orphans
-        .orphans_of(&session)
-        .iter()
-        .map(|orphan| orphan_stop_inner(&state, &session, orphan.pid))
-        .collect())
+    let mut out = Vec::new();
+    for orphan in state.orphans.orphans_of(&session) {
+        // One kill at a time: a failed audit intent stands the run
+        // down HERE (typed error out) — never silently continue.
+        out.push(orphan_stop_inner(&state, &session, orphan.pid)?);
+    }
+    Ok(out)
 }
 
-/// Shared stop path for the command and `Stop all` (guard → ladder →
-/// audit → tracker).
-pub fn orphan_stop_inner(state: &Arc<AppState>, session: &SessionId, pid: u32) -> StopOutcomeInfo {
+/// Shared stop path for the command and `Stop all` (guard → audit
+/// intent → ladder → tracker).
+///
+/// # Errors
+///
+/// [`AppError::AuditUnavailable`] when the audit intent fails (no
+/// audit, no kill).
+pub fn orphan_stop_inner(
+    state: &Arc<AppState>,
+    session: &SessionId,
+    pid: u32,
+) -> Result<StopOutcomeInfo, AppError> {
+    orphan_stop_audited(state, state.audit.as_ref(), session, pid)
+}
+
+/// `orphan_stop_inner` with an injected audit writer (the
+/// fault-injection gate's seam; production passes the real repo).
+///
+/// # Errors
+///
+/// [`AppError::AuditUnavailable`] when the audit intent fails (no
+/// audit, no kill); otherwise the typed stop outcome.
+pub fn orphan_stop_audited(
+    state: &Arc<AppState>,
+    audit: &dyn AuditWriter,
+    session: &SessionId,
+    pid: u32,
+) -> Result<StopOutcomeInfo, AppError> {
     if !state.orphans.allows(session, pid) {
         let outcome = juggler_supervisor::StopOutcome::RefusedNotRecorded;
         state.orphans.record_stop(pid, outcome.clone());
-        return StopOutcomeInfo {
+        return Ok(StopOutcomeInfo {
             pid,
             state: outcome.state_label().to_string(),
-        };
+        });
     }
+    // AJ-E509: NO AUDIT, NO KILL — the intent row is written BEFORE
+    // the first signal; a failed write refuses the kill with the
+    // typed error (never a silent `let _ =`), and the ladder runs
+    // only behind a recorded intent.
+    let (intent_id, _ports_before) = audit_kill_intent(state, audit, session, pid)?;
     let outcome = juggler_supervisor::stop_pid_ladder(pid, Duration::from_secs(2), |pid| {
         juggler_supervisor::process_alive(pid).is_some()
     });
@@ -3858,10 +3945,138 @@ pub fn orphan_stop_inner(state: &Arc<AppState>, session: &SessionId, pid: u32) -
     if let Some(journal) = state.supervisor.journal_ref() {
         let _ = journal.record_killed(session, pid, "manual", outcome.state_label());
     }
-    StopOutcomeInfo {
+    // Complete the audit with the per-PID outcome and the honest
+    // post-ladder port state (a still-held port is a fact, never a
+    // success claim).
+    let ports_after = ports_held_by(pid);
+    if let Some(id) = intent_id {
+        // Best-effort completion: the intent (the accountability
+        // floor) already exists; a failed completion degrades to the
+        // truthful pending record, read as `outcome unknown`.
+        let _ = audit.complete(id, outcome.state_label(), ports_after.as_deref());
+    }
+    Ok(StopOutcomeInfo {
         pid,
         state: outcome.state_label().to_string(),
+    })
+}
+
+/// The audit-writer seam (AJ-E509 Req.3's fault-injection gate):
+/// production is the repo; tests inject failures to prove NO AUDIT,
+/// NO KILL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The audit-writer failure (there is nothing to distinguish — any
+/// failure refuses the kill).
+pub struct AuditWriteError;
+
+impl std::fmt::Display for AuditWriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "cleanup audit write failed")
     }
+}
+
+/// The audit-writer seam (production = the repo; tests inject
+/// failures for the NO-AUDIT-NO-KILL gate).
+pub trait AuditWriter {
+    /// Writes the intent row; `Err` refuses the kill.
+    ///
+    /// # Errors
+    ///
+    /// [`AuditWriteError`] when the store fails — NO AUDIT, NO KILL.
+    fn intent(
+        &self,
+        record: &juggler_core::storage::CleanupAuditRecord,
+    ) -> Result<i64, AuditWriteError>;
+
+    /// Completes the record with the ladder outcome (best-effort).
+    ///
+    /// # Errors
+    ///
+    /// [`AuditWriteError`] when the store fails.
+    fn complete(
+        &self,
+        id: i64,
+        outcome: &str,
+        ports_after: Option<&str>,
+    ) -> Result<(), AuditWriteError>;
+}
+
+impl AuditWriter for juggler_core::storage::CleanupAuditRepo {
+    fn intent(
+        &self,
+        record: &juggler_core::storage::CleanupAuditRecord,
+    ) -> Result<i64, AuditWriteError> {
+        juggler_core::storage::CleanupAuditRepo::intent(self, record).map_err(|_| AuditWriteError)
+    }
+
+    fn complete(
+        &self,
+        id: i64,
+        outcome: &str,
+        ports_after: Option<&str>,
+    ) -> Result<(), AuditWriteError> {
+        juggler_core::storage::CleanupAuditRepo::complete(
+            self,
+            id,
+            outcome,
+            ports_after,
+            now_millis(),
+        )
+        .map_err(|_| AuditWriteError)
+    }
+}
+
+/// Writes the audit intent for a manual kill (AJ-E509 Req.2/3) and
+/// captures the pre-ladder ports. `Err(AppError::AuditUnavailable)`
+/// REFUSES the kill — the caller surfaces it.
+///
+/// # Errors
+///
+/// [`AppError::AuditUnavailable`] when the intent write fails.
+fn audit_kill_intent(
+    state: &Arc<AppState>,
+    audit: &dyn AuditWriter,
+    session: &SessionId,
+    pid: u32,
+) -> Result<(Option<i64>, Option<String>), AppError> {
+    use juggler_core::storage::{ACTOR_PREFIX_USER, CleanupAuditRecord};
+    let now = now_millis();
+    let ports_before = ports_held_by(pid);
+    let record = CleanupAuditRecord {
+        id: 0,
+        at_ms: now,
+        actor: format!("{ACTOR_PREFIX_USER}orphan_stop"),
+        pid,
+        pgid: None,
+        exe_path: format!("pid:{pid}"),
+        cmdline_hash: format!("pid:{pid}"),
+        cmdline_trunc: format!("PID {pid} (recorded orphan)"),
+        session_id: session.as_str().to_string(),
+        provider: "unknown".into(),
+        account_id: None,
+        project_id: None,
+        machine_id: local_machine_id(state).as_str().to_string(),
+        identity: "allow-list guard (journal-recorded descendant)".into(),
+        scope: "pid".into(),
+        outcome: String::new(),
+        ports_before: ports_before.clone(),
+        ports_after: None,
+    };
+    match audit.intent(&record) {
+        Ok(id) => Ok((Some(id), ports_before)),
+        Err(AuditWriteError) => Err(AppError::AuditUnavailable),
+    }
+}
+
+/// The ports a pid holds RIGHT NOW (the audit's before/after facts).
+fn ports_held_by(pid: u32) -> Option<String> {
+    let listeners = os_listeners().ok()?;
+    let ports: Vec<String> = listeners
+        .iter()
+        .filter(|listener| listener.pid == pid)
+        .map(|listener| listener.port.to_string())
+        .collect();
+    (!ports.is_empty()).then(|| ports.join(","))
 }
 
 /// `Verify owner`: re-reads the ppid chain for one orphan pid (manual,

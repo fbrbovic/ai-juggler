@@ -1249,3 +1249,93 @@ for (const state of ["needs-attention", "all-managed", "re-adopted", "unverifiab
     }
   }
 }
+
+
+// AJ-E509 history captures: audit rows (manual + automatic actors,
+// outcome vocabulary incl. the crash-pending unknown) and the
+// empty-history copy — via the Cleanup Centre's History filter.
+for (const theme of THEMES) {
+  test(`cleanup — history populated — 1440x900 — ${theme}`, async ({ page }) => {
+    await page.addInitScript(
+      ({ fixture, t0, cleanup, theme }) => {
+        (window as never as { __AIJ_FIXTURE__: unknown }).__AIJ_FIXTURE__ = fixture;
+        (window as never as { __AIJ_CLEANUP__: unknown }).__AIJ_CLEANUP__ = cleanup;
+        localStorage.setItem("aij.theme", theme);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+        Date.now = () => t0;
+      },
+      {
+        fixture: allStatuses,
+        t0: T0,
+        theme,
+        cleanup: {
+          groups: [],
+          clean_instances: 0,
+          ledger_degraded: false,
+          history: {
+            rows: [
+              {
+                id: 1, at_ms: T0 - 90_000, actor: "user:orphan_stop", automatic: false,
+                pid: 8123, cmdline_trunc: "python3 -m http.server 5173", session_id: "s-1",
+                provider: "claude-code", account_id: "Work Max", machine_id: "machine-local",
+                outcome: "exited on TERM", ports_before: "5173", ports_after: "",
+              },
+              {
+                id: 2, at_ms: T0 - 200_000, actor: "auto:tier-1", automatic: true,
+                pid: 4400, cmdline_trunc: "node vite", session_id: "s-2",
+                provider: "claude-code", account_id: null, machine_id: "machine-local",
+                outcome: "TERM'd, outcome unknown", ports_before: null, ports_after: null,
+              },
+            ],
+            empty_note: null,
+          },
+        },
+      },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Cleanup" }).click();
+    await page.getByRole("radio", { name: "History (7 days)" }).click();
+    await expect(page.getByTestId("cleanup-history")).toBeVisible();
+    await expect(page.getByTestId("cleanup-history-actor-2")).toContainText("automatic");
+    await page.screenshot({ path: resolve(GALLERY, `19-cleanup/history-populated-1440x900-${theme}.png`) });
+  });
+
+  test(`cleanup — history empty — 1440x900 — ${theme}`, async ({ page }) => {
+    await page.addInitScript(
+      ({ fixture, t0, cleanup, theme }) => {
+        (window as never as { __AIJ_FIXTURE__: unknown }).__AIJ_FIXTURE__ = fixture;
+        (window as never as { __AIJ_CLEANUP__: unknown }).__AIJ_CLEANUP__ = cleanup;
+        localStorage.setItem("aij.theme", theme);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+        Date.now = () => t0;
+      },
+      {
+        fixture: allStatuses,
+        t0: T0,
+        theme,
+        cleanup: {
+          groups: [],
+          clean_instances: 0,
+          ledger_degraded: false,
+          history: {
+            rows: [],
+            empty_note: "No cleanups yet — automatic cleanup is off by default.",
+          },
+        },
+      },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Cleanup" }).click();
+    await page.getByRole("radio", { name: "History (7 days)" }).click();
+    await expect(page.getByTestId("cleanup-history-empty")).toContainText(
+      "No cleanups yet — automatic cleanup is off by default.",
+    );
+    await page.screenshot({ path: resolve(GALLERY, `19-cleanup/history-empty-1440x900-${theme}.png`) });
+  });
+}

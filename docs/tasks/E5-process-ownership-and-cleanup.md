@@ -403,7 +403,7 @@ Screenshots 1440×900, light+dark: Settings per-Account tier toggles
 Trap: pass2 §10 says "opt-in per Provider" — D-08 settled per
 Account; implement per Account or you fail the decision log. Trap: role is a GUESS (C4) — that is why only DevServer/Watcher are ever auto-eligible and MCP/shell/DB are hard-excluded. Never widen the eligible role set without a new decision-log entry.
 
-### AJ-E509 Append-only cleanup audit log (intent before signal) | Status: TODO | Priority P0 | Effort M | Depends: AJ-E501
+### AJ-E509 Append-only cleanup audit log (intent before signal) | Status: DONE-EVIDENCED (evidence: docs/qa/evidence/AJ-E509/manifest.md) | Priority P0 | Effort M | Depends: AJ-E501
 
 **Goal**:
 Make every kill — manual or automatic — accountable: an append-only audit record written before the first signal and completed after, exportable, and the data source for Cleanup Centre History.
@@ -450,6 +450,13 @@ Screenshots 1440×900, light+dark: History filter populated (manual + auto actor
 
 **Handover note**:
 Trap: AJ-E507/E508 depend on this contract even though they are listed around it — land the table + intent API before enabling any tier, or retrofit will tempt someone into post-hoc logging. Trap: cmdline may contain tokens in args; hash+truncate is the privacy boundary, do not "temporarily" store full cmdlines for debugging.
+
+*Implementation mapping (recorded in this task's PR per the claiming protocol)*:
+- Schema v14: `cleanup_audit` (timestamp, actor, pid/pgid/exe/cmdline-HASH+trunc, attribution, identity results, scope, outcome, ports before/after) + `at` and `account,at` indexes — landed BEFORE any tier exists (the handover trap).
+- Repo (`cleanup_audit.rs`): APPEND-ONLY surface — `intent` (pending, BEFORE the signal), `complete` (the only post-insert mutation, guarded `WHERE outcome=pending`), `history` (7-day window, newest first; pending reads as `TERM'd, outcome unknown`), `rows_since` (export), `prune` (7-day); its OWN WAL connection (intent ≤5 ms must not queue).
+- NO AUDIT, NO KILL: the `AuditWriter` seam — a failed intent returns the typed `AppError::AuditUnavailable` and the manual kill REFUSES (fault-injection test: trap log empty, process alive, zero signals; recovery with the real repo completes `gone`). The existing `orphan_stop` is now audited end to end.
+- History + export: `cleanup_inventory("history")` reads the AUDIT (the E506 ledger-exits mapping retired in the same change — one History, one source); copy-exact `No cleanups yet — automatic cleanup is off by default.`; `cleanup_audit_export` = JSONL with the redaction note as a valid first line, user-initiated download `juggler-cleanup-audit-{date}.jsonl`.
+- Evidence: `docs/qa/evidence/AJ-E509/` — audit/history/export dumps + the fault-injection proof; 165/165 UI; 141/141 visuals incl. 4 new history captures.
 
 ### AJ-E510 Juggler-crash recovery: re-adoption with stop control | Status: TODO | Priority P0 | Effort L | Depends: AJ-E501, AJ-E503, AJ-E504
 

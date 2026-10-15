@@ -211,7 +211,7 @@ fn processes_command_reports_tree_orphans_and_stops() {
     assert!(info.orphans[0].age_since_parent_exit_ms > 0);
 
     // Stop process → gone, and the row state carries it.
-    let outcome = commands::orphan_stop_inner(state_ref, &session, child_pid);
+    let outcome = commands::orphan_stop_inner(state_ref, &session, child_pid).unwrap();
     assert_eq!(outcome.state, "gone");
     let info = commands::instance_processes_arc(state_ref, &session.to_string()).unwrap();
     assert!(
@@ -239,7 +239,7 @@ fn orphan_stop_refuses_a_pid_the_journal_never_recorded() {
         .arg("120")
         .spawn()
         .unwrap();
-    let outcome = commands::orphan_stop_inner(state_ref, &session, bystander.id());
+    let outcome = commands::orphan_stop_inner(state_ref, &session, bystander.id()).unwrap();
     assert_eq!(outcome.state, "refused - not a recorded descendant");
     assert!(
         juggler_supervisor::process_alive(bystander.id()).is_some(),
@@ -274,7 +274,7 @@ fn tier1_auto_cleanup_only_touches_opted_in_accounts() {
     assert!(state.orphans.allows(&session, child));
     // manual cleanup still available at tier 0
     let state_ref = &state;
-    let outcome = commands::orphan_stop_inner(state_ref, &session, child);
+    let outcome = commands::orphan_stop_inner(state_ref, &session, child).unwrap();
     assert_eq!(outcome.state, "gone");
 
     // Opted IN: the sweep kills it and the audit names the trigger.

@@ -132,6 +132,7 @@ pub fn run() {
             commands::instance_quality,
             commands::instance_processes,
             commands::cleanup_inventory,
+            commands::cleanup_audit_export,
             commands::port_inventory,
             commands::launch_port_warning,
             commands::orphan_stop,
