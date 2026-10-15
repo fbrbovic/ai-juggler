@@ -80,6 +80,7 @@ function data(overrides: Partial<CleanupInventoryData> = {}): CleanupInventoryDa
     ],
     clean_instances: 2,
     ledger_degraded: false,
+    history: null,
     ...overrides,
   };
 }
@@ -141,7 +142,7 @@ describe("CleanupCentre (AJ-E506)", () => {
   it("renders the copy-exact empty success and the degraded banner", async () => {
     const empty: CleanupBridge = {
       load: () =>
-        Promise.resolve({ groups: [], clean_instances: 3, ledger_degraded: false }),
+        Promise.resolve({ groups: [], clean_instances: 3, ledger_degraded: false, history: null }),
     };
     const view = render(<CleanupCentre bridge={empty} />);
     await waitFor(() => expect(view.getByTestId("cleanup-empty")).toBeTruthy());
@@ -152,7 +153,12 @@ describe("CleanupCentre (AJ-E506)", () => {
 
     const degraded: CleanupBridge = {
       load: () =>
-        Promise.resolve({ groups: [], clean_instances: 0, ledger_degraded: true }),
+        Promise.resolve({
+          groups: [],
+          clean_instances: 0,
+          ledger_degraded: true,
+          history: null,
+        }),
     };
     const view2 = render(<CleanupCentre bridge={degraded} />);
     await waitFor(() => expect(view2.getByTestId("cleanup-degraded-banner")).toBeTruthy());
@@ -175,6 +181,90 @@ describe("CleanupCentre (AJ-E506)", () => {
     expect(labels).toEqual(["Needs attention", "All managed", "Re-adopted", "History (7 days)"]);
     expect(view.getByTestId("cleanup-filter-announcement").textContent ?? "").toContain(
       "Needs attention",
+    );
+    view.unmount();
+  });
+});
+
+describe("Cleanup history (AJ-E509)", () => {
+  const historyBridge = (rows: unknown[], emptyNote: string | null): CleanupBridge => ({
+    load: (filter) =>
+      Promise.resolve({
+        groups: [],
+        clean_instances: 0,
+        ledger_degraded: false,
+        history:
+          filter === "history"
+            ? { rows: rows as never[], empty_note: emptyNote }
+            : null,
+      }),
+  });
+
+  it("renders audit rows with actor icon+text and the outcome vocabulary", async () => {
+    const rows = [
+      {
+        id: 1,
+        at_ms: 1_728_810_000_000,
+        actor: "user:orphan_stop",
+        automatic: false,
+        pid: 8123,
+        cmdline_trunc: "python3 -m http.server 5173",
+        session_id: "s-1",
+        provider: "claude-code",
+        account_id: "Work Max",
+        machine_id: "machine-local",
+        outcome: "exited on TERM",
+        ports_before: "5173",
+        ports_after: "",
+      },
+      {
+        id: 2,
+        at_ms: 1_728_809_000_000,
+        actor: "auto:tier-1",
+        automatic: true,
+        pid: 4400,
+        cmdline_trunc: "node vite",
+        session_id: "s-2",
+        provider: "claude-code",
+        account_id: null,
+        machine_id: "machine-local",
+        outcome: "TERM'd, outcome unknown",
+        ports_before: null,
+        ports_after: null,
+      },
+    ];
+    const view = render(
+      <CleanupCentre bridge={historyBridge(rows, null)} />,
+    );
+    // History is a filter, not the default — switch to it.
+    fireEvent.click(view.getByRole("radio", { name: "History (7 days)" }));
+    await waitFor(() => expect(view.getByTestId("cleanup-history")).toBeTruthy());
+    expect(view.getByTestId("cleanup-history-row-1").textContent ?? "").toContain(
+      "exited on TERM",
+    );
+    expect(view.getByTestId("cleanup-history-row-2").textContent ?? "").toContain(
+      "TERM'd, outcome unknown",
+    );
+    // Icon+text actors (never colour alone).
+    expect(view.getByTestId("cleanup-history-actor-1").textContent ?? "").toMatch(/👤/);
+    expect(view.getByTestId("cleanup-history-actor-1").textContent ?? "").toContain("you");
+    expect(view.getByTestId("cleanup-history-actor-2").textContent ?? '').toMatch(/⚙/);
+    expect(view.getByTestId("cleanup-history-actor-2").textContent ?? "").toContain("automatic");
+    // Export is user-initiated only — present, not automatic.
+    expect(view.getByRole("button", { name: /Export audit log/ })).toBeTruthy();
+    view.unmount();
+  });
+
+  it("renders the copy-exact empty-history note", async () => {
+    const view = render(
+      <CleanupCentre
+        bridge={historyBridge([], "No cleanups yet — automatic cleanup is off by default.")}
+      />,
+    );
+    fireEvent.click(view.getByRole("radio", { name: "History (7 days)" }));
+    await waitFor(() => expect(view.getByTestId("cleanup-history-empty")).toBeTruthy());
+    expect(view.getByTestId("cleanup-history-empty").textContent ?? "").toContain(
+      "No cleanups yet — automatic cleanup is off by default.",
     );
     view.unmount();
   });

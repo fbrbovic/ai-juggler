@@ -784,6 +784,32 @@ export interface PortWarningInfo {
   message: string;
 }
 
+/** AJ-E509: one cleanup-audit history row (outcome vocabulary). */
+export interface AuditHistoryRow {
+  id: number;
+  at_ms: number;
+  actor: string;
+  automatic: boolean;
+  pid: number;
+  cmdline_trunc: string;
+  session_id: string;
+  provider: string;
+  account_id: string | null;
+  machine_id: string;
+  outcome: string;
+  ports_before: string | null;
+  ports_after: string | null;
+}
+
+/** AJ-E509: the audit export (JSONL text; first line = redaction note). */
+export async function cleanupAuditExport(): Promise<string> {
+  if (!hasBackend) {
+    return (window as unknown as { __AIJ_AUDIT_EXPORT__?: string }).__AIJ_AUDIT_EXPORT__
+      ?? JSON.stringify({ note: "cleanup audit export — command lines are hashed and truncated; full cmdlines are never stored" });
+  }
+  return invoke<string>("cleanup_audit_export");
+}
+
 /** AJ-E506: the read-only Cleanup Centre DTOs (zero kill fields). */
 export type { CleanupRowInfo, EvidenceChainInfo, VerificationBadgeInfo } from "../components/ProcessRow";
 export type { CleanupGroupInfo } from "../screens/CleanupCentre";
@@ -793,8 +819,12 @@ import type { CleanupInventoryData } from "../screens/CleanupCentre";
 export async function cleanupInventory(filter: string): Promise<CleanupInventoryData> {
   if (!hasBackend) {
     return (
-      (window as unknown as { __AIJ_CLEANUP__?: CleanupInventoryData }).__AIJ_CLEANUP__
-        ?? { groups: [], clean_instances: 0, ledger_degraded: false }
+      (window as unknown as { __AIJ_CLEANUP__?: CleanupInventoryData }).__AIJ_CLEANUP__ ?? {
+        groups: [],
+        clean_instances: 0,
+        ledger_degraded: false,
+        history: null,
+      }
     );
   }
   return invoke<CleanupInventoryData>("cleanup_inventory", { filter });

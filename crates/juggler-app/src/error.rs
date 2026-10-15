@@ -26,6 +26,13 @@ pub enum AppError {
     /// The requested harness has no registered adapter.
     #[error("no adapter for harness {0}")]
     UnknownHarness(String),
+    /// The cleanup audit log is unavailable (AJ-E509 Req.3): NO
+    /// AUDIT, NO KILL — the refused action is surfaced with this
+    /// typed error, never swallowed.
+    #[error(
+        "cleanup audit unavailable — kill refused (no audit, no kill); retry once the audit log recovers"
+    )]
+    AuditUnavailable,
     /// Caller-supplied input failed validation (honest rejection).
     #[error("invalid {subject}: {message}")]
     Validation {

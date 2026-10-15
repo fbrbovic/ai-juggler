@@ -11,6 +11,7 @@ mod accounts;
 mod profiles;
 mod sessions;
 
+mod cleanup_audit;
 mod process_ledger;
 mod projects;
 mod settings;
@@ -20,6 +21,10 @@ use std::path::Path;
 use rusqlite::Connection;
 
 pub use accounts::AccountsRepo;
+pub use cleanup_audit::{
+    ACTOR_AUTO_TIER1, ACTOR_PREFIX_USER, AuditOutcomeInfo, CleanupAuditRecord, CleanupAuditRepo,
+    OUTCOME_PENDING,
+};
 pub use process_ledger::{
     LedgerRow, ProcessLedgerRepo, ROLE_HELPER, ROLE_LOGIN, ROLE_ROOT, STATE_EXITED, STATE_ORPHANED,
     STATE_RUNNING, STATE_STARTING, STATE_UNVERIFIABLE,
@@ -177,7 +182,37 @@ const V13: &str = "
 ALTER TABLE process_ledger ADD COLUMN escaped_group INTEGER NOT NULL DEFAULT 0;
 ";
 
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13];
+/// v14 (AJ-E509): the append-only cleanup audit — intent BEFORE the
+/// first signal, completed with outcomes after the ladder. Every
+/// kill (manual or automatic) is accountable for 7 days; cmdlines
+/// persist HASHED + truncated only (the privacy boundary — full
+/// command lines never outlive the confirm sheet).
+const V14: &str = "
+CREATE TABLE cleanup_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at_ms INTEGER NOT NULL,
+    actor TEXT NOT NULL,
+    pid INTEGER NOT NULL,
+    pgid INTEGER,
+    exe_path TEXT NOT NULL,
+    cmdline_hash TEXT NOT NULL,
+    cmdline_trunc TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    account_id TEXT,
+    project_id TEXT,
+    machine_id TEXT NOT NULL,
+    identity TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    ports_before TEXT,
+    ports_after TEXT
+);
+CREATE INDEX cleanup_audit_at ON cleanup_audit(at_ms);
+CREATE INDEX cleanup_audit_account ON cleanup_audit(account_id, at_ms);
+";
+
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14];
 
 /// An opened AI Juggler database with typed repositories.
 #[derive(Debug)]

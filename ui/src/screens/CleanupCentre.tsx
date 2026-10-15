@@ -1,9 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  CleanupEmpty,
-  ProcessRow,
-  type CleanupRowInfo,
-} from "../components/ProcessRow";
+import { Button, CleanupEmpty, ProcessRow, type CleanupRowInfo } from "../components/ProcessRow";
 
 /**
  * AJ-E506: the global Cleanup Centre — a READ-ONLY inventory (Tier 0,
@@ -27,10 +23,32 @@ export interface CleanupGroupInfo {
   rows: CleanupRowInfo[];
 }
 
+export interface AuditHistoryRowInfo {
+  id: number;
+  at_ms: number;
+  actor: string;
+  automatic: boolean;
+  pid: number;
+  cmdline_trunc: string;
+  session_id: string;
+  provider: string;
+  account_id: string | null;
+  machine_id: string;
+  outcome: string;
+  ports_before: string | null;
+  ports_after: string | null;
+}
+
+export interface CleanupHistoryData {
+  rows: AuditHistoryRowInfo[];
+  empty_note: string | null;
+}
+
 export interface CleanupInventoryData {
   groups: CleanupGroupInfo[];
   clean_instances: number;
   ledger_degraded: boolean;
+  history: CleanupHistoryData | null;
 }
 
 export const CLEANUP_FILTERS = [
@@ -184,7 +202,11 @@ export function CleanupCentre(props: { bridge?: CleanupBridge }) {
       )}
 
       <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-        {data !== null && visibleGroups.length === 0 && error === null && (
+        {(() => {
+          const history = data?.history ?? null;
+          return history !== null ? <HistoryList history={history} /> : null;
+        })()}
+        {data !== null && visibleGroups.length === 0 && error === null && (data?.history ?? null) === null && (
           <CleanupEmpty cleanInstances={data.clean_instances} />
         )}
         <div className="flex flex-col gap-2">
@@ -198,6 +220,83 @@ export function CleanupCentre(props: { bridge?: CleanupBridge }) {
         An <dfn>orphan</dfn> is a process still running after its Instance closed; a{" "}
         <dfn>helper</dfn> is any process an Instance spawned (dev server, watcher…).
       </p>
+    </div>
+  );
+}
+
+/** The audit history list (AJ-E509): the outcome vocabulary of the
+ * ladders, manual/auto actors distinguished by icon+text. */
+function HistoryList(props: { history: CleanupHistoryData }) {
+  const [exported, setExported] = useState<string | null>(null);
+  if (props.history.rows.length === 0) {
+    return (
+      <p className="text-[12px] text-muted" data-testid="cleanup-history-empty">
+        {props.history.empty_note ?? "No cleanups yet — automatic cleanup is off by default."}
+      </p>
+    );
+  }
+  const doExport = () => {
+    // User-initiated only; the JSONL download lands via a Blob anchor
+    // (the standard save path in the webview).
+    import("../lib/bridge")
+      .then((bridge) => bridge.cleanupAuditExport())
+      .then((jsonl) => {
+        setExported(jsonl);
+        const blob = new Blob([jsonl], { type: "application/jsonl" });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        const date = new Date().toISOString().slice(0, 10);
+        anchor.href = url;
+        anchor.download = `juggler-cleanup-audit-${date}.jsonl`;
+        anchor.click();
+        URL.revokeObjectURL(url);
+      })
+      .catch(() => setExported(null));
+  };
+  return (
+    <div className="flex flex-col gap-2" data-testid="cleanup-history">
+      <div className="flex items-center gap-2">
+        <h3 className="text-[11.5px] font-medium text-ink">History (7 days)</h3>
+        <Button size="sm" variant="secondary" onClick={doExport}>
+          Export audit log…
+        </Button>
+      </div>
+      {exported !== null && (
+        <p className="text-[10px] text-faint" data-testid="cleanup-history-exported">
+          Exported {exported.split("\n").length} JSONL lines — command lines are hashed.
+        </p>
+      )}
+      <ul className="flex flex-col">
+        {props.history.rows.map((row) => (
+          <li
+            key={row.id}
+            className="flex items-center gap-2 border-t border-hairline py-1.5 text-[11px]"
+            data-testid={`cleanup-history-row-${row.id}`}
+          >
+            <span
+              className={
+                row.automatic
+                  ? "inline-flex items-center gap-1 rounded-full border border-accent/40 px-1.5 py-[1px] text-[9.5px] text-accent"
+                  : "inline-flex items-center gap-1 rounded-full border border-hairline px-1.5 py-[1px] text-[9.5px] text-muted"
+              }
+              data-testid={`cleanup-history-actor-${row.id}`}
+            >
+              {/* Icon+text, never colour alone (1.4.1). */}
+              <span aria-hidden="true">{row.automatic ? "⚙" : "👤"}</span>
+              {row.automatic ? "automatic" : "you"}
+            </span>
+            <span className="truncate font-mono text-[10.5px] text-ink">{row.cmdline_trunc}</span>
+            <span className="font-mono text-[10px] text-muted">PID {row.pid}</span>
+            <span className="ml-auto whitespace-nowrap text-[10px] text-muted">
+              {row.outcome}
+              {row.ports_before !== null && row.ports_after === null ? "" : ""}
+            </span>
+            <span className="whitespace-nowrap font-mono text-[9.5px] text-faint">
+              {new Date(row.at_ms).toISOString().slice(5, 16).replace("T", " ")}
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

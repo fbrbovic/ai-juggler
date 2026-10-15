@@ -32,6 +32,8 @@ pub struct AppState {
     pub orphans: OrphanTracker,
     /// The persistent spawn ledger handle (AJ-E501): queries + prune.
     pub ledger: std::sync::Arc<juggler_supervisor::tree::CoreLedgerStore>,
+    /// The append-only cleanup audit (AJ-E509): intent before signal.
+    pub audit: std::sync::Arc<juggler_core::storage::CleanupAuditRepo>,
     /// The one live preview session (AJ-E415 Req.5: one at a time).
     /// Lock ordering: never held together with `storage`.
     pub preview: Mutex<Option<crate::commands::PreviewSession>>,
@@ -84,6 +86,14 @@ impl AppState {
         // E504 reconciler tick.
         let cutoff = juggler_core::model::Timestamp::now().millis() - 7 * 24 * 3_600_000;
         let _ = ledger.prune(cutoff);
+        // AJ-E509: the append-only cleanup audit — its OWN WAL
+        // connection (the intent write must not queue behind the
+        // storage mutex: ≤5 ms p95 in front of the ladder); 7-day
+        // retention mirrors the ledger's.
+        let audit = std::sync::Arc::new(juggler_core::storage::CleanupAuditRepo::open(
+            &data_dir.join("juggler.sqlite"),
+        )?);
+        let _ = audit.prune(cutoff);
         let supervisor =
             Supervisor::with_journal(&data_dir.join("supervision"))?.with_ledger(ledger.clone());
         // Orphan grace (AJ-E504 Req.3): the user-tunable default, from
@@ -120,6 +130,7 @@ impl AppState {
             }
         }
         Ok(Self {
+            audit,
             supervisor,
             ledger,
             registry,

@@ -543,8 +543,8 @@ fn v4_database_upgrades_in_place_to_v5_with_identical_values() {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     assert_eq!(
-        version, 13,
-        "v4 → current (v13, AJ-E502 escaped_group) exactly once, on open"
+        version, 14,
+        "v4 → current (v14, AJ-E509 cleanup_audit) exactly once, on open"
     );
 
     let account = storage.accounts().get(&AccountId::new("acc-1")).unwrap();
@@ -571,7 +571,7 @@ fn v4_database_upgrades_in_place_to_v5_with_identical_values() {
         .raw_conn()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 13);
+    assert_eq!(version, 14);
     assert!(storage.sessions().get(&SessionId::new("sess-1")).is_ok());
 }
 
@@ -1060,7 +1060,7 @@ fn v12_ledger_upgrades_in_place_to_v13() {
         .raw_conn()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 13, "v12 → v13 exactly once, on open");
+    assert_eq!(version, 14, "v12 → current (v14) exactly once, on open");
     drop(storage);
 
     // …then the ledger repo opens the same file (CREATE no-ops, the
