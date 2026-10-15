@@ -104,14 +104,15 @@ jobs:
       - name: Collateral suite (AJ-E512)
         run: |
           cargo test -p juggler-supervisor --test collateral
-          # The app test binary links the Swift bridge; the runner's
-          # toolchain dir and dyld cache lack libswift_Concurrency.dylib,
-          # but the binary already searches target/debug (the apple
-          # crates' rpath) — copy the Xcode SDK's real dylib there (the
-          # CI analogue of scripts/ensure_swift_runtime.sh's stub).
-          SWIFT_LIB="$(find /Applications/Xcode.app -name 'libswift_Concurrency.dylib' -print -quit)"
-          test -n "$SWIFT_LIB"
-          cp "$SWIFT_LIB" target/debug/
+          # The app test binary links the Swift bridge; the runner has
+          # no libswift_Concurrency.dylib anywhere (toolchain, SDK, dyld
+          # cache). scripts/ensure_swift_runtime.sh's approach applies:
+          # an empty stub with the right install name in target/debug
+          # (already on the binary's rpath). These suites never CALL
+          # the bridge — the stub only satisfies the dyld load.
+          mkdir -p target/debug
+          echo "" | clang -dynamiclib -o target/debug/libswift_Concurrency.dylib \
+            -install_name @rpath/libswift_Concurrency.dylib -x c -
           cargo test -p juggler-app --test guardrails
 
   build-linux:
