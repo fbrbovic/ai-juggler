@@ -4106,6 +4106,16 @@ pub fn guess_role(exe: &str, cmdline: &str) -> &'static str {
     if contains_any(&["mcp-server", "mcp_server", "/mcp ", "mcp.json"]) {
         "McpServer"
     } else if contains_any(&[
+        "postgres",
+        "mysqld",
+        "mariadbd",
+        "redis-server",
+        "mongod",
+        "memcached",
+        "sqlite3",
+    ]) {
+        "Database"
+    } else if contains_any(&[
         "vite",
         "webpack",
         "esbuild",
@@ -4113,6 +4123,7 @@ pub fn guess_role(exe: &str, cmdline: &str) -> &'static str {
         "--watch-tags",
         "dev-server",
         "serve -s",
+        "http.server",
     ]) {
         "DevServer"
     } else if contains_any(&["watchman", "fswatch", "chokidar", "nodemon", "--watch"]) {
@@ -4503,6 +4514,36 @@ pub fn kill_execute_audited(
     cancel_flag: &std::sync::Arc<std::sync::atomic::AtomicBool>,
     goal_port: Option<u16>,
 ) -> Result<KillExecuteInfo, AppError> {
+    kill_execute_as(
+        state,
+        audit,
+        "user:kill_sheet",
+        session_id,
+        pid,
+        scope,
+        cancel_flag,
+        goal_port,
+    )
+}
+
+/// `kill_execute` with an explicit audit ACTOR — the automatic tiers'
+/// entry (AJ-E508): actor `auto:tier-1` / `auto:tier-2` per the E509
+/// vocabulary. Same guardrails, same ladder, same audit floor.
+///
+/// # Errors
+///
+/// As [`kill_execute`].
+#[allow(clippy::too_many_arguments)] // the audit actor rides the E507 kill path's shape
+pub fn kill_execute_as(
+    state: &Arc<AppState>,
+    audit: &dyn AuditWriter,
+    actor: &str,
+    session_id: &str,
+    pid: u32,
+    scope: &str,
+    cancel_flag: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    goal_port: Option<u16>,
+) -> Result<KillExecuteInfo, AppError> {
     use juggler_supervisor::tree::LedgerStore as _;
     let session = SessionId::new(session_id.to_string());
     let rows = state.ledger.session_rows(&session).unwrap_or_default();
@@ -4553,6 +4594,7 @@ pub fn kill_execute_audited(
         scope,
         ports_before.as_deref(),
         member_ports.as_deref(),
+        actor,
     );
     let intent_id = audit
         .intent(&record)
@@ -4609,6 +4651,7 @@ pub fn kill_execute_audited(
 /// full attribution from the ledger row, the verified-at-click-time
 /// identity note, and the goal-port-aware before/after facts.
 #[allow(clippy::similar_names)] // pid/pgid are the kernel's own names
+#[allow(clippy::too_many_arguments)] // mirrors the audit record's own columns
 fn kill_intent_record(
     state: &Arc<AppState>,
     row: &juggler_core::storage::LedgerRow,
@@ -4617,11 +4660,12 @@ fn kill_intent_record(
     scope: &str,
     ports_before: Option<&str>,
     member_ports: Option<&str>,
+    actor: &str,
 ) -> juggler_core::storage::CleanupAuditRecord {
     juggler_core::storage::CleanupAuditRecord {
         id: 0,
         at_ms: now_millis(),
-        actor: format!("{}kill_sheet", juggler_core::storage::ACTOR_PREFIX_USER),
+        actor: actor.to_string(),
         pid,
         pgid: juggler_supervisor::group::pgid_of(pid).ok(),
         exe_path: row.exe_path.clone(),
@@ -4915,77 +4959,541 @@ fn snapshot_descendants(
 /// (60 s grace, recorded-descendant PIDs only — D-08).
 pub fn processes_tick(state: &Arc<AppState>) {
     let now = Timestamp::now().millis();
-    let mut confirmed = Vec::new();
     {
         let Ok(mut collector) = state.resources.lock() else {
             return;
         };
         collector.tick(&state.supervisor, now);
+        // The E410 tracker's own confirmations advance here (the
+        // Processes tab's orphan section); the AJ-E508 sweep reads
+        // the LEDGER's orphan verdicts instead — the tracker
+        // deliberately drops clean exits and cannot serve Tier 1.
         let tracked = state.orphans.tracked_pids();
         if !tracked.is_empty() {
             collector.refresh_pids(&tracked);
-            confirmed = state.orphans.poll(now, |pid| collector.lookup(pid));
+            let _ = state.orphans.poll(now, |pid| collector.lookup(pid));
         }
     }
-    if confirmed.is_empty() {
+    auto_cleanup_sweep(state, now);
+}
+
+/// One live Tier-2 notice (AJ-E508 Req.1): the crash-orphan's Undo
+/// window. Exactly one per candidate; `keep` (Undo / Keep running)
+/// dismisses it forever for that pid.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Tier2Notice {
+    /// The candidate pid.
+    pub pid: u32,
+    /// The Instance it belonged to.
+    pub session: String,
+    /// Truncated command line (the notification names the process).
+    pub cmdline_trunc: String,
+    /// When the notice was shown, epoch ms.
+    pub shown_at_ms: i64,
+    /// The window's end, epoch ms (≥30 s after `shown_at_ms`; no
+    /// signal before it).
+    pub deadline_ms: i64,
+    /// True once the user chose Undo / Keep running.
+    pub keep: bool,
+}
+
+/// The Undo window's length (Req.1: ≥30 s — never shorter).
+pub const TIER2_UNDO_WINDOW_MS: i64 = 30_000;
+/// Tier 2's crash grace before the notification (Req.1: 5 min).
+pub const TIER2_CRASH_GRACE_MS: i64 = 5 * 60_000;
+
+/// The automatic tiers' sweep (AJ-E508; replaces the E410 prototype).
+/// Tier 0 by default: without BOTH the Account opt-in and the tier
+/// evaluator's eligibility, nothing is ever signalled. The candidate
+/// source is the LEDGER's orphaned rows (the E504 reconciler's
+/// verdict — the same authority the Cleanup Centre lists; the E410
+/// tracker deliberately drops clean exits and cannot serve Tier 1).
+/// Gates, in order: the global pause; the 24 h crash suspension; the
+/// per-candidate evaluator (roles/roots/containment/machine/exit
+/// kind); pacing (the auto grace; Tier 2's 5 min + ONE notification +
+/// the Undo window); same-tick re-verification (a failure DEMOTES to
+/// Tier 0 with an audit note); then the E507 ladder behind an E509
+/// audit intent (actor `auto:tier-N`), via [`kill_execute_as`] — the
+/// only kill surface, manual or automatic.
+#[allow(clippy::too_many_lines)] // one pass per gate; splitting hides the ordering that IS the law
+pub fn auto_cleanup_sweep(state: &Arc<AppState>, now: i64) {
+    if cleanup_paused(state) || cleanup_suspended_until(state).is_some() {
         return;
     }
-    // Tier-1 sweep: only Accounts the user opted in, only recorded
-    // descendants, only past the 60 s auto grace.
-    auto_cleanup_sweep(state, now, &confirmed);
-}
-
-/// Runs the opted-in auto-cleanup over the freshly confirmed orphans
-/// past [`juggler_supervisor::AUTO_CLEANUP_GRACE_MS`]. Notify-only by
-/// default: an Account without the opt-in is never touched here.
-pub fn auto_cleanup_sweep(
-    state: &Arc<AppState>,
-    now: i64,
-    confirmed: &[juggler_supervisor::Orphan],
-) {
-    for orphan in confirmed {
-        if now - orphan.parent_exit_ms < juggler_supervisor::AUTO_CLEANUP_GRACE_MS {
+    let machine = local_machine_id(state);
+    // One candidates read: every ORPHANED row of this machine's
+    // sessions, grouped by session with its root row (the exit-kind
+    // source and the pacing clock).
+    let mut by_session: std::collections::HashMap<
+        String,
+        (
+            Vec<juggler_core::storage::LedgerRow>,
+            Option<juggler_core::storage::LedgerRow>,
+        ),
+    > = std::collections::HashMap::new();
+    for row in local_ledger_rows(state) {
+        if row.machine_id != machine.as_str() {
             continue;
         }
-        let opted_in = account_cleanup_opt_in(state, &orphan.session);
-        if !opted_in {
+        let entry = by_session.entry(row.session_id.clone()).or_default();
+        if row.role == "root" {
+            entry.1 = Some(row);
+        } else if row.state == "orphaned" {
+            entry.0.push(row);
+        }
+    }
+    for (session_id, (candidates, root)) in by_session {
+        let Some(root_row) = root else { continue };
+        // The root's last tick while alive ≈ its exit time (its
+        // last_seen stops refreshing at death).
+        let parent_exit_ms = root_row.last_seen;
+        if now - parent_exit_ms < juggler_supervisor::AUTO_CLEANUP_GRACE_MS {
             continue;
         }
-        if !state.orphans.allows(&orphan.session, orphan.pid) {
-            continue; // fail closed even inside the sweep
-        }
-        let outcome =
-            juggler_supervisor::stop_pid_ladder(orphan.pid, Duration::from_secs(5), |pid| {
-                juggler_supervisor::process_alive(pid).is_some()
-            });
-        state.orphans.record_stop(orphan.pid, outcome.clone());
-        if let Some(journal) = state.supervisor.journal_ref() {
-            let _ = journal.record_killed(
-                &orphan.session,
-                orphan.pid,
-                "auto-tier1",
-                outcome.state_label(),
+        // The root's exit kind decides the TIER, never the
+        // candidate's presence: code 0 → Tier 1's premise; anything
+        // else → crash (Tier 2's); unknown → observe only (fail
+        // closed).
+        let root_exit_clean = root_row.exit_kind.as_deref().map(|kind| {
+            match kind.strip_prefix("code:") {
+                Some(code) => code == "0",
+                // A signal death or an unparsable kind is a crash.
+                None => false,
+            }
+        });
+        let settings = account_tier_settings(state, &SessionId::new(session_id.clone()));
+        for row in candidates {
+            let Some(orphan_pid) = row.pid else { continue };
+            let candidate = juggler_supervisor::tree::TierCandidate {
+                pid: orphan_pid,
+                role_guess: guess_role(&row.exe_path, &row.cmdline_trunc).to_string(),
+                is_root: false,
+                state: row.state.clone(),
+                escaped_group: row.escaped_group,
+                root_exit_clean,
+                machine_local: true,
+                tier1_opt_in: settings.tier1_opt_in,
+                tier2_opt_in: settings.tier2_opt_in,
+            };
+            let tier = match juggler_supervisor::tree::evaluate_tier(&candidate) {
+                juggler_supervisor::tree::TierVerdict::Signal(tier) => tier,
+                juggler_supervisor::tree::TierVerdict::ObserveOnly(_) => continue,
+            };
+            // Tier 2 pacing: 5 min after the crash AND one
+            // notification AND an elapsed Undo window.
+            if tier == 2 {
+                if now - parent_exit_ms < TIER2_CRASH_GRACE_MS {
+                    continue;
+                }
+                let orphan = juggler_supervisor::Orphan {
+                    session: SessionId::new(session_id.clone()),
+                    root_pid: root_row.pid.unwrap_or(0),
+                    parent_label: root_row.exe_path.clone(),
+                    pid: orphan_pid,
+                    name: row.exe_path.clone(),
+                    rss_bytes: 0,
+                    parent_exit_ms,
+                };
+                match tier2_window(state, &orphan, &row, now) {
+                    Tier2Window::Open | Tier2Window::Kept => continue,
+                    Tier2Window::Elapsed => (),
+                }
+            }
+            // Same-tick re-verification — a failure DEMOTES to Tier 0
+            // (list-only) with an audit note, never a signal.
+            let session = SessionId::new(session_id.clone());
+            if !verify_kill_target(state, &session, &row) {
+                demote_with_audit_note(state, &row, tier);
+                continue;
+            }
+            let actor = if tier == 1 {
+                juggler_core::storage::ACTOR_AUTO_TIER1
+            } else {
+                juggler_core::storage::ACTOR_AUTO_TIER2
+            };
+            let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let outcome = kill_execute_as(
+                state,
+                state.audit.as_ref(),
+                actor,
+                session_id.as_str(),
+                orphan_pid,
+                "pid",
+                &flag,
+                None,
             );
+            if let Ok(outcome) = outcome
+                && let Some(journal) = state.supervisor.journal_ref()
+            {
+                let _ = journal.record_killed(
+                    &session,
+                    orphan_pid,
+                    if tier == 1 {
+                        "auto-tier1"
+                    } else {
+                        "auto-tier2"
+                    },
+                    &outcome
+                        .members
+                        .iter()
+                        .map(|member| member.outcome.as_str())
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                );
+            }
         }
     }
 }
 
-/// Resolves an Instance's Account opt-in (session → launch settings →
-/// account). Unknown links read as not opted-in (fail closed).
-fn account_cleanup_opt_in(state: &Arc<AppState>, session: &SessionId) -> bool {
+enum Tier2Window {
+    /// Created now or still counting — no signal this tick.
+    Open,
+    /// The user chose Undo / Keep running — never signalled.
+    Kept,
+    /// The window elapsed without an Undo — eligible to signal.
+    Elapsed,
+}
+
+fn tier2_window(
+    state: &Arc<AppState>,
+    orphan: &juggler_supervisor::Orphan,
+    row: &juggler_core::storage::LedgerRow,
+    now: i64,
+) -> Tier2Window {
+    let Ok(mut pending) = state.tier2_pending.lock() else {
+        return Tier2Window::Open; // fail closed: no notice, no signal
+    };
+    match pending.get(&orphan.pid) {
+        Some(notice) if notice.keep => Tier2Window::Kept,
+        Some(notice) => {
+            if now < notice.deadline_ms {
+                Tier2Window::Open
+            } else {
+                pending.remove(&orphan.pid);
+                Tier2Window::Elapsed
+            }
+        }
+        None => {
+            // Exactly one notification per crash-orphan (Req.1).
+            pending.insert(
+                orphan.pid,
+                Tier2Notice {
+                    pid: orphan.pid,
+                    session: orphan.session.as_str().to_string(),
+                    cmdline_trunc: truncate_cmdline(&row.cmdline_trunc),
+                    shown_at_ms: now,
+                    deadline_ms: now + TIER2_UNDO_WINDOW_MS,
+                    keep: false,
+                },
+            );
+            Tier2Window::Open
+        }
+    }
+}
+
+/// A failed same-tick re-verification: the candidate is silently
+/// demoted to Tier 0 (list-only) WITH an audit note — the E509 log
+/// carries intent + `demoted` completion so the History tells the
+/// truth about what was considered and why nothing was signalled.
+fn demote_with_audit_note(state: &Arc<AppState>, row: &juggler_core::storage::LedgerRow, tier: u8) {
+    let actor = if tier == 1 {
+        juggler_core::storage::ACTOR_AUTO_TIER1
+    } else {
+        juggler_core::storage::ACTOR_AUTO_TIER2
+    };
+    let record = kill_intent_record(
+        state,
+        row,
+        &row.session_id,
+        row.pid.unwrap_or(0),
+        "pid",
+        None,
+        None,
+        actor,
+    );
+    if let Ok(id) = state.audit.intent(&record) {
+        let _ = state.audit.complete(
+            id,
+            "demoted — re-verification failed, listed only (Tier 0)",
+            None,
+            now_millis(),
+        );
+    }
+}
+
+/// True when the global `Pause automatic cleanup` kill-switch is on
+/// (Req.4): the sweep stands down within one tick of the flag.
+fn cleanup_paused(state: &Arc<AppState>) -> bool {
     let Ok(storage) = state.storage.lock() else {
-        return false;
-    };
-    let Ok(record) = storage.sessions().get(session) else {
-        return false;
-    };
-    let Ok(recipe) = storage.profiles().get(&record.profile) else {
-        return false;
+        return true; // a lock failure pauses — never signals
     };
     storage
-        .accounts()
-        .get(&recipe.account)
-        .is_ok_and(|account| account.cleanup_opt_in)
+        .app_settings()
+        .get("cleanup_paused")
+        .ok()
+        .flatten()
+        .is_some_and(|value| value == "1")
+}
+
+/// The 24 h crash-suspension deadline (Req.5), if active: Tiers 1-2
+/// stand down until the user re-confirms in the Cleanup Centre.
+fn cleanup_suspended_until(state: &Arc<AppState>) -> Option<i64> {
+    let storage = state.storage.lock().ok()?;
+    let until = storage
+        .app_settings()
+        .get("cleanup_suspended_until")
+        .ok()
+        .flatten()
+        .and_then(|value| value.parse::<i64>().ok())?;
+    (until > now_millis()).then_some(until)
+}
+
+/// Resolves an Instance's Account tier settings (session → launch
+/// settings → account). Unknown links read as both-off (fail closed).
+fn account_tier_settings(
+    state: &Arc<AppState>,
+    session: &SessionId,
+) -> juggler_core::storage::CleanupTierSettings {
+    let account = (|| {
+        let storage = state.storage.lock().ok()?;
+        let record = storage.sessions().get(session).ok()?;
+        let recipe = storage.profiles().get(&record.profile).ok()?;
+        storage.accounts().get(&recipe.account).ok()
+    })();
+    let account_id = account.as_ref().map(|a| a.id.as_str().to_string());
+    match account_id {
+        Some(account_id) => state.cleanup_settings.get(&account_id).unwrap_or_default(),
+        None => juggler_core::storage::CleanupTierSettings::default(),
+    }
+}
+
+/// One live Tier-2 notice as the UI reads it.
+#[derive(Clone, Debug, serde::Serialize, PartialEq)]
+pub struct Tier2NoticeInfo {
+    /// The candidate pid.
+    pub pid: u32,
+    /// The Instance it belonged to.
+    pub session: String,
+    /// Truncated command line.
+    pub cmdline_trunc: String,
+    /// The window's end, epoch ms.
+    pub deadline_ms: i64,
+}
+
+/// The cleanup automation's status (the centre's banners + the
+/// Settings surface read THIS — one truth).
+#[derive(Clone, Debug, serde::Serialize, PartialEq)]
+pub struct CleanupStatusInfo {
+    /// True while `Pause automatic cleanup` is on.
+    pub paused: bool,
+    /// True while the 24 h crash suspension is active.
+    pub suspended: bool,
+    /// The suspension's deadline, epoch ms (when `suspended`).
+    pub suspended_until_ms: Option<i64>,
+    /// The live Tier-2 notices (open Undo windows).
+    pub tier2_pending: Vec<Tier2NoticeInfo>,
+}
+
+/// Reads the automation status (Tier 0 is always the fallback — this
+/// surface never signals).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on lock failure.
+#[tauri::command]
+pub fn cleanup_status(state: tauri::State<'_, Arc<AppState>>) -> AppResult<CleanupStatusInfo> {
+    cleanup_status_inner(&state)
+}
+
+/// The Arc-based core (tests call this directly).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on lock failure.
+pub fn cleanup_status_inner(state: &Arc<AppState>) -> AppResult<CleanupStatusInfo> {
+    Ok(cleanup_status_of(state))
+}
+
+/// The status read (shared by the command and the sweep's tests).
+fn cleanup_status_of(state: &Arc<AppState>) -> CleanupStatusInfo {
+    let tier2_pending = state
+        .tier2_pending
+        .lock()
+        .map(|pending| {
+            pending
+                .values()
+                .filter(|notice| !notice.keep)
+                .map(|notice| Tier2NoticeInfo {
+                    pid: notice.pid,
+                    session: notice.session.clone(),
+                    cmdline_trunc: notice.cmdline_trunc.clone(),
+                    deadline_ms: notice.deadline_ms,
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    CleanupStatusInfo {
+        paused: cleanup_paused(state),
+        suspended: cleanup_suspended_until(state).is_some(),
+        suspended_until_ms: cleanup_suspended_until(state),
+        tier2_pending,
+    }
+}
+
+/// Sets the global `Pause automatic cleanup` kill-switch (Req.4):
+/// takes effect within one tick (the sweep reads the flag first).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on write failure.
+#[tauri::command]
+pub fn cleanup_pause_set(
+    state: tauri::State<'_, Arc<AppState>>,
+    paused: bool,
+) -> AppResult<CleanupStatusInfo> {
+    cleanup_pause_set_arc(&state, paused)
+}
+
+/// The Arc-based core (tests call this directly).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on write failure.
+pub fn cleanup_pause_set_arc(state: &Arc<AppState>, paused: bool) -> AppResult<CleanupStatusInfo> {
+    {
+        let storage = lock_storage_arc(state)?;
+        storage
+            .app_settings()
+            .set("cleanup_paused", if paused { "1" } else { "0" })
+            .map_err(AppError::from)?;
+    }
+    Ok(cleanup_status_of(state))
+}
+
+/// The user's Tier-2 decision on one notice (Req.1): `keep` = Undo /
+/// Keep running — the candidate is never signalled and the notice is
+/// dismissed (exactly one notification per crash-orphan, by construction).
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on lock failure.
+#[tauri::command]
+pub fn cleanup_tier2_decide(
+    state: tauri::State<'_, Arc<AppState>>,
+    pid: u32,
+    keep: bool,
+) -> AppResult<CleanupStatusInfo> {
+    cleanup_tier2_decide_arc(&state, pid, keep)
+}
+
+/// The Arc-based core (tests call this directly).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on lock failure.
+pub fn cleanup_tier2_decide_arc(
+    state: &Arc<AppState>,
+    pid: u32,
+    keep: bool,
+) -> AppResult<CleanupStatusInfo> {
+    if let Ok(mut pending) = state.tier2_pending.lock()
+        && let Some(notice) = pending.get_mut(&pid)
+    {
+        notice.keep = keep;
+    }
+    Ok(cleanup_status_of(state))
+}
+
+/// Re-confirms automatic cleanup after the 24 h crash suspension
+/// (Req.5 — the Cleanup Centre's button; shown, never silent).
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on write failure.
+#[tauri::command]
+pub fn cleanup_resume_after_crash(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> AppResult<CleanupStatusInfo> {
+    cleanup_resume_after_crash_arc(&state)
+}
+
+/// The Arc-based core (tests call this directly).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on write failure.
+pub fn cleanup_resume_after_crash_arc(state: &Arc<AppState>) -> AppResult<CleanupStatusInfo> {
+    {
+        let storage = lock_storage_arc(state)?;
+        storage
+            .app_settings()
+            .set("cleanup_suspended_until", "0")
+            .map_err(AppError::from)?;
+    }
+    Ok(cleanup_status_of(state))
+}
+
+/// Reads one Account's two tier opt-ins (absent rows = both off).
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on read failure.
+#[tauri::command]
+pub fn cleanup_tiers_get(
+    state: tauri::State<'_, Arc<AppState>>,
+    account_id: String,
+) -> AppResult<juggler_core::storage::CleanupTierSettings> {
+    cleanup_tiers_get_arc(&state, &account_id)
+}
+
+/// The Arc-based core (tests call this directly).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on read failure.
+pub fn cleanup_tiers_get_arc(
+    state: &Arc<AppState>,
+    account_id: &str,
+) -> AppResult<juggler_core::storage::CleanupTierSettings> {
+    Ok(state.cleanup_settings.get(account_id).unwrap_or_default())
+}
+
+/// The Account launch-settings area's two SEPARATE toggles (Req.4,
+/// exact labels in the UI). Also mirrors Tier 1 onto the legacy
+/// `accounts.cleanup_opt_in` column so older readers stay truthful.
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on write failure.
+#[tauri::command]
+pub fn cleanup_tiers_set(
+    state: tauri::State<'_, Arc<AppState>>,
+    account_id: String,
+    tier1_opt_in: bool,
+    tier2_opt_in: bool,
+) -> AppResult<juggler_core::storage::CleanupTierSettings> {
+    cleanup_tiers_set_arc(&state, &account_id, tier1_opt_in, tier2_opt_in)
+}
+
+/// The Arc-based core (tests call this directly).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on write failure.
+pub fn cleanup_tiers_set_arc(
+    state: &Arc<AppState>,
+    account_id: &str,
+    tier1_opt_in: bool,
+    tier2_opt_in: bool,
+) -> AppResult<juggler_core::storage::CleanupTierSettings> {
+    let settings = juggler_core::storage::CleanupTierSettings {
+        tier1_opt_in,
+        tier2_opt_in,
+    };
+    state
+        .cleanup_settings
+        .set(account_id, &settings)
+        .map_err(AppError::from)?;
+    // Mirror Tier 1 onto the prototype column (one honest source:
+    // the tier table; the account row follows).
+    account_set_cleanup_arc(state, account_id, tier1_opt_in).ok();
+    Ok(settings)
 }
 
 // ---------------------------------------------------------------------------

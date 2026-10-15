@@ -349,14 +349,30 @@ spawned — and nothing else.
   the exact command line, cwd, and held ports; only then offer the
   staged TERM → grace → KILL ladder, with per-process outcomes and a
   port re-probe after.
-- **Tiers (per Account, not per Provider — D-08):**
-  - **Tier 0 — Notify only (default everywhere):** leftovers surface in
+- **Tiers (per Account, not per Provider — D-08; the operating rules
+  are ADR-0010's E508 amendment):**
+  - **Tier 0 — Observe (default everywhere):** leftovers surface in
     the Cleanup Centre with evidence; nothing is ever killed
     automatically.
-  - **Tier 1 — Clean safe (opt-in per Account):** for Accounts the user
-    has explicitly opted in, leftovers that are *verified-owned* are
-    killed automatically post-close, every kill audit-logged (who/what/
-    when/why/evidence). No other automatic kill exists.
+  - **Tier 1 — Tidy verified orphans (opt-in per Account, off by
+    default):** after `orphan_grace` and a same-tick identity
+    re-verification, TERM→KILL via the staged ladder — ONLY helpers
+    whose root exited cleanly (code 0) and whose role guess is
+    `DevServer|Watcher`. Audit intent before every signal.
+  - **Tier 2 — Tidy after crash (a separate per-Account opt-in, off by
+    default):** as Tier 1 but for crash-exited roots, only after
+    5 minutes AND one user-visible notification with an Undo window
+    (≥30 s) before any signal.
+  - **Tier 3 — Hog shed: no automatic implementation** — alert plus
+    the staged sheet only; widening requires a new decision entry.
+  - **Hard exclusions at every tier:** roots; `McpServer`,
+    `TerminalShell`, and any database-role guess; re-adopted
+    survivors; unverifiable rows; escaped-group helpers; non-opted-in
+    Accounts; other machines' processes. A failed same-tick
+    re-verification demotes the candidate to Tier 0 (list-only) with
+    an audit note. A global `Pause automatic cleanup` kill-switch
+    takes effect within one tick; Tiers 1-2 are suspended for 24 h
+    after a crash recovery until re-confirmed.
   - Manual cleanup (the verify-before-kill sheet) is always available
     at Tier 0 and above, and is itself always audit-logged.
 - **Orphan detection:** post-close sweep of ledger rows vs live

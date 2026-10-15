@@ -1,5 +1,5 @@
 //! AJ-E506 evidence: live dogfood of the read-only Cleanup Centre.
-//! A fake Instance spawns a vite-like helper on :5173; the Instance
+//! A fake Instance spawns a vite-like helper (an ephemeral port); the Instance
 //! closes; after grace the inventory shows the orphan row with the
 //! full attribution + the complete evidence chain — and the archived
 //! inventory JSON proves ZERO kill fields exist anywhere in the DTO.
@@ -72,14 +72,21 @@ fn cleanup_centre_dogfood_orphan_row_with_evidence_and_zero_kill_fields() {
     );
     state.supervisor.set_orphan_grace("claude-code", 3);
 
-    // The fake Instance + its vite-like :5173 helper.
+    // The fake Instance + its vite-like helper on an EPHEMERAL port
+    // (a fixed :5173 once collided with a leaked listener from an
+    // earlier failed run and cascaded — ports are never assumed).
+    let port: u16 = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
     let session = SessionId::new("sess-e506");
     let spawned = state
         .supervisor
         .spawn(
             &session,
             &sh_spec(
-                "python3 -m http.server 5173 --bind 127.0.0.1 & wait",
+                &format!("python3 -m http.server {port} --bind 127.0.0.1 & wait"),
                 dir.path(),
             ),
             &ctx(&state),
@@ -91,6 +98,35 @@ fn cleanup_centre_dogfood_orphan_row_with_evidence_and_zero_kill_fields() {
     // its last pre-exit rows — the helper must be seen while live).
     let live_landed = tick_until(&state, 20_000, || {
         let info = commands::cleanup_inventory_inner(&state, "all-managed");
+        {
+            use juggler_supervisor::tree::LedgerStore as _;
+            eprintln!(
+                "[poll] ledger_rows={:?} degraded={}",
+                state
+                    .ledger
+                    .session_rows(&juggler_core::model::SessionId::new("sess-e506"))
+                    .map(|r| r
+                        .iter()
+                        .map(|r| (r.pid, r.role.clone(), r.state.clone()))
+                        .collect::<Vec<_>>()),
+                state.supervisor.ledger_degraded()
+            );
+        }
+        eprintln!(
+            "[poll] groups={} sess?={} rows={:?}",
+            info.groups.len(),
+            info.groups.iter().any(|g| g.session == "sess-e506"),
+            info.groups
+                .iter()
+                .map(|g| (
+                    g.healthy,
+                    g.rows
+                        .iter()
+                        .map(|r| (r.pid, r.role.clone(), r.state.clone()))
+                        .collect::<Vec<_>>()
+                ))
+                .collect::<Vec<_>>()
+        );
         info.groups.iter().any(|group| {
             group.session == "sess-e506"
                 && group.healthy
@@ -119,7 +155,10 @@ fn cleanup_centre_dogfood_orphan_row_with_evidence_and_zero_kill_fields() {
             group.session == "sess-e506"
                 && group.rows.iter().any(|row| {
                     row.state == "orphaned"
-                        && row.ports.as_deref().is_some_and(|p| p.contains("5173"))
+                        && row
+                            .ports
+                            .as_deref()
+                            .is_some_and(|p| p.contains(&port.to_string()))
                 })
         })
     });
@@ -153,7 +192,13 @@ fn cleanup_centre_dogfood_orphan_row_with_evidence_and_zero_kill_fields() {
         orphan.state_label,
         "Still running after its Instance closed"
     );
-    assert!(orphan.ports.as_deref().unwrap_or("").contains("5173"));
+    assert!(
+        orphan
+            .ports
+            .as_deref()
+            .unwrap_or("")
+            .contains(&port.to_string())
+    );
     // The complete evidence chain (Req.4).
     let evidence = &orphan.evidence;
     assert!(evidence.root_pid.is_some());

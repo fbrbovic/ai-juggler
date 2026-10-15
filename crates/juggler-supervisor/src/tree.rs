@@ -686,6 +686,102 @@ fn signal_pid(_pid: u32, _signal: Signal) -> bool {
     false
 }
 
+// --- AJ-E508: the tier evaluator (pass2 §10 / ADR-0010 amendment) --
+
+/// The facts one candidate row contributes to the tier decision
+/// (pure data: the sweep assembles, the evaluator decides, tests
+/// forge — role stays a GUESS everywhere it appears, pass2 C4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)] // the tier gates ARE booleans by law (ADR-0010)
+pub struct TierCandidate {
+    /// The candidate pid.
+    pub pid: u32,
+    /// pass2 §5 role guess (`DevServer|Watcher|McpServer|…`).
+    pub role_guess: String,
+    /// True for root rows — roots are NEVER auto-eligible.
+    pub is_root: bool,
+    /// Ledger state (`orphaned` is the only eligible one).
+    pub state: String,
+    /// True when the helper left the root's process group.
+    pub escaped_group: bool,
+    /// `Some(true)` = root exited code 0 (Tier 1's premise);
+    /// `Some(false)` = crash exit (Tier 2's); `None` = unknown
+    /// (fail closed — observe only).
+    pub root_exit_clean: Option<bool>,
+    /// False for another machine's row (D-13/E511).
+    pub machine_local: bool,
+    /// The Account's Tier-1 opt-in (clean exits).
+    pub tier1_opt_in: bool,
+    /// The Account's Tier-2 opt-in (crash exits; SEPARATE consent).
+    pub tier2_opt_in: bool,
+}
+
+/// The evaluator's decision: signal through the AJ-E507 ladder at a
+/// tier, or stay Tier 0 (list-only) with the honest reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TierVerdict {
+    /// Eligible for the automatic ladder (tier 1 or 2). Timing
+    /// (grace, 5 min, the Undo window) is the sweep's job.
+    Signal(u8),
+    /// Listed, never signalled. The reason is surfaced in tests and
+    /// in the demote audit note — never silently dropped.
+    ObserveOnly(String),
+}
+
+/// The tier decision, one pure function (ADR-0010's E508 amendment
+/// verbatim): only `DevServer|Watcher` helpers of cleanly-exited
+/// roots (Tier 1) or crash-exited roots with Tier 2's separate
+/// opt-in are EVER auto-eligible; roots, `McpServer`,
+/// `TerminalShell`, database-role guesses, re-adopted survivors,
+/// unverifiable rows, escaped-group helpers, other machines' rows,
+/// and unknown exit kinds are hard-excluded at every tier. Widening
+/// the eligible role set requires a new decision-log entry.
+#[must_use]
+pub fn evaluate_tier(candidate: &TierCandidate) -> TierVerdict {
+    if candidate.is_root {
+        return TierVerdict::ObserveOnly("roots are never auto-cleaned".into());
+    }
+    if candidate.state != "orphaned" {
+        return TierVerdict::ObserveOnly(format!(
+            "state {} is not auto-eligible (listed only)",
+            candidate.state
+        ));
+    }
+    if !matches!(candidate.role_guess.as_str(), "DevServer" | "Watcher") {
+        return TierVerdict::ObserveOnly(format!(
+            "role guess {} is not auto-eligible (only DevServer|Watcher)",
+            candidate.role_guess
+        ));
+    }
+    if candidate.escaped_group {
+        return TierVerdict::ObserveOnly("escaped its process group — containment void".into());
+    }
+    if !candidate.machine_local {
+        return TierVerdict::ObserveOnly("another machine's process (D-13)".into());
+    }
+    match candidate.root_exit_clean {
+        Some(true) => {
+            if candidate.tier1_opt_in {
+                TierVerdict::Signal(1)
+            } else {
+                TierVerdict::ObserveOnly("Account has not opted in to tidy (Tier 1)".into())
+            }
+        }
+        Some(false) => {
+            if candidate.tier2_opt_in {
+                TierVerdict::Signal(2)
+            } else {
+                TierVerdict::ObserveOnly(
+                    "Account has not opted in to tidy after crash (Tier 2)".into(),
+                )
+            }
+        }
+        None => {
+            TierVerdict::ObserveOnly("root exit kind unknown — fail closed, listed only".into())
+        }
+    }
+}
+
 /// Live command line + cwd for one pid — the verify sheet's
 /// re-read-NOW facts (pass2 §9.2 step 1). One targeted refresh
 /// (never a full scan); `None` = gone or unreadable, and the caller
@@ -843,5 +939,113 @@ mod verify_tests {
             verify_any(&probe, 4242, &[stranger, recorded()]),
             Verification::Verified
         );
+    }
+}
+
+#[cfg(test)]
+mod tier_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::{TierCandidate, TierVerdict, evaluate_tier};
+
+    fn candidate() -> TierCandidate {
+        TierCandidate {
+            pid: 8123,
+            role_guess: "DevServer".into(),
+            is_root: false,
+            state: "orphaned".into(),
+            escaped_group: false,
+            root_exit_clean: Some(true),
+            machine_local: true,
+            tier1_opt_in: true,
+            tier2_opt_in: false,
+        }
+    }
+
+    #[test]
+    fn clean_exit_dev_server_with_tier1_is_eligible() {
+        assert_eq!(evaluate_tier(&candidate()), TierVerdict::Signal(1));
+    }
+
+    #[test]
+    fn crash_exit_needs_the_separate_tier2_consent() {
+        let mut crash = candidate();
+        crash.root_exit_clean = Some(false);
+        assert_eq!(
+            evaluate_tier(&crash),
+            TierVerdict::ObserveOnly(
+                "Account has not opted in to tidy after crash (Tier 2)".into()
+            )
+        );
+        crash.tier2_opt_in = true;
+        assert_eq!(evaluate_tier(&crash), TierVerdict::Signal(2));
+    }
+
+    #[test]
+    fn hard_exclusions_apply_at_every_tier() {
+        for (name, mutate) in [
+            (
+                "root",
+                Box::new(|c: &mut TierCandidate| c.is_root = true)
+                    as Box<dyn Fn(&mut TierCandidate)>,
+            ),
+            (
+                "mcp role",
+                Box::new(|c: &mut TierCandidate| c.role_guess = "McpServer".into()),
+            ),
+            (
+                "shell role",
+                Box::new(|c: &mut TierCandidate| c.role_guess = "TerminalShell".into()),
+            ),
+            (
+                "database role",
+                Box::new(|c: &mut TierCandidate| c.role_guess = "Database".into()),
+            ),
+            (
+                "unknown role",
+                Box::new(|c: &mut TierCandidate| c.role_guess = "Unknown".into()),
+            ),
+            (
+                "re-adopted survivor",
+                Box::new(|c: &mut TierCandidate| c.state = "adopted".into()),
+            ),
+            (
+                "unverifiable",
+                Box::new(|c: &mut TierCandidate| c.state = "unverifiable".into()),
+            ),
+            (
+                "escaped group",
+                Box::new(|c: &mut TierCandidate| c.escaped_group = true),
+            ),
+            (
+                "remote machine",
+                Box::new(|c: &mut TierCandidate| c.machine_local = false),
+            ),
+            (
+                "unknown exit kind",
+                Box::new(|c: &mut TierCandidate| c.root_exit_clean = None),
+            ),
+            (
+                "tier1 off",
+                Box::new(|c: &mut TierCandidate| c.tier1_opt_in = false),
+            ),
+        ] {
+            let mut excluded = candidate();
+            mutate(&mut excluded);
+            // Exclusions hold even when BOTH tiers are on.
+            excluded.tier2_opt_in = true;
+            let verdict = evaluate_tier(&excluded);
+            assert!(
+                matches!(verdict, TierVerdict::ObserveOnly(_)),
+                "{name}: expected observe-only, got {verdict:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn watcher_is_the_only_other_eligible_role() {
+        let mut watcher = candidate();
+        watcher.role_guess = "Watcher".into();
+        assert_eq!(evaluate_tier(&watcher), TierVerdict::Signal(1));
     }
 }

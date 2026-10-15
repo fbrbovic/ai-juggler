@@ -257,69 +257,6 @@ fn orphan_stop_refuses_a_pid_the_journal_never_recorded() {
 }
 
 #[test]
-fn tier1_auto_cleanup_only_touches_opted_in_accounts() {
-    // Opted OUT: the orphan survives past the 60 s auto grace.
-    let dir = tempfile::tempdir().unwrap();
-    let state = seeded_state(dir.path(), false);
-    let (session, child) = drive_orphan_fixture(&state, dir.path(), "sess-notify-only");
-    let confirmed = state.orphans.poll(now_ms() + 61_000, |pid| {
-        juggler_supervisor::process_alive(pid)
-    });
-    assert_eq!(confirmed.len(), 1);
-    commands::auto_cleanup_sweep(&state, now_ms() + 61_000, &confirmed);
-    assert!(
-        juggler_supervisor::process_alive(child).is_some(),
-        "notify-only default (D-08): nothing is killed automatically"
-    );
-    assert!(state.orphans.allows(&session, child));
-    // manual cleanup still available at tier 0
-    let state_ref = &state;
-    let outcome = commands::orphan_stop_inner(state_ref, &session, child).unwrap();
-    assert_eq!(outcome.state, "gone");
-
-    // Opted IN: the sweep kills it and the audit names the trigger.
-    let dir = tempfile::tempdir().unwrap();
-    let state = seeded_state(dir.path(), true);
-    let (_session, child) = drive_orphan_fixture(&state, dir.path(), "sess-clean-safe");
-    let confirmed = state.orphans.poll(now_ms() + 61_000, |pid| {
-        juggler_supervisor::process_alive(pid)
-    });
-    assert_eq!(confirmed.len(), 1);
-    commands::auto_cleanup_sweep(&state, now_ms() + 61_000, &confirmed);
-    assert!(
-        juggler_supervisor::process_alive(child).is_none(),
-        "opted-in account: the leftover was cleaned"
-    );
-    let journal =
-        std::fs::read_to_string(state.supervisor.journal_ref().expect("journal open").path())
-            .unwrap();
-    assert!(
-        journal.contains("\"auto-tier1\""),
-        "D-08 audit names the trigger"
-    );
-}
-
-#[test]
-fn cleanup_opt_in_persists_through_the_command() {
-    let dir = tempfile::tempdir().unwrap();
-    let state = seeded_state(dir.path(), false);
-    let info = commands::account_set_cleanup_arc(&state, "acc-e410", true).unwrap();
-    assert!(info.cleanup_opt_in);
-    {
-        let storage = state.storage.lock().unwrap();
-        assert!(
-            storage
-                .accounts()
-                .get(&AccountId::new("acc-e410"))
-                .unwrap()
-                .cleanup_opt_in
-        );
-    }
-    let info = commands::account_set_cleanup_arc(&state, "acc-e410", false).unwrap();
-    assert!(!info.cleanup_opt_in);
-}
-
-#[test]
 fn unknown_instance_is_an_error_not_an_empty_table() {
     let dir = tempfile::tempdir().unwrap();
     let state = seeded_state(dir.path(), false);

@@ -360,7 +360,7 @@ Trap: extending the root-only ladder in `stop()` without the PGID primitive re-c
 - Fixtures (SPEC §10): vite-like `python3 -m http.server` (ephemeral port, collision-proof) freed on TERM with audit row; TERM-ignorer escalated with trap-log witness `term`; `setsid` escapee honestly still-holding → pid-only re-offer frees it. Evidence: `docs/qa/evidence/AJ-E507/` (kill-tests, stop-delegation, ui-tests, manifest) + `_gallery/20-kill/` (32 captures) + axe gate (2 contrast fixes).
 - Test premises honestly updated to E507 semantics (group-killing `stop()`): reconciler + cleanup-dogfood + ports now kill the root by EXTERNAL SIGKILL (the crash shape) to preserve their orphan-detection subjects.
 
-### AJ-E508 Cleanup tiers Tier 0-3: notify-only default, per-Account opt-in | Status: TODO | Priority P0 | Effort M | Depends: AJ-E507, AJ-E509
+### AJ-E508 Cleanup tiers Tier 0-3: notify-only default, per-Account opt-in | Status: DONE-EVIDENCED (evidence: docs/qa/evidence/AJ-E508/manifest.md) | Priority P0 | Effort M | Depends: AJ-E507, AJ-E509
 
 **Goal**:
 Implement D-08 exactly: Tier 0 observe-only by default, Tier 1/2 auto-tidy only for Accounts the user explicitly opted in, Tier 3 never automatic, with a global pause kill-switch and ADR-0010.
@@ -466,6 +466,14 @@ Trap: AJ-E507/E508 depend on this contract even though they are listed around it
 - NO AUDIT, NO KILL: the `AuditWriter` seam — a failed intent returns the typed `AppError::AuditUnavailable` and the manual kill REFUSES (fault-injection test: trap log empty, process alive, zero signals; recovery with the real repo completes `gone`). The existing `orphan_stop` is now audited end to end.
 - History + export: `cleanup_inventory("history")` reads the AUDIT (the E506 ledger-exits mapping retired in the same change — one History, one source); copy-exact `No cleanups yet — automatic cleanup is off by default.`; `cleanup_audit_export` = JSONL with the redaction note as a valid first line, user-initiated download `juggler-cleanup-audit-{date}.jsonl`.
 - Evidence: `docs/qa/evidence/AJ-E509/` — audit/history/export dumps + the fault-injection proof; 165/165 UI; 141/141 visuals incl. 4 new history captures.
+
+
+**Implementation-mapping (AJ-E508)**:
+- ADR-0010's E508 amendment + SPEC §5.2 (Tier 2/3, exclusions, demotion, pause, 24 h suspension) landed with the code, per Req.6.
+- Storage: `cleanup_settings` (v15; per-Account `tier1_opt_in`/`tier2_opt_in`, TWO toggles, both off; the E410 prototype flag seeds Tier 1 only). Evaluator: `tree.rs::evaluate_tier` — pure; eligible = `DevServer|Watcher` helpers ONLY (role gates read the ledger's TRUE command line — `ProcessRow.cmd` now rides the tick's existing refresh; helper rows gain a ≤10 s exec-settle refinement window, then identity freezes).
+- Sweep (`auto_cleanup_sweep`): candidates from the LEDGER's orphan verdict (the E410 tracker DROPS clean exits by design and cannot serve Tier 1); gates = pause → 24 h suspension → evaluator → pacing (60 s auto-grace; Tier 2: 5 min + ONE notice + ≥30 s Undo) → same-tick re-verify (failure ⇒ DEMOTE to Tier 0 with an audit note) → the E507 ladder ONLY (`kill_execute_as`, actors `auto:tier-1|2`).
+- Commands/UI: `cleanup_status/pause_set/tier2_decide/resume_after_crash/tiers_get/tiers_set`; `TierToggles` in the account panel (exact labels), the Centre's pause button + `Automatic cleanup is paused.` banner + suspended banner + Re-confirm, Tier-2 notice cards with aria-live countdown and Undo/Keep.
+- Tests/evidence: `tests/tiers.rs` 8/8 (default-guardrail, drill with MCP untouched, pause, per-Account isolation, tier2 undo+lapse, demote, suspension, toggle persistence) + evaluator matrix; UI 180/180; `21-tiers` gallery (12) + 2 axe gates (one contrast fix); `docs/qa/evidence/AJ-E508/`.
 
 ### AJ-E510 Juggler-crash recovery: re-adoption with stop control | Status: TODO | Priority P0 | Effort L | Depends: AJ-E501, AJ-E503, AJ-E504
 

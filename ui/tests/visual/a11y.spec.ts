@@ -225,3 +225,89 @@ for (const theme of ["dark", "light"] as const) {
     });
   }
 }
+
+
+// AJ-E508: axe-core 0 critical/serious on the tier surfaces — the
+// per-Account toggles (the automation consent) and the Tier-2
+// notification (the Undo window).
+for (const theme of ["dark", "light"] as const) {
+  test(`tiers — account toggles — axe 0 critical/serious — ${theme}`, async ({ page }) => {
+    await page.addInitScript(
+      ({ fixture, t0, theme: t }) => {
+        const w = window as unknown as Record<string, unknown>;
+        w.__AIJ_FIXTURE__ = fixture;
+        w.__AIJ_CLEANUP_TIERS__ = { tier1_opt_in: true, tier2_opt_in: false };
+        localStorage.setItem("aij.theme", t);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+        Date.now = () => t0;
+      },
+      { fixture: allStatuses, t0: T0, theme },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Accounts" }).click();
+    await page.getByRole("button", { name: "Inspect claude-code" }).first().click();
+    await expect(page.getByTestId("account-tier-toggles")).toBeVisible();
+    const results = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+      .analyze();
+    const serious = results.violations.filter((v) =>
+      ["serious", "critical"].includes(v.impact ?? ""),
+    );
+    if (serious.length > 0) {
+      const summary = serious
+        .map(
+          (v) =>
+            `${v.id} (${v.impact}): ${v.nodes.map((n) => n.target.join(" ")).slice(0, 3).join(", ")}`,
+        )
+        .join("\n");
+      throw new Error(`axe violations on the tier toggles (${theme}):\n${summary}`);
+    }
+    expect(serious).toHaveLength(0);
+  });
+
+  test(`tiers — tier-2 notification — axe 0 critical/serious — ${theme}`, async ({ page }) => {
+    await page.addInitScript(
+      ({ fixture, t0, theme: t }) => {
+        const w = window as unknown as Record<string, unknown>;
+        w.__AIJ_FIXTURE__ = fixture;
+        w.__AIJ_CLEANUP_STATUS__ = {
+          paused: true,
+          suspended: false,
+          suspended_until_ms: null,
+          tier2_pending: [
+            { pid: 8123, session: "s-1", cmdline_trunc: "node vite dev", deadline_ms: t0 + 30_000 },
+          ],
+        };
+        localStorage.setItem("aij.theme", t);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+        Date.now = () => t0;
+      },
+      { fixture: allStatuses, t0: T0, theme },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Cleanup" }).click();
+    await expect(page.getByTestId("cleanup-tier2-notice-8123")).toBeVisible();
+    const results = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+      .analyze();
+    const serious = results.violations.filter((v) =>
+      ["serious", "critical"].includes(v.impact ?? ""),
+    );
+    if (serious.length > 0) {
+      const summary = serious
+        .map(
+          (v) =>
+            `${v.id} (${v.impact}): ${v.nodes.map((n) => n.target.join(" ")).slice(0, 3).join(", ")}`,
+        )
+        .join("\n");
+      throw new Error(`axe violations on the tier-2 notice (${theme}):\n${summary}`);
+    }
+    expect(serious).toHaveLength(0);
+  });
+}

@@ -67,6 +67,24 @@ export type CleanupBridge = {
   load: (filter: string) => Promise<CleanupInventoryData>;
 };
 
+/** AJ-E508: the automation status surface (pause, suspension, the
+ * Tier-2 Undo windows) — injectable for tests. */
+export type CleanupStatusBridge = {
+  status: () => Promise<import("../lib/bridge").CleanupStatusData>;
+  pause: (paused: boolean) => Promise<import("../lib/bridge").CleanupStatusData>;
+  resume: () => Promise<import("../lib/bridge").CleanupStatusData>;
+  tier2Decide: (pid: number, keep: boolean) => Promise<import("../lib/bridge").CleanupStatusData>;
+};
+
+// Dynamic import (the vi.mock TDZ rule).
+export const defaultCleanupStatusBridge: CleanupStatusBridge = {
+  status: () => import("../lib/bridge").then((bridge) => bridge.cleanupStatus()),
+  pause: (paused) => import("../lib/bridge").then((bridge) => bridge.cleanupPauseSet(paused)),
+  resume: () => import("../lib/bridge").then((bridge) => bridge.cleanupResumeAfterCrash()),
+  tier2Decide: (pid, keep) =>
+    import("../lib/bridge").then((bridge) => bridge.cleanupTier2Decide(pid, keep)),
+};
+
 // Dynamic import (the vi.mock TDZ rule).
 export const defaultCleanupBridge: CleanupBridge = {
   load: (filter) =>
@@ -132,9 +150,11 @@ function GroupBlock(props: {
 export function CleanupCentre(props: {
   bridge?: CleanupBridge;
   killBridge?: KillBridge;
+  statusBridge?: CleanupStatusBridge;
 }) {
   const bridge = props.bridge ?? defaultCleanupBridge;
   const killBridge = props.killBridge;
+  const statusBridge = props.statusBridge ?? defaultCleanupStatusBridge;
   const [filter, setFilter] = useState<CleanupFilterId>("needs-attention");
   const [data, setData] = useState<CleanupInventoryData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -146,6 +166,34 @@ export function CleanupCentre(props: {
   } | null>(null);
   const filterRef = useRef<HTMLDivElement>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // AJ-E508: the automation status (pause kill-switch, the crash
+  // suspension, the Tier-2 Undo windows) — loaded on mount, after
+  // every decision, and polled while a Tier-2 window is open.
+  const [status, setStatus] = useState<import("../lib/bridge").CleanupStatusData | null>(null);
+  useEffect(() => {
+    let alive = true;
+    statusBridge
+      .status()
+      .then((result) => {
+        if (alive) setStatus(result);
+      })
+      .catch(() => {
+        /* the banners stay hidden on failure — never a false pause claim */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [statusBridge, reloadKey]);
+  useEffect(() => {
+    if ((status?.tier2_pending.length ?? 0) === 0) return;
+    const timer = setInterval(() => {
+      void statusBridge
+        .status()
+        .then((next) => setStatus(next))
+        .catch(() => undefined);
+    }, 1_000);
+    return () => clearInterval(timer);
+  }, [status?.tier2_pending.length, statusBridge]);
 
   useEffect(() => {
     let alive = true;
@@ -174,6 +222,20 @@ export function CleanupCentre(props: {
         <span className="rounded-full border border-hairline px-1.5 py-[1px] text-[9.5px] text-muted">
           Tier 0 observe · verified manual kills
         </span>
+        {/* The global kill-switch lives IN the header (Req.4). */}
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() => {
+            void statusBridge
+              .pause(!(status?.paused ?? false))
+              .then(setStatus)
+              .catch(() => undefined);
+          }}
+          data-testid="cleanup-pause-toggle"
+        >
+          {status?.paused ? "Resume automatic cleanup" : "Pause automatic cleanup"}
+        </Button>
         {/* ⌘F lands here (2.1.1/2.4.7 keyboard-complete + visible). */}
         <div
           ref={filterRef}
@@ -210,6 +272,52 @@ export function CleanupCentre(props: {
         }`}
       </p>
 
+      {/* Req.4/5: the persistent banners — shown, never silent. */}
+      {status?.paused && (
+        <p
+          className="rounded-lg border border-warning/40 bg-warning/5 p-2 text-[11px] text-ink"
+          role="status"
+          data-testid="cleanup-paused-banner"
+        >
+          Automatic cleanup is paused.
+        </p>
+      )}
+      {status?.suspended && (
+        <p
+          className="flex items-center gap-2 rounded-lg border border-warning/40 bg-warning/5 p-2 text-[11px] text-ink"
+          role="status"
+          data-testid="cleanup-suspended-banner"
+        >
+          <span>
+            Automatic cleanup is suspended for 24 h after the app closed unexpectedly —
+            re-confirm to resume.
+          </span>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => {
+              void statusBridge
+                .resume()
+                .then(setStatus)
+                .catch(() => undefined);
+            }}
+            data-testid="cleanup-resume-button"
+          >
+            Re-confirm
+          </Button>
+        </p>
+      )}
+      {status !== null && status.tier2_pending.length > 0 && (
+        <Tier2Notices
+          status={status}
+          onDecide={(pid, keep) => {
+            void statusBridge
+              .tier2Decide(pid, keep)
+              .then(setStatus)
+              .catch(() => undefined);
+          }}
+        />
+      )}
       {data?.ledger_degraded && (
         <p
           className="rounded-lg border border-warning/40 bg-warning/5 p-2 text-[11px] text-ink"
@@ -359,4 +467,64 @@ export function focusCleanupFilter() {
   const group = document.querySelector<HTMLElement>('[role="radiogroup"][aria-label="Cleanup filter"]');
   const first = group?.querySelector<HTMLElement>("button");
   first?.focus();
+}
+
+
+/**
+ * AJ-E508 Req.1: the Tier-2 crash notifications — the Undo window IS
+ * the consent surface. One card per crash-orphan with a live
+ * countdown (aria-live at 1 s), `Undo` / `Keep running` both stand
+ * the candidate down.
+ */
+function Tier2Notices(props: {
+  status: import("../lib/bridge").CleanupStatusData;
+  onDecide: (pid: number, keep: boolean) => void;
+}) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, []);
+  return (
+    <ul className="flex flex-col gap-2" data-testid="cleanup-tier2-notices">
+      {props.status.tier2_pending.map((notice) => {
+        const secondsLeft = Math.max(0, Math.ceil((notice.deadline_ms - now) / 1000));
+        return (
+          <li
+            key={notice.pid}
+            className="flex flex-col gap-1 rounded-lg border border-warning/40 bg-warning/5 p-2 text-[11px] text-ink"
+            data-testid={`cleanup-tier2-notice-${notice.pid}`}
+          >
+            <p>
+              {notice.cmdline_trunc} (PID {notice.pid}) survived a crash — Juggler will tidy
+              it{secondsLeft > 0 ? ` in ${secondsLeft}s` : " now"} unless you keep it.
+            </p>
+            <p aria-live="polite" className="sr-only" data-testid={`cleanup-tier2-countdown-${notice.pid}`}>
+              {secondsLeft > 0
+                ? `${secondsLeft} seconds until the automatic tidy`
+                : "The undo window has closed"}
+            </p>
+            <span className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => props.onDecide(notice.pid, true)}
+                data-testid={`cleanup-tier2-undo-${notice.pid}`}
+              >
+                Undo — keep it running
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => props.onDecide(notice.pid, true)}
+                data-testid={`cleanup-tier2-keep-${notice.pid}`}
+              >
+                Keep running
+              </Button>
+            </span>
+          </li>
+        );
+      })}
+    </ul>
+  );
 }

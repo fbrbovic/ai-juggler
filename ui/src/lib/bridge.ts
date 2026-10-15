@@ -814,6 +814,95 @@ export async function cleanupAuditExport(): Promise<string> {
 export type { CleanupRowInfo, EvidenceChainInfo, VerificationBadgeInfo } from "../components/ProcessRow";
 export type { CleanupGroupInfo } from "../screens/CleanupCentre";
 import type { CleanupInventoryData } from "../screens/CleanupCentre";
+
+/** AJ-E508: the automation status (banners + pause + Tier-2 notices). */
+export interface CleanupStatusData {
+  paused: boolean;
+  suspended: boolean;
+  suspended_until_ms: number | null;
+  tier2_pending: {
+    pid: number;
+    session: string;
+    cmdline_trunc: string;
+    deadline_ms: number;
+  }[];
+}
+
+/** AJ-E508: per-Account tier opt-ins (two separate toggles). */
+export interface CleanupTierSettingsData {
+  tier1_opt_in: boolean;
+  tier2_opt_in: boolean;
+}
+
+/** Reads the automation status (Tier 0's fallback — never signals). */
+export async function cleanupStatus(): Promise<CleanupStatusData> {
+  if (!hasBackend) {
+    return (
+      (window as unknown as { __AIJ_CLEANUP_STATUS__?: CleanupStatusData }).__AIJ_CLEANUP_STATUS__
+      ?? { paused: false, suspended: false, suspended_until_ms: null, tier2_pending: [] }
+    );
+  }
+  return invoke<CleanupStatusData>("cleanup_status");
+}
+
+/** Sets the global `Pause automatic cleanup` kill-switch. */
+export async function cleanupPauseSet(paused: boolean): Promise<CleanupStatusData> {
+  if (!hasBackend) {
+    return {
+      paused,
+      suspended: false,
+      suspended_until_ms: null,
+      tier2_pending: [],
+    };
+  }
+  return invoke<CleanupStatusData>("cleanup_pause_set", { paused });
+}
+
+/** The Tier-2 notice decision: `keep` = Undo / Keep running. */
+export async function cleanupTier2Decide(
+  pid: number,
+  keep: boolean,
+): Promise<CleanupStatusData> {
+  if (!hasBackend) {
+    return { paused: false, suspended: false, suspended_until_ms: null, tier2_pending: [] };
+  }
+  return invoke<CleanupStatusData>("cleanup_tier2_decide", { pid, keep });
+}
+
+/** Re-confirms automation after the 24 h crash suspension. */
+export async function cleanupResumeAfterCrash(): Promise<CleanupStatusData> {
+  if (!hasBackend) {
+    return { paused: false, suspended: false, suspended_until_ms: null, tier2_pending: [] };
+  }
+  return invoke<CleanupStatusData>("cleanup_resume_after_crash");
+}
+
+/** Reads one Account's two tier opt-ins (absent rows = both off). */
+export async function cleanupTiersGet(accountId: string): Promise<CleanupTierSettingsData> {
+  if (!hasBackend) {
+    return (
+      (window as unknown as { __AIJ_CLEANUP_TIERS__?: CleanupTierSettingsData })
+        .__AIJ_CLEANUP_TIERS__ ?? { tier1_opt_in: false, tier2_opt_in: false }
+    );
+  }
+  return invoke<CleanupTierSettingsData>("cleanup_tiers_get", { accountId });
+}
+
+/** Sets one Account's two SEPARATE toggles. */
+export async function cleanupTiersSet(
+  accountId: string,
+  tier1OptIn: boolean,
+  tier2OptIn: boolean,
+): Promise<CleanupTierSettingsData> {
+  if (!hasBackend) {
+    return { tier1_opt_in: tier1OptIn, tier2_opt_in: tier2OptIn };
+  }
+  return invoke<CleanupTierSettingsData>("cleanup_tiers_set", {
+    accountId,
+    tier1OptIn,
+    tier2OptIn,
+  });
+}
 import type {
   KillExecuteData,
   KillScope,

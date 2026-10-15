@@ -4,6 +4,7 @@ import {
   CleanupCentre,
   type CleanupBridge,
   type CleanupInventoryData,
+  type CleanupStatusBridge,
 } from "../screens/CleanupCentre";
 import { ProcessRow, type CleanupRowInfo } from "./ProcessRow";
 
@@ -357,6 +358,126 @@ describe("ProcessRow evidence expansion (AJ-E506 Req.4)", () => {
     expect(view.getByTestId("cleanup-evidence-9100").textContent ?? "").toContain(
       "escaped its process group",
     );
+    view.unmount();
+  });
+});
+
+
+describe("Cleanup automation status (AJ-E508)", () => {
+  const statusBridgeOf = (
+    status: import("../lib/bridge").CleanupStatusData,
+    mutations: { pause?: boolean; resume?: boolean; decide?: [number, boolean] } = {},
+  ): CleanupStatusBridge => ({
+    status: () => Promise.resolve(status),
+    pause: (paused) =>
+      Promise.resolve({
+        ...status,
+        paused: mutations.pause ?? paused,
+      }),
+    resume: () =>
+      Promise.resolve({
+        ...status,
+        suspended: false,
+        suspended_until_ms: null,
+      }),
+    tier2Decide: (pid, keep) => {
+      mutations.decide = [pid, keep];
+      return Promise.resolve({ ...status, tier2_pending: [] });
+    },
+  });
+
+  const tier0: import("../lib/bridge").CleanupStatusData = {
+    paused: false,
+    suspended: false,
+    suspended_until_ms: null,
+    tier2_pending: [],
+  };
+
+  it("shows the pause kill-switch; pausing shows the exact banner", async () => {
+    const view = render(
+      <CleanupCentre
+        bridge={{ load: () => Promise.resolve(data()) }}
+        statusBridge={statusBridgeOf({ ...tier0, paused: true })}
+      />,
+    );
+    await waitFor(() => expect(view.getByTestId("cleanup-paused-banner")).toBeTruthy());
+    expect(view.getByTestId("cleanup-paused-banner").textContent).toBe(
+      "Automatic cleanup is paused.",
+    );
+    expect(view.getByTestId("cleanup-pause-toggle").textContent).toContain("Resume");
+    view.unmount();
+  });
+
+  it("default state: no banners, the pause button offered", async () => {
+    const view = render(
+      <CleanupCentre
+        bridge={{ load: () => Promise.resolve(data()) }}
+        statusBridge={statusBridgeOf({ ...tier0 })}
+      />,
+    );
+    await waitFor(() => expect(view.getByTestId("cleanup-pause-toggle")).toBeTruthy());
+    expect(view.getByTestId("cleanup-pause-toggle").textContent).toContain("Pause");
+    expect(view.queryByTestId("cleanup-paused-banner")).toBeNull();
+    expect(view.queryByTestId("cleanup-suspended-banner")).toBeNull();
+    expect(view.queryByTestId("cleanup-tier2-notices")).toBeNull();
+    view.unmount();
+  });
+
+  it("suspension banner names the 24 h window and re-confirm clears it", async () => {
+    const bridge = statusBridgeOf({
+      ...tier0,
+      suspended: true,
+      suspended_until_ms: 1_728_810_000_000,
+    });
+    const view = render(
+      <CleanupCentre bridge={{ load: () => Promise.resolve(data()) }} statusBridge={bridge} />,
+    );
+    await waitFor(() => expect(view.getByTestId("cleanup-suspended-banner")).toBeTruthy());
+    expect(view.getByTestId("cleanup-suspended-banner").textContent).toContain(
+      "suspended for 24 h",
+    );
+    fireEvent.click(view.getByTestId("cleanup-resume-button"));
+    await waitFor(() => expect(view.queryByTestId("cleanup-suspended-banner")).toBeNull());
+    view.unmount();
+  });
+
+  it("the Tier-2 notification names the process, counts down, and Undo keeps it running", async () => {
+    const mutations: { decide?: [number, boolean] } = {};
+    const bridge: CleanupStatusBridge = {
+      status: () =>
+        Promise.resolve({
+          paused: false,
+          suspended: false,
+          suspended_until_ms: null,
+          tier2_pending: [
+            {
+              pid: 8123,
+              session: "s-1",
+              cmdline_trunc: "node vite dev",
+              deadline_ms: Date.now() + 30_000,
+            },
+          ],
+        }),
+      pause: () => Promise.resolve({ ...tier0 } as never),
+      resume: () => Promise.resolve({ ...tier0 } as never),
+      tier2Decide: (pid, keep) => {
+        mutations.decide = [pid, keep];
+        return Promise.resolve({ ...tier0 } as never);
+      },
+    };
+    const view = render(
+      <CleanupCentre bridge={{ load: () => Promise.resolve(data()) }} statusBridge={bridge} />,
+    );
+    await waitFor(() => expect(view.getByTestId("cleanup-tier2-notice-8123")).toBeTruthy());
+    expect(view.getByTestId("cleanup-tier2-notice-8123").textContent).toContain(
+      "node vite dev (PID 8123) survived a crash",
+    );
+    expect(view.getByTestId("cleanup-tier2-countdown-8123").textContent ?? "").toMatch(
+      /\d+ seconds until the automatic tidy/,
+    );
+    fireEvent.click(view.getByTestId("cleanup-tier2-undo-8123"));
+    await waitFor(() => expect(view.queryByTestId("cleanup-tier2-notice-8123")).toBeNull());
+    expect(mutations.decide).toEqual([8123, true]);
     view.unmount();
   });
 });

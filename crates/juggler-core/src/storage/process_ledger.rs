@@ -287,9 +287,20 @@ impl ProcessLedgerRepo {
                      pgid = COALESCE(?8, pgid),
                      escaped_group = MAX(escaped_group, ?9),
                      started_at = COALESCE(started_at, ?10),
+                     -- Identity refinement only inside the exec-settle
+                     -- window (AJ-E508): a helper discovered pre-exec
+                     -- legitimately changes image (sh → python → vite);
+                     -- after the window the identity is frozen and a
+                     -- mismatch flips unverifiable (PID-reuse guard).
                      exe_path = CASE
-                         WHEN exe_path NOT LIKE '/%' AND ?11 LIKE '/%' THEN ?11
-                         ELSE exe_path END
+                         WHEN ?2 - first_seen < 10000 AND ?11 LIKE '/%' THEN ?11
+                         ELSE exe_path END,
+                     cmdline_hash = CASE
+                         WHEN ?2 - first_seen < 10000 AND ?12 != '' THEN ?12
+                         ELSE cmdline_hash END,
+                     cmdline_trunc = CASE
+                         WHEN ?2 - first_seen < 10000 AND ?13 != '' THEN ?13
+                         ELSE cmdline_trunc END
                  WHERE session_id = ?1 AND pid = ?5 AND boot_id = ?6 AND state = ?7",
             )?;
             let mut insert = tx.prepare(
@@ -316,6 +327,8 @@ impl ProcessLedgerRepo {
                     i64::from(row.escaped_group),
                     row.started_at,
                     row.exe_path,
+                    row.cmdline_hash,
+                    row.cmdline_trunc,
                 ])?;
                 if changed == 0 {
                     insert.execute(params![
