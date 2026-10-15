@@ -2,16 +2,17 @@ import { useState } from "react";
 
 // The Centre reuses the shared primitive; re-export keeps one source.
 export { Button } from "./primitives";
+import { Button } from "./primitives";
 
 /**
- * AJ-E506: the shared Cleanup row (the Cleanup Centre AND the
+ * AJ-E506/E507: the shared Cleanup row (the Cleanup Centre AND the
  * Instance Processes tab render THIS component — no copies, no
  * divergent labels; divergence is how T3 survivors get mislabelled).
  *
- * Read-only by construction (Tier 0): the row's data DTO carries no
- * kill fields, and this component renders no signalling controls —
- * not even disabled ones (a rendered-but-disabled kill trains the
- * wrong trust model, AJ-E508's guardrail).
+ * The kill affordance (AJ-E507) exists ONLY on rows that verified at
+ * last read AND are still live — Unverifiable/not-managed/exited
+ * rows render NONE (Req.2: not disabled-with-tooltip; the sheet
+ * re-verifies at click time anyway, and ITS refusal is final).
  */
 
 export interface VerificationBadgeInfo {
@@ -78,10 +79,26 @@ function stateIcon(state: string): string {
   }
 }
 
-export function ProcessRow(props: { row: CleanupRowInfo }) {
+/** Rows that may offer the verified kill sheet (AJ-E507 Req.2):
+ * verified at last read AND still live. Everything else —
+ * Unverifiable, exited, starting — renders no affordance at all. */
+export function killableRow(row: CleanupRowInfo): boolean {
+  return (
+    row.evidence.verification.verdict === "verified" &&
+    (row.state === "running" || row.state === "orphaned" || row.state === "adopted")
+  );
+}
+
+export function ProcessRow(props: {
+  row: CleanupRowInfo;
+  /** Opens the AJ-E507 sheet; the row's element rides along for
+   * focus-return (WCAG 2.4.3). Absent = read-only surface. */
+  onKill?: (row: CleanupRowInfo, trigger: HTMLElement) => void;
+}) {
   const row = props.row;
   const [expanded, setExpanded] = useState(false);
   const evidence = row.evidence;
+  const killable = killableRow(row) && props.onKill !== undefined;
   return (
     <li className="border-t border-hairline" data-testid={`cleanup-row-${row.pid}`}>
       <div className="flex items-center gap-2 py-1.5 text-[11px]">
@@ -126,6 +143,19 @@ export function ProcessRow(props: { row: CleanupRowInfo }) {
             {row.ports !== null && <span className="text-accent">:{row.ports.split(",").join(" :")}</span>}
           </span>
         </button>
+        {killable && (
+          <Button
+            size="sm"
+            variant="secondary"
+            className="shrink-0"
+            onClick={(event: React.MouseEvent<HTMLButtonElement>) =>
+              props.onKill?.(row, event.currentTarget)
+            }
+            data-testid={`cleanup-kill-${row.pid}`}
+          >
+            Terminate…
+          </Button>
+        )}
       </div>
       {expanded && (
         <div
@@ -160,7 +190,9 @@ export function ProcessRow(props: { row: CleanupRowInfo }) {
               {new Date(evidence.last_seen).toISOString().slice(0, 19)}
             </dd>
           </dl>
-          <p className="text-faint">Read-only (Tier 0) — verified stop actions arrive with AJ-E507.</p>
+          <p className="text-faint">
+            Verified stop actions run through the staged sheet (AJ-E507) — never a one-click kill.
+          </p>
         </div>
       )}
     </li>

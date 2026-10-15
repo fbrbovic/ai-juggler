@@ -46,6 +46,10 @@ pub use supervisor::{
     LiveProcessStats, LiveStatsCollector, ProcessFacts, ProcessRow, ProcessTable, SpawnedProcess,
     Supervisor, TreeSample,
 };
+pub use tree::{
+    LadderOutcome, LadderScope, ProcessOutcome, ladder_platform, live_details, pgid_members,
+    terminate_group, verify_start_time,
+};
 
 /// Counts every `sysinfo::System` construction in this crate
 /// (AJ-E504's regression gate: the reconciler tick must construct at

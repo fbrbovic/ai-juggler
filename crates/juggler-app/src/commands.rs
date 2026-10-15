@@ -4079,6 +4079,648 @@ fn ports_held_by(pid: u32) -> Option<String> {
     (!ports.is_empty()).then(|| ports.join(","))
 }
 
+// --- AJ-E507: verify-before-kill sheet + manual TERM→KILL ladder ---
+
+/// The kill sheet's default grace (pass2 §9.3 — matches the
+/// `stop_session` grace).
+pub const KILL_GRACE_SECS: u64 = 5;
+
+/// The exact refusal copy when click-time verification fails
+/// (Req.2 — the sheet renders it with the kill button REMOVED).
+pub const KILL_REFUSAL_COPY: &str =
+    "This PID now belongs to a different program — Juggler will not touch it.";
+
+/// The exact unsaved-state warning copy (Req.5).
+fn unsaved_state_copy(role: &str) -> String {
+    format!("Includes a {role} that may hold unsaved state.")
+}
+
+/// Role guess, pass2 §5 vocabulary — inferred from exe/cmdline, always
+/// shown as a guess, never as fact. Pure (unit-tested).
+#[must_use]
+pub fn guess_role(exe: &str, cmdline: &str) -> &'static str {
+    let exe_name = exe.rsplit('/').next().unwrap_or(exe).to_ascii_lowercase();
+    let line = cmdline.to_ascii_lowercase();
+    let hay = format!("{exe_name} {line}");
+    let contains_any = |needles: &[&str]| needles.iter().any(|n| hay.contains(n));
+    if contains_any(&["mcp-server", "mcp_server", "/mcp ", "mcp.json"]) {
+        "McpServer"
+    } else if contains_any(&[
+        "vite",
+        "webpack",
+        "esbuild",
+        "next dev",
+        "--watch-tags",
+        "dev-server",
+        "serve -s",
+    ]) {
+        "DevServer"
+    } else if contains_any(&["watchman", "fswatch", "chokidar", "nodemon", "--watch"]) {
+        "Watcher"
+    } else if contains_any(&[
+        "cargo build",
+        "make -",
+        "tsc ",
+        "rustc",
+        "clang",
+        "esbuild --build",
+    ]) {
+        "BuildTool"
+    } else if exe_name == "sh"
+        || exe_name == "bash"
+        || exe_name == "zsh"
+        || exe_name == "fish"
+        || exe_name.ends_with("node") && line.contains("-e")
+    {
+        "TerminalShell"
+    } else if contains_any(&["claude", "codex", "gemini", "copilot"]) {
+        "Harness"
+    } else {
+        "Unknown"
+    }
+}
+
+/// One PGID member in the verify sheet's collateral list (Req.5).
+#[derive(Clone, Debug, serde::Serialize, PartialEq)]
+pub struct KillMemberInfo {
+    /// OS process id.
+    pub pid: u32,
+    /// The member's live PGID (`None` when unreadable).
+    pub pgid: Option<u32>,
+    /// Executable basename (display).
+    pub exe: String,
+    /// Truncated command line (display).
+    pub cmdline: String,
+    /// pass2 §5 role guess — always labelled a guess in the UI.
+    pub role_guess: &'static str,
+    /// The exact Req.5 warning when the role may hold unsaved state.
+    pub unsaved_state_warning: Option<String>,
+    /// True when this pid has a Juggler ledger row (attributed).
+    pub from_ledger: bool,
+}
+
+/// The verify sheet's data (step 1): click-time identity verdict +
+/// the re-read-now facts + the PGID collateral list.
+#[derive(Clone, Debug, serde::Serialize, PartialEq)]
+pub struct KillVerifyInfo {
+    /// OS process id.
+    pub pid: u32,
+    /// Owning Instance.
+    pub session: String,
+    /// True only when click-time E503 verification SUCCEEDED.
+    pub verified: bool,
+    /// The exact refusal copy when `!verified`.
+    pub refusal: Option<String>,
+    /// Kernel-reported exe NOW.
+    pub exe_path: String,
+    /// Full command line NOW (recorded value when unreadable).
+    pub cmdline: String,
+    /// Working directory NOW (recorded value when unreadable).
+    pub cwd: String,
+    /// Ports the pid holds NOW.
+    pub ports: Vec<u16>,
+    /// The live PGID.
+    pub pgid: Option<u32>,
+    /// True when the row left the root's group (E502).
+    pub escaped_group: bool,
+    /// Every live PGID member (self included) with role guesses.
+    pub members: Vec<KillMemberInfo>,
+    /// The whole-Instance tree's live pids (scope 3's enumeration).
+    pub tree_pids: Vec<u32>,
+    /// `TERM → grace → KILL` | `TerminateProcess only` (verbatim).
+    pub platform: String,
+    /// The ladder grace, seconds.
+    pub grace_secs: u64,
+    /// Attribution.
+    pub provider: String,
+    /// Attribution.
+    pub account_id: Option<String>,
+    /// Attribution.
+    pub project_id: Option<String>,
+}
+
+/// The verify sheet's step-1 command: re-runs the E503 identity check
+/// NOW (not from the last tick), re-reads exe/cmdline/cwd/ports, and
+/// enumerates the PGID collateral (Req.1/Req.5). Zero signalling.
+///
+/// # Errors
+///
+/// [`AppError::NotFound`] when the pid has no ledger row for the
+/// session (the UI never offers a kill on unmanaged rows — Req.2 —
+/// so this is a contract breach, not a UI state).
+#[tauri::command]
+pub fn kill_verify(
+    state: tauri::State<'_, Arc<AppState>>,
+    session_id: String,
+    pid: u32,
+) -> AppResult<KillVerifyInfo> {
+    kill_verify_inner(&state, &session_id, pid)
+}
+
+/// Click-time identity verification — ONE rule shared by the sheet
+/// (step 1) and the execute gate (step 3) so they can never
+/// disagree. Helpers carry the kernel-recorded exe (the full
+/// boot/start-time/exe triple); LIVE-supervised roots verify via the
+/// handle's settled identity with start-time only — the exe moves
+/// legitimately across `exec` (E503/E504's `/bin/sh`-vs-`/bin/bash`
+/// aliasing rule). Anything else (no record, probe error) fails
+/// CLOSED.
+fn verify_kill_target(
+    state: &Arc<AppState>,
+    session: &SessionId,
+    row: &juggler_core::storage::LedgerRow,
+) -> bool {
+    let Some(pid) = row.pid else {
+        return false;
+    };
+    if row.role == "root"
+        && let Some(identity) = state.supervisor.root_identity(session)
+    {
+        return juggler_supervisor::tree::verify_start_time(pid, &identity)
+            == juggler_supervisor::tree::Verification::Verified;
+    }
+    row.started_at.is_some_and(|start_time| {
+        let identity = juggler_supervisor::tree::ProcessIdentity {
+            pid,
+            pgid: row.pgid,
+            start_time,
+            exe: std::path::PathBuf::from(&row.exe_path),
+            boot_id: row.boot_id.clone(),
+        };
+        juggler_supervisor::tree::verify(pid, &identity)
+            == juggler_supervisor::tree::Verification::Verified
+    })
+}
+
+/// The Arc-based core (tests call this directly).
+///
+/// # Errors
+///
+/// [`AppError::NotFound`] when no ledger row exists for
+/// `(session, pid)`.
+#[allow(clippy::similar_names)] // pid/pgid are the kernel's own names
+pub fn kill_verify_inner(
+    state: &Arc<AppState>,
+    session_id: &str,
+    pid: u32,
+) -> Result<KillVerifyInfo, AppError> {
+    use juggler_supervisor::tree::LedgerStore as _;
+    let session = SessionId::new(session_id.to_string());
+    let rows = state.ledger.session_rows(&session).unwrap_or_default();
+
+    let row = rows
+        .iter()
+        .find(|row| row.pid == Some(pid))
+        .ok_or_else(|| AppError::NotFound {
+            entity: "ledger row",
+            id: format!("{session_id}/{pid}"),
+        })?;
+    // Click-time verification: identity against the kernel NOW —
+    // the shared rule (`verify_kill_target`). Unverifiable rows
+    // (state `unverifiable`, a missing start-time, a probe error)
+    // fail CLOSED — the sheet explains.
+    let verified = verify_kill_target(state, &session, row);
+    // Re-read NOW (the live facts; recorded values when unreadable).
+    let (cmdline, cwd) = juggler_supervisor::live_details(pid).map_or_else(
+        || (row.cmdline_trunc.clone(), row.cwd.clone()),
+        |(cmd, cwd)| {
+            (
+                if cmd.is_empty() {
+                    row.cmdline_trunc.clone()
+                } else {
+                    cmd
+                },
+                if cwd.is_empty() { row.cwd.clone() } else { cwd },
+            )
+        },
+    );
+    let ports = os_listeners()
+        .map(|listeners| {
+            listeners
+                .iter()
+                .filter(|listener| listener.pid == pid)
+                .map(|listener| listener.port)
+                .collect::<Vec<u16>>()
+        })
+        .unwrap_or_default();
+    let pgid = juggler_supervisor::group::pgid_of(pid).ok();
+    let (members, tree_pids) = if verified {
+        kill_collateral(&rows, pgid)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    Ok(KillVerifyInfo {
+        pid,
+        session: session_id.to_string(),
+        verified,
+        refusal: (!verified).then(|| KILL_REFUSAL_COPY.to_string()),
+        exe_path: row.exe_path.clone(),
+        cmdline: truncate_cmdline(&cmdline),
+        cwd,
+        ports,
+        pgid,
+        escaped_group: row.escaped_group,
+        members,
+        tree_pids,
+        platform: juggler_supervisor::ladder_platform().to_string(),
+        grace_secs: KILL_GRACE_SECS,
+        provider: row.provider.clone(),
+        account_id: row.account_id.clone(),
+        project_id: row.project_id.clone(),
+    })
+}
+
+/// The PGID collateral list + the whole-tree enumeration (the verify
+/// sheet's scope data). Ledger rows give attribution; strangers are
+/// named as strangers (Req.5's shared-group warning data).
+#[allow(clippy::similar_names)] // pid/pgid are the kernel's own names
+fn kill_collateral(
+    rows: &[juggler_core::storage::LedgerRow],
+    pgid: Option<u32>,
+) -> (Vec<KillMemberInfo>, Vec<u32>) {
+    let ledger_by_pid: std::collections::HashMap<u32, &juggler_core::storage::LedgerRow> = rows
+        .iter()
+        .filter_map(|row| row.pid.map(|pid| (pid, row)))
+        .collect();
+    let mut members = Vec::new();
+    if let Some(pgid) = pgid {
+        for member_pid in juggler_supervisor::pgid_members(pgid) {
+            let ledger_row = ledger_by_pid.get(&member_pid).copied();
+            let (member_exe, member_cmd) = ledger_row
+                .map(|row| (row.exe_path.clone(), row.cmdline_trunc.clone()))
+                .or_else(|| {
+                    juggler_supervisor::live_details(member_pid)
+                        .map(|(cmd, _)| ("(unattributed)".into(), cmd))
+                })
+                .unwrap_or_else(|| ("(unattributed)".into(), String::new()));
+            let role = guess_role(&member_exe, &member_cmd);
+            members.push(KillMemberInfo {
+                pid: member_pid,
+                pgid: juggler_supervisor::group::pgid_of(member_pid).ok(),
+                exe: member_exe.rsplit('/').next().unwrap_or("?").to_string(),
+                cmdline: truncate_cmdline(&member_cmd),
+                role_guess: role,
+                unsaved_state_warning: matches!(role, "McpServer" | "TerminalShell")
+                    .then(|| unsaved_state_copy(role)),
+                from_ledger: ledger_row.is_some(),
+            });
+        }
+    }
+    // Scope 3's enumeration: the Instance tree's live pids.
+    let tree_pids = rows
+        .iter()
+        .filter(|row| row.pid.is_some() && (row.state == "running" || row.state == "orphaned"))
+        .filter_map(|row| row.pid)
+        .collect();
+    (members, tree_pids)
+}
+
+/// Display truncation for command lines (200 chars, the ledger's own
+/// convention).
+fn truncate_cmdline(cmdline: &str) -> String {
+    if cmdline.chars().count() > 200 {
+        let truncated: String = cmdline.chars().take(197).collect();
+        format!("{truncated}...")
+    } else {
+        cmdline.to_string()
+    }
+}
+
+/// One still-held port after the ladder (the honest post-kill report,
+/// FMEA C2 — never a success claim).
+#[derive(Clone, Debug, serde::Serialize, PartialEq)]
+pub struct StillHoldingInfo {
+    /// The port still held.
+    pub port: u16,
+    /// The pid holding it NOW (may differ from the killed pid).
+    pub pid: u32,
+    /// The holder's exe (basename).
+    pub exe: String,
+}
+
+/// The ladder's per-process report (Req.6's vocabulary, one label per
+/// member).
+#[derive(Clone, Debug, serde::Serialize, PartialEq)]
+pub struct KillMemberOutcome {
+    /// OS process id.
+    pub pid: u32,
+    /// `exited on TERM` | `needed KILL` | `already gone` | `refused` |
+    /// `TERM'd — outcome unknown`.
+    pub outcome: String,
+}
+
+/// The kill outcome (step 3's report): per-process outcomes, the
+/// honest still-holding list, and — when an escapee holds the port —
+/// the pid-only re-offer data.
+#[derive(Clone, Debug, serde::Serialize, PartialEq)]
+pub struct KillExecuteInfo {
+    /// The exact refusal copy when the same-tick verification failed
+    /// (zero signals were sent).
+    pub refusal: Option<String>,
+    /// Per-process outcomes.
+    pub members: Vec<KillMemberOutcome>,
+    /// True when the user cancelled mid-grace (audit left pending).
+    pub cancelled: bool,
+    /// True when every member succeeded (`already gone` included).
+    pub all_succeeded: bool,
+    /// Ports still held after the ladder (by anyone).
+    pub still_holding: Vec<StillHoldingInfo>,
+    /// The pid-only re-offer when an ESCAPED member still holds a
+    /// killed target's port (fresh verification is the UI's next
+    /// step, never an automatic signal).
+    pub reoffer_pid: Option<u32>,
+}
+
+/// The kill sheet's step 3: the audited ladder. Guardrails, in
+/// order: (1) same-tick re-verification of EVERY signalled pid's
+/// anchor — a reused PID gets ZERO signals and the exact refusal
+/// copy; (2) the AJ-E509 audit intent BEFORE the first signal (no
+/// audit, no kill); (3) the ladder — TERM, cancellable
+/// grace, KILL only survivors; (4) the honest post-ladder port
+/// re-probe (still-held is a fact, never a failure to hide).
+///
+/// # Errors
+///
+/// [`AppError::NotFound`] when no ledger row exists; validation when
+/// `scope` is not one of `pid`|`pgid`|`tree`;
+/// [`AppError::AuditUnavailable`] when the audit intent fails (the
+/// kill is refused, zero signals sent).
+#[tauri::command]
+pub fn kill_execute(
+    state: tauri::State<'_, Arc<AppState>>,
+    session_id: String,
+    pid: u32,
+    scope: String,
+    attempt: String,
+    goal_port: Option<u16>,
+) -> AppResult<KillExecuteInfo> {
+    let flag = state.register_kill_cancel(&attempt);
+    let result = kill_execute_audited(
+        &state,
+        state.audit.as_ref(),
+        &session_id,
+        pid,
+        &scope,
+        &flag,
+        goal_port,
+    );
+    state.unregister_kill_cancel(&attempt);
+    result
+}
+
+/// Cancels a running ladder's grace window (the UI's Cancel button).
+/// Idempotent; unknown attempts are no-ops (the ladder already
+/// finished).
+#[tauri::command]
+pub fn kill_cancel(state: tauri::State<'_, Arc<AppState>>, attempt: String) {
+    state.flip_kill_cancel(&attempt);
+}
+
+/// The grace window's per-process exit ticks (Req.3): liveness of the
+/// ladder's known members, probed cheaply (one targeted check per
+/// pid — no scans). The sheet polls this while the ladder runs; the
+/// AUTHORITATIVE outcomes still come from `kill_execute`'s report.
+#[tauri::command]
+#[must_use]
+pub fn kill_liveness(pids: Vec<u32>) -> Vec<bool> {
+    pids.iter()
+        .map(|pid| juggler_supervisor::process_alive(*pid).is_some())
+        .collect()
+}
+
+/// `kill_execute` with an injected audit writer (the guardrail
+/// gate's seam; production passes the real repo).
+///
+/// # Errors
+///
+/// As [`kill_execute`].
+pub fn kill_execute_audited(
+    state: &Arc<AppState>,
+    audit: &dyn AuditWriter,
+    session_id: &str,
+    pid: u32,
+    scope: &str,
+    cancel_flag: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    goal_port: Option<u16>,
+) -> Result<KillExecuteInfo, AppError> {
+    use juggler_supervisor::tree::LedgerStore as _;
+    let session = SessionId::new(session_id.to_string());
+    let rows = state.ledger.session_rows(&session).unwrap_or_default();
+    let row = rows
+        .iter()
+        .find(|row| row.pid == Some(pid))
+        .ok_or_else(|| AppError::NotFound {
+            entity: "ledger row",
+            id: format!("{session_id}/{pid}"),
+        })?;
+    // Guardrail 1 — SAME-TICK re-verification (E503 against the
+    // kernel NOW, not the sheet's earlier verdict; the SAME shared
+    // rule the sheet used): a mismatched or unverifiable anchor gets
+    // ZERO signals and the exact copy.
+    let verified = verify_kill_target(state, &session, row);
+    if !verified {
+        return Ok(KillExecuteInfo {
+            refusal: Some(KILL_REFUSAL_COPY.to_string()),
+            members: vec![KillMemberOutcome {
+                pid,
+                outcome: "refused".into(),
+            }],
+            cancelled: false,
+            all_succeeded: false,
+            still_holding: Vec::new(),
+            reoffer_pid: None,
+        });
+    }
+    // Scope enumeration (Req.1's three scopes; the UI defaults to
+    // the narrowest that covers the goal).
+    let members = scope_members(scope, &rows, pid)?;
+    // The port facts: the goal port when the user stated one (the
+    // port that opened the sheet — it may be held by an ESCAPED
+    // sibling, which is exactly the honest-still-holding case),
+    // else whatever the target itself holds.
+    let member_ports = ports_held_by(pid);
+    let ports_before = match goal_port {
+        Some(port) => Some(port.to_string()),
+        None => member_ports.clone(),
+    };
+    // Guardrail 2 — NO AUDIT, NO KILL: the intent row names the real
+    // target (scope, pgid, attribution), written BEFORE any signal.
+    let record = kill_intent_record(
+        state,
+        row,
+        session_id,
+        pid,
+        scope,
+        ports_before.as_deref(),
+        member_ports.as_deref(),
+    );
+    let intent_id = audit
+        .intent(&record)
+        .map_err(|_| AppError::AuditUnavailable)?;
+    // Guardrail 3 — the ladder itself (cancellable through grace).
+    let cancel = std::sync::Arc::clone(cancel_flag);
+    let outcome = juggler_supervisor::terminate_group(
+        std::time::Duration::from_secs(KILL_GRACE_SECS),
+        move || members,
+        move || cancel.load(std::sync::atomic::Ordering::Relaxed),
+    );
+    // The honest post-ladder port re-probe (C2): report what is
+    // STILL held and by whom — including an escaped member that keeps
+    // the port (then re-offer pid-only after fresh verification).
+    let (still_holding, reoffer_pid) =
+        still_holding_report(ports_before.as_deref(), pid, outcome.cancelled);
+    // Audit completion: per-pid vocabulary joined; a CANCELLED
+    // ladder leaves the intent pending ("TERM'd, outcome unknown").
+    if !outcome.cancelled {
+        let vocabulary = outcome
+            .members
+            .iter()
+            .map(|(pid, outcome)| format!("pid {pid}: {}", outcome.as_str()))
+            .collect::<Vec<_>>()
+            .join("; ");
+        let ports_after = still_holding
+            .iter()
+            .map(|held| held.port.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let ports_after = (!ports_after.is_empty()).then_some(ports_after);
+        // Best-effort (E509's floor is the intent row itself).
+        let _ = audit.complete(intent_id, &vocabulary, ports_after.as_deref());
+    }
+    let members = outcome
+        .members
+        .iter()
+        .map(|(pid, label)| KillMemberOutcome {
+            pid: *pid,
+            outcome: label.as_str().to_string(),
+        })
+        .collect();
+    Ok(KillExecuteInfo {
+        refusal: None,
+        members,
+        cancelled: outcome.cancelled,
+        all_succeeded: outcome.all_succeeded(),
+        still_holding,
+        reoffer_pid,
+    })
+}
+
+/// The kill sheet's audit intent row (Req.6 / AJ-E509 Req.2): the
+/// full attribution from the ledger row, the verified-at-click-time
+/// identity note, and the goal-port-aware before/after facts.
+#[allow(clippy::similar_names)] // pid/pgid are the kernel's own names
+fn kill_intent_record(
+    state: &Arc<AppState>,
+    row: &juggler_core::storage::LedgerRow,
+    session_id: &str,
+    pid: u32,
+    scope: &str,
+    ports_before: Option<&str>,
+    member_ports: Option<&str>,
+) -> juggler_core::storage::CleanupAuditRecord {
+    juggler_core::storage::CleanupAuditRecord {
+        id: 0,
+        at_ms: now_millis(),
+        actor: format!("{}kill_sheet", juggler_core::storage::ACTOR_PREFIX_USER),
+        pid,
+        pgid: juggler_supervisor::group::pgid_of(pid).ok(),
+        exe_path: row.exe_path.clone(),
+        cmdline_hash: row.cmdline_hash.clone(),
+        cmdline_trunc: truncate_cmdline(&row.cmdline_trunc),
+        session_id: session_id.to_string(),
+        provider: row.provider.clone(),
+        account_id: row.account_id.clone(),
+        project_id: row.project_id.clone(),
+        machine_id: local_machine_id(state).as_str().to_string(),
+        identity: format!(
+            "E503 verified at click time (start {}, exe {:?})",
+            row.started_at.map_or("?".to_string(), |t| t.to_string()),
+            row.exe_path
+        ),
+        scope: scope.to_string(),
+        outcome: String::new(),
+        ports_before: ports_before
+            .map(str::to_string)
+            .or_else(|| member_ports.map(str::to_string)),
+        ports_after: None,
+    }
+}
+
+/// The three scopes' member enumeration (Req.1): `pid` — the one
+/// verified process; `pgid` — every live member of its process group;
+/// `tree` — the Instance's live ledger rows.
+///
+/// # Errors
+///
+/// [`AppError::Validation`] for an unknown scope, or for `pgid` when
+/// the group is unreadable (the honest narrower-scope prompt).
+#[allow(clippy::similar_names)] // pid/pgid are the kernel's own names
+fn scope_members(
+    scope: &str,
+    rows: &[juggler_core::storage::LedgerRow],
+    pid: u32,
+) -> Result<Vec<u32>, AppError> {
+    match scope {
+        "pid" => Ok(vec![pid]),
+        "pgid" => {
+            let pgid =
+                juggler_supervisor::group::pgid_of(pid).map_err(|_| AppError::Validation {
+                    subject: "scope",
+                    message: "the process group is unreadable — choose `This process only`".into(),
+                })?;
+            Ok(juggler_supervisor::pgid_members(pgid))
+        }
+        "tree" => Ok(rows
+            .iter()
+            .filter(|row| row.pid.is_some() && (row.state == "running" || row.state == "orphaned"))
+            .filter_map(|row| row.pid)
+            .collect()),
+        other => Err(AppError::Validation {
+            subject: "scope",
+            message: format!("unknown scope {other:?} (pid | pgid | tree)"),
+        }),
+    }
+}
+
+/// The post-ladder port re-probe (FMEA C2): who STILL holds each of
+/// the target's ports, and the pid-only re-offer when an escapee —
+/// not the killed pid — keeps one. Never a success claim.
+fn still_holding_report(
+    ports_before: Option<&str>,
+    pid: u32,
+    cancelled: bool,
+) -> (Vec<StillHoldingInfo>, Option<u32>) {
+    let target_ports: Vec<u16> = ports_before
+        .unwrap_or("")
+        .split(',')
+        .filter_map(|port| port.parse::<u16>().ok())
+        .collect();
+    let mut still_holding = Vec::new();
+    if let Ok(listeners) = os_listeners() {
+        for port in &target_ports {
+            for listener in listeners.iter().filter(|l| l.port == *port) {
+                let exe = holder_exe(listener.pid);
+                still_holding.push(StillHoldingInfo {
+                    port: *port,
+                    pid: listener.pid,
+                    exe,
+                });
+            }
+        }
+    }
+    // The re-offer only after a COMPLETED ladder (a cancelled one
+    // reports the facts and leaves the choice entirely to the user).
+    let reoffer_pid = if cancelled {
+        None
+    } else {
+        still_holding
+            .iter()
+            .find(|held| held.pid != pid)
+            .map(|held| held.pid)
+    };
+    (still_holding, reoffer_pid)
+}
+
 /// `Verify owner`: re-reads the ppid chain for one orphan pid (manual,
 /// honest evidence — never a silent re-check).
 ///
@@ -5045,4 +5687,22 @@ pub mod legacy_aliases {
     }
 
     // Silence unused-import when only aliases reference these.
+}
+
+/// The still-holding report's holder exe (basename of the live
+/// command's first token — `Listeners` carry no exe by design).
+fn holder_exe(pid: u32) -> String {
+    juggler_supervisor::live_details(pid).map_or_else(
+        || "?".to_string(),
+        |(cmdline, _)| {
+            cmdline
+                .split_whitespace()
+                .next()
+                .unwrap_or("?")
+                .rsplit('/')
+                .next()
+                .unwrap_or("?")
+                .to_string()
+        },
+    )
 }

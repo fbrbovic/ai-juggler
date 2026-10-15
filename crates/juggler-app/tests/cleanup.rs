@@ -74,7 +74,7 @@ fn cleanup_centre_dogfood_orphan_row_with_evidence_and_zero_kill_fields() {
 
     // The fake Instance + its vite-like :5173 helper.
     let session = SessionId::new("sess-e506");
-    state
+    let spawned = state
         .supervisor
         .spawn(
             &session,
@@ -104,12 +104,15 @@ fn cleanup_centre_dogfood_orphan_row_with_evidence_and_zero_kill_fields() {
         serde_json::to_string_pretty(&live).unwrap()
     );
 
-    // The Instance closes; wait out grace (≤2 ticks past it — the
-    // same budget as the E504 drill).
-    state
-        .supervisor
-        .stop(&session, Duration::from_secs(5))
-        .unwrap();
+    // The Instance closes WITHOUT the supervisor's ladder — since
+    // AJ-E507 `stop()` TERMs the whole process group (the :5173
+    // helper included), the orphan scenario needs the root to die
+    // another way: an external SIGKILL to the root pid only (the
+    // crash shape). The helper survives it and outlives grace.
+    let _ = std::process::Command::new("kill")
+        .arg("-9")
+        .arg(spawned.pid.to_string())
+        .status();
     let orphan_landed = tick_until(&state, 20_000, || {
         let info = commands::cleanup_inventory_inner(&state, "needs-attention");
         info.groups.iter().any(|group| {

@@ -90,7 +90,7 @@ fn port_inventory_classifies_orphan_and_unmanaged_listeners() {
 
     // The vite-like helper holds :5173 inside a supervised Instance.
     let session = SessionId::new("sess-e505");
-    state
+    let spawned = state
         .supervisor
         .spawn(
             &session,
@@ -146,12 +146,15 @@ fn port_inventory_classifies_orphan_and_unmanaged_listeners() {
         "no attribution is claimed for strangers"
     );
 
-    // (b) Root exits → after grace + 2 ticks the SAME port reads
-    // Managed orphan with full attribution.
-    state
-        .supervisor
-        .stop(&session, Duration::from_secs(5))
-        .unwrap();
+    // (b) Root exits WITHOUT the supervisor's ladder — since AJ-E507
+    // `stop()` TERMs the whole process group (the :5173 helper
+    // included), the orphan scenario needs the root to die another
+    // way: an external SIGKILL to the root pid only (the crash
+    // shape). The helper survives it.
+    let _ = std::process::Command::new("kill")
+        .arg("-9")
+        .arg(spawned.pid.to_string())
+        .status();
     let orphaned = tick_until(&state, 20_000, || {
         if let Ok(rows) = state.ledger.session_rows(&session) {
             rows.iter()

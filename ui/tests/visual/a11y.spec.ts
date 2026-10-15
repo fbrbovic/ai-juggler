@@ -84,3 +84,144 @@ test("rail — no row overflows its width", async ({ page }) => {
   });
   expect(overflows).toEqual([]);
 });
+
+
+// AJ-E507 quality gate: axe-core 0 critical/serious on the kill
+// sheet — the ready (interactive) state and the failed-verification
+// explanation. The suite rides the same cleanup fixture as the
+// 20-kill gallery; the sheet opens the real way (row affordance).
+const KILL_VERIFY_OK = {
+  pid: 8123,
+  session: "s-1",
+  verified: true,
+  refusal: null,
+  exe_path: "/usr/local/bin/node",
+  cmdline: "node /srv/web/node_modules/.bin/vite dev",
+  cwd: "/srv/web",
+  ports: [5173],
+  pgid: 8100,
+  escaped_group: false,
+  members: [
+    {
+      pid: 8123,
+      pgid: 8100,
+      exe: "node",
+      cmdline: "node vite dev",
+      role_guess: "DevServer",
+      unsaved_state_warning: null,
+      from_ledger: true,
+    },
+  ],
+  tree_pids: [8100, 8123],
+  platform: "TERM → grace → KILL",
+  grace_secs: 5,
+  provider: "claude-code",
+  account_id: "Work Max",
+  project_id: "web",
+};
+
+const KILL_VERIFY_FAILED = {
+  ...KILL_VERIFY_OK,
+  verified: false,
+  refusal: "This PID now belongs to a different program — Juggler will not touch it.",
+  members: [],
+};
+
+for (const theme of ["dark", "light"] as const) {
+  for (const state of ["ready", "refused"] as const) {
+    test(`kill-sheet — ${state} — axe 0 critical/serious — ${theme}`, async ({ page }) => {
+      const cleanup = {
+        groups: [
+          {
+            session: "s-1",
+            provider: "claude-code",
+            account: "Work Max",
+            project: "web",
+            machine: "machine-local",
+            healthy: false,
+            rows: [
+              {
+                pid: 8123,
+                pgid: 8100,
+                role: "helper",
+                state: "orphaned",
+                state_label: "Still running after its Instance closed",
+                role_guess: "python3 (guess)",
+                exe_path: "/usr/bin/python3",
+                cmdline: "python3 -m http.server 5173",
+                age_ms: 9_000_000,
+                rss_bytes: 48 * 1024 * 1024,
+                cpu_pct: 1.4,
+                ports: "5173",
+                hog: false,
+                hog_rules: [],
+                evidence: {
+                  root_pid: 8100,
+                  parent_pid: 8100,
+                  pgid: 8100,
+                  escaped_group: false,
+                  verification: {
+                    verdict: "verified",
+                    detail: "start-time and exe match the live process",
+                  },
+                  first_seen: T0,
+                  last_seen: T0 + 90_000,
+                },
+              },
+            ],
+          },
+        ],
+        clean_instances: 2,
+        ledger_degraded: false,
+      };
+      await page.addInitScript(
+        ({ fixture, t0, cleanup: c, theme: t, verify }) => {
+          const w = window as unknown as {
+            __AIJ_FIXTURE__?: unknown;
+            __AIJ_CLEANUP__?: unknown;
+            __AIJ_KILL_VERIFY__?: unknown;
+          };
+          w.__AIJ_FIXTURE__ = fixture;
+          w.__AIJ_CLEANUP__ = c;
+          w.__AIJ_KILL_VERIFY__ = () => verify;
+          localStorage.setItem("aij.theme", t);
+          localStorage.setItem("aij.onboarding.dismissed", "1");
+          sessionStorage.setItem("aij.ready.skipped", "1");
+          Date.now = () => t0;
+        },
+        {
+          fixture: allStatuses,
+          t0: T0,
+          cleanup,
+          theme,
+          verify: state === "ready" ? KILL_VERIFY_OK : KILL_VERIFY_FAILED,
+        },
+      );
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.goto("/");
+      await page.getByRole("button", { name: "Cleanup" }).click();
+      await expect(page.getByTestId("cleanup-centre")).toBeVisible();
+      await page.getByTestId("cleanup-kill-8123").click();
+      await expect(
+        page.getByTestId(state === "ready" ? "kill-ready-8123" : "kill-refused-8123"),
+      ).toBeVisible();
+      const results = await new AxeBuilder({ page })
+        .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+        .analyze();
+      const serious = results.violations.filter((v) =>
+        ["serious", "critical"].includes(v.impact ?? ""),
+      );
+      if (serious.length > 0) {
+        const summary = serious
+          .map(
+            (v) =>
+              `${v.id} (${v.impact}): ${v.nodes.map((n) => n.target.join(" ")).slice(0, 3).join(", ")}`,
+          )
+          .join("\n");
+        throw new Error(`axe serious/critical violations on the kill sheet (${state}/${theme}):\n${summary}`);
+      }
+      expect(serious).toHaveLength(0);
+    });
+  }
+}

@@ -47,6 +47,11 @@ pub struct AppState {
     /// Terminal ids with a live output forwarder (dedup: one forwarder per
     /// terminal no matter how often the UI re-attaches).
     pub terminal_taps: Mutex<std::collections::HashSet<String>>,
+    /// Live kill-ladder cancel flags by attempt id (AJ-E507 Req.3:
+    /// the grace window is cancellable). Entries exist only while a
+    /// ladder runs; flipped by `kill_cancel`.
+    pub kill_cancels:
+        Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>>,
 }
 
 impl AppState {
@@ -140,6 +145,7 @@ impl AppState {
             model_offsets: Mutex::new(std::collections::HashMap::new()),
             heuristics: HeuristicEngine::new(load_thresholds(&data_dir)),
             terminal_taps: Mutex::new(std::collections::HashSet::new()),
+            kill_cancels: Mutex::new(std::collections::HashMap::new()),
             preview: Mutex::new(None),
             data_dir,
         })
@@ -149,6 +155,38 @@ impl AppState {
     #[must_use]
     pub fn accounts_dir(&self) -> PathBuf {
         self.data_dir.join("accounts")
+    }
+
+    /// Registers a kill-ladder attempt's cancel flag (AJ-E507): the
+    /// UI generates the attempt id, `kill_execute` polls the flag
+    /// through the grace window, `kill_cancel` flips it.
+    pub fn register_kill_cancel(
+        &self,
+        attempt: &str,
+    ) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        if let Ok(mut cancels) = self.kill_cancels.lock() {
+            cancels.insert(attempt.to_string(), std::sync::Arc::clone(&flag));
+        }
+        flag
+    }
+
+    /// Flips a registered attempt's cancel flag (idempotent; unknown
+    /// attempts are no-ops — the ladder already finished).
+    pub fn flip_kill_cancel(&self, attempt: &str) {
+        if let Ok(cancels) = self.kill_cancels.lock()
+            && let Some(flag) = cancels.get(attempt)
+        {
+            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// Drops a finished attempt's flag (the registry stays the size
+    /// of the live ladders, never a leak).
+    pub fn unregister_kill_cancel(&self, attempt: &str) {
+        if let Ok(mut cancels) = self.kill_cancels.lock() {
+            cancels.remove(attempt);
+        }
     }
 }
 

@@ -1679,7 +1679,14 @@ impl Supervisor {
         handle
     }
 
-    /// Stops a session: SIGTERM (unix), waits `grace`, then force-kills.
+    /// Stops a session: the verified TERM → grace → KILL ladder over
+    /// the session's process group (AJ-E507). The ROOT keeps its
+    /// exact path — it is our direct child, reaped into the
+    /// `finished` flag, where an unreaped zombie would answer
+    /// `kill(pid, 0)` probes as alive — so it is TERM'd and, if the
+    /// flag never sets inside `grace`, force-killed. Every OTHER
+    /// group member goes through [`crate::tree::terminate_group`]:
+    /// TERM, the grace window, then KILL for TERM-ignorers.
     ///
     /// # Errors
     ///
@@ -1699,6 +1706,32 @@ impl Supervisor {
             stopped.push(session.clone());
         }
         send_terminate(handle.pid);
+
+        // The rest of the group: the verified ladder. The root is
+        // excluded — a dead-but-unreaped root would make the ladder
+        // escalate on a corpse. Refusals surface honestly on the next
+        // reconciler tick as orphans (AJ-E504); session stop's report
+        // remains the Exited lifecycle event.
+        //
+        // GROUP GUARD: the ladder applies ONLY to the child's OWN
+        // group (`pgid == pid` — the deterministic-kill group the
+        // piped path creates, AJ-E502). A child that never became a
+        // leader (PTY/desktop paths, or a wrapper that `setsid`'d)
+        // shares SOMEONE ELSE's group — signaling it would TERM
+        // strangers, up to and including this process (the desktop
+        // suite's three stop() calls caught exactly that).
+        let helpers: Vec<u32> = handle
+            .pgid
+            .filter(|pgid| *pgid == handle.pid)
+            .map(crate::tree::pgid_members)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|pid| *pid != handle.pid)
+            .collect();
+        if !helpers.is_empty() {
+            crate::tree::terminate_group(grace, move || helpers, || false);
+        }
+
         let deadline = Instant::now() + grace;
         while Instant::now() < deadline && !handle.finished.load(Ordering::Acquire) {
             std::thread::sleep(Duration::from_millis(10));

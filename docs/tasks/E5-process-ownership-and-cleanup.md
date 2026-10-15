@@ -297,7 +297,7 @@ Trap: do not "preview" kill buttons in this task — a rendered-but- disabled ki
 - Evidence: `docs/qa/evidence/AJ-E506/` — live+orphan API JSON (full attribution + evidence chain), 163/163 UI, 137/137 visuals with `_gallery/19-cleanup/` (24 captures, six states × sizes × themes).
 - Known gap (documented): helpers whose root dies inside one tick interval before their first sighting are missed by the frozen tree (E510's journal recovery re-discovers them).
 
-### AJ-E507 Verify-before-kill sheet and manual TERM→KILL ladder | Status: TODO | Priority P0 | Effort L | Depends: AJ-E503, AJ-E506
+### AJ-E507 Verify-before-kill sheet and manual TERM→KILL ladder | Status: DONE-EVIDENCED (evidence: docs/qa/evidence/AJ-E507/manifest.md) | Priority P0 | Effort L | Depends: AJ-E503, AJ-E506
 
 **Goal**:
 Add the only manual kill path: a three-step staged, verified, audited TERM→grace→KILL ladder over a PGID or single PID, with per-process outcomes and port re-probe.
@@ -350,6 +350,15 @@ Screenshots 1440×900 + 1024×700, light+dark: verify sheet (each scope), verifi
 **Handover note**:
 Trap: extending the root-only ladder in `stop()` without the PGID primitive re-creates the fork-escape race (AJ-E502 note). Trap:
 `already gone` is success — do not surface it as an error toast or users will stop trusting outcome reports. Next: AJ-E508 tiers may only call this ladder, never signal directly.
+
+
+**Implementation-mapping (AJ-E507)**:
+- `tree.rs`: `terminate_group` (TERM → cancellable grace → KILL survivors → 2 s wait), zombie-aware `member_gone` (an unreaped direct child answers `kill -0` as alive — the desktop suite's self-group bug and the ignorer false-`refused` were both this class), `ProcessOutcome` incl. `TermSent` (cancel leaves the E509 intent PENDING — "TERM'd, outcome unknown"), `pgid_members`, `live_details` (re-read-NOW cmdline/cwd), `verify_start_time` (E504's exec-aliasing rule formalized for roots).
+- `supervisor.rs`: `stop()` delegates — the ROOT keeps the exact reaped-flag path; the group's OTHER members run the ladder, and ONLY when the child leads its OWN group (`pgid == pid`, the E502 deterministic-kill group): a PTY/desktop child that never became a leader shares a FOREIGN group and must never be group-signalled (the desktop suite caught the original version TERm'ing the test process itself). `tests/supervisor.rs` now asserts group death (F-9's missing assertion) + the ladder vocabulary (4 tests).
+- `commands.rs`: `kill_verify` (click-time E503 verify + exe/cmdline/cwd/ports + PGID collateral + role guesses, pass2 §5), `kill_execute` (shared `verify_kill_target` gate → `kill_intent_record` → audit intent → ladder → honest still-holding re-probe → audit completion; goal-port aware), `kill_cancel` (the AppState cancel registry), `kill_liveness` (grace-window per-process ticks). Guardrails proven: NO AUDIT ⇒ NO SIGNAL (FailingAudit seam, trap-log witness empty) and stale identity ⇒ refusal copy + zero signals + NO audit row.
+- UI: `KillSheet.tsx` (the 3 steps, consequence-named confirm, aria-live 1 s countdown, per-process ticks, cancel, `TerminateProcess only` verbatim, re-offer); `ProcessRow` killable gate (verified+live only — Unverifiable/exited render NO affordance); `CleanupCentre` wiring + focus return (2.4.3); bridge + fixture seams.
+- Fixtures (SPEC §10): vite-like `python3 -m http.server` (ephemeral port, collision-proof) freed on TERM with audit row; TERM-ignorer escalated with trap-log witness `term`; `setsid` escapee honestly still-holding → pid-only re-offer frees it. Evidence: `docs/qa/evidence/AJ-E507/` (kill-tests, stop-delegation, ui-tests, manifest) + `_gallery/20-kill/` (32 captures) + axe gate (2 contrast fixes).
+- Test premises honestly updated to E507 semantics (group-killing `stop()`): reconciler + cleanup-dogfood + ports now kill the root by EXTERNAL SIGKILL (the crash shape) to preserve their orphan-detection subjects.
 
 ### AJ-E508 Cleanup tiers Tier 0-3: notify-only default, per-Account opt-in | Status: TODO | Priority P0 | Effort M | Depends: AJ-E507, AJ-E509
 
