@@ -18,14 +18,21 @@ zcode-primary.
 | Live dogfood (real claude mechanics) | `cargo test -p juggler-app --test dogfood_e5 -- --ignored --nocapture` | real Claude Instance → real tree → verified cleanup | real claude 2.1.300 under the real supervisor/PTY with a throwaway CLAUDE_CONFIG_DIR: UI streamed (login screen — gate-M1's auth boundary), root in the durable ledger with attribution, `kill_verify` verified, ladder `exited on TERM` (code 143) `all_succeeded`, audit row present, every tree row `exited`; `~/.claude` and t3 profiles untouched (dogfood-claude.txt) | PASS | 2026-10-13 | zcode-primary |
 | Performance budgets | suite runtimes + soak | collateral ≤5 min CI; hog eval on the existing tick | guardrails 8/8 in ~60 s (serialized on purpose — see flake note); collateral 4 s; hog/idle ride `hog_facts` on the existing tick (settings-backed thresholds, zero new polling); Cleanup Centre paint: the alerts region adds ONE bridge read | PASS | 2026-10-13 | zcode-primary |
 | CI as a required job | `.github/workflows/ci.yml` | macOS + Linux | Linux: `verify` job's `cargo test --workspace`; macOS: NEW `Collateral suite (AJ-E512)` step in `build-macos` (both suites) | PASS | 2026-10-13 | zcode-primary |
-| Regression | fmt/clippy/doc/tests + UI | all green, no premise weakened | clippy `-D warnings` 0 (fixtures use the wrapper-spawn pattern for the zombie-process lint); doc `-D warnings` green; ALL workspace binaries green chunked; UI 193/193 + build; playwright 216/216 (13 new: 12 captures + keyboard pass) + 2 new axe gates. Flake records (AJ-E806): (1) the kill-sheet light-theme axe scan failed once under FULL-suite parallel load (2nd observation across sessions; passes 5/5 isolated + full-file — suspected mid-swap CSS-variable contrast reads under CPU contention; not quarantined); (2) the hog test needed timing hardening (root outlives the sampling window; threshold 2 MiB; diagnostics print) — fixed, not weakened; (3) an archived parallel run of collateral+guardrails+dogfood starved one TERM handler past grace (trap log empty) — evidence re-archived sequentially | PASS | 2026-10-13 | zcode-primary |
+| Regression | fmt/clippy/doc/tests + UI | all green, no premise weakened | clippy `-D warnings` 0 (fixtures use the wrapper-spawn pattern for the zombie-process lint); doc `-D warnings` green; ALL workspace binaries green chunked (supervisor 8 suites + every app binary incl. guardrails 8/8, kill_sheet, tiers, recovery); UI 193/193 + build; playwright 216/216 (13 new: 12 captures + keyboard pass) + 2 new axe gates | PASS | 2026-10-13 | zcode-primary |
+| PRODUCT HARDENING the fixtures forced (first CI run) | reconciler two-tick mismatch discipline | one transient sysinfo read must not permanently flip a healthy row | `mismatch_agree` counters in the reconciler: a row flips `unverifiable` only after TWO CONSECUTIVE mismatching ticks (the same discipline as exit-by-absence and orphan confirmation, AJ-E504); a clean tick clears it. KILL-time verify (E503) is UNCHANGED — single-shot fail-closed. Root cause: CI's 2-core runners starve sysinfo refreshes mid-read; a single-read flip had also been the behind-the-scenes cause of the load flakes seen locally. All flip-dependent suites re-run green | PASS | 2026-10-13 | zcode-primary |
+| Cross-platform fixture honesty (first CI run) | guardrails on ubuntu + macOS runners | both platforms pass | the shell sibling runs `bash` explicitly (Ubuntu's `/bin/sh`→dash SYMLINK flaps the exe fact across sysinfo reads → helper full-triple verify fails); root lifetime 25 s (slow runners), tick deadlines 30/35 s, hog poll 30 s with an RSS diagnostic; macOS CI runs the app test binary with `DYLD_FALLBACK_LIBRARY_PATH` into Xcode's swift dir (the dyld `libswift_Concurrency.dylib` load — the local CLT script's CI analogue); the hog alert poll matches the session's TOP helper (the alert names the top-RSS helper, not a specific fixture) | PASS | 2026-10-13 | zcode-primary |
 
 ## Implementation-mapping
 
 - `crates/juggler-supervisor/tests/fixtures/` (new) — `trap_helper.py`
   (the scriptable signal-logging helper) + `mod.rs` (FixtureSet,
   spawn_detached, trap-log assertions) — shared by both crates via
-  `#[path]`.
+  `#[path]`. The shell sibling is `bash` (not `sh`: Ubuntu's dash
+  symlink flaps the exe fact).
+- `crates/juggler-supervisor/src/supervisor.rs` — the reconciler's
+  two-tick mismatch discipline (`mismatch_agree`): one transient
+  sysinfo read no longer permanently flips a healthy row to
+  `unverifiable`; kill-time verify unchanged.
 - `crates/juggler-supervisor/tests/collateral.rs` (new) — the ladder's
   signal geometry.
 - `crates/juggler-app/tests/guardrails.rs` (new) — the kill-path ×

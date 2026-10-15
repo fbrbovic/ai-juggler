@@ -256,6 +256,13 @@ pub struct LiveStatsCollector {
     /// Consecutive agreeing orphan-candidate ticks per helper row
     /// (AJ-E504 Req.3: two-tick confirmation kills flap).
     orphan_agree: HashMap<(u32, String), u32>,
+    /// Consecutive identity-MISMATCH ticks per row (AJ-E512): a
+    /// single transient sysinfo read (starved refresh, mid-exec
+    /// window) must not permanently flip a healthy row to
+    /// `unverifiable` — the same two-tick discipline as exit-by-
+    /// absence and orphan confirmation. KILL-time verify (E503)
+    /// stays single-shot fail-closed; this governs the LISTING state.
+    mismatch_agree: HashMap<(u32, String), u32>,
     /// The last listener probe error text, when degraded (AJ-E505:
     /// surfaced honestly by the inventory; retried at the tick
     /// cadence — never a storm).
@@ -284,6 +291,7 @@ impl Default for LiveStatsCollector {
             last_ledger_upsert: HashMap::new(),
             absence: HashMap::new(),
             orphan_agree: HashMap::new(),
+            mismatch_agree: HashMap::new(),
             ports_degraded: None,
             cached_listeners: Vec::new(),
             last_port_probe_tick: 0,
@@ -621,13 +629,26 @@ impl LiveStatsCollector {
                     }
                 }
                 if mismatch {
-                    let _ = ledger.mark_unverifiable(pid, &row.boot_id);
-                    self.orphan_agree.remove(&key);
-                    eprintln!(
-                        "ai-juggler: pid {pid} failed re-verification — flipped unverifiable"
-                    );
+                    // AJ-E512: two CONSECUTIVE mismatching ticks before
+                    // the durable flip — one transient read (starved
+                    // sysinfo refresh, mid-exec window) stays a
+                    // warning, not a verdict. A clean tick clears it.
+                    let agrees = self
+                        .mismatch_agree
+                        .entry(key.clone())
+                        .and_modify(|n| *n += 1)
+                        .or_insert(1);
+                    if *agrees >= 2 {
+                        self.mismatch_agree.remove(&(pid, row.boot_id.clone()));
+                        let _ = ledger.mark_unverifiable(pid, &row.boot_id);
+                        self.orphan_agree.remove(&key);
+                        eprintln!(
+                            "ai-juggler: pid {pid} failed re-verification — flipped unverifiable"
+                        );
+                    }
                     continue;
                 }
+                self.mismatch_agree.remove(&key);
 
                 // Orphan detection (Req.3): running helpers of an
                 // EXITED root, past grace, whose parent chain no

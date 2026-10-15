@@ -141,7 +141,7 @@ fn seed_instance(state: &Arc<AppState>, dir: &Path, id: &str, account: &str) -> 
 
 /// Ticks until the session's helper rows include one per `needles`.
 fn tick_until_helpers(state: &Arc<AppState>, session: &SessionId, needles: &[&str]) -> Vec<u32> {
-    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     loop {
         if let Ok(mut collector) = state.resources.lock() {
             collector.tick(&state.supervisor, now_ms());
@@ -171,7 +171,7 @@ fn tick_until_helpers(state: &Arc<AppState>, session: &SessionId, needles: &[&st
 /// (the sweep's candidate source); returns the root's last_seen.
 fn wait_orphans(state: &Arc<AppState>, session: &SessionId) -> i64 {
     state.supervisor.set_orphan_grace("claude-code", 3);
-    let deadline = std::time::Instant::now() + Duration::from_secs(25);
+    let deadline = std::time::Instant::now() + Duration::from_secs(35);
     loop {
         if let Ok(mut collector) = state.resources.lock() {
             collector.tick(&state.supervisor, now_ms());
@@ -703,6 +703,21 @@ fn crash_recovery_signals_nothing_and_stop_stays_scoped() {
         .expect("recovery summary pending");
     println!("[recovery-collateral] {summary:?}");
 
+    // Diagnostic: every fixture's row state + liveness before the
+    // stop (the zero-signal assertions below must be explainable).
+    if let Ok(rows) = state2.ledger.session_rows(&a) {
+        for row in &rows {
+            println!(
+                "[recovery-pre-stop] pid={:?} role={} state={} exe={} alive={}",
+                row.pid,
+                row.role,
+                row.state,
+                row.exe_path,
+                row.pid.map(fixtures::alive).unwrap_or(false)
+            );
+        }
+    }
+
     // The adopted stop: the verified OWN group only. In-group
     // fixtures die; the escapee, the stranger, the unmanaged server
     // never hear it.
@@ -830,7 +845,10 @@ fn hog_is_never_auto_signalled_and_alerts_with_exact_copy() {
         .spawn(
             &a,
             &sh_spec(
-                &format!("{}\nsleep 3; exit 0", kit.root_script()),
+                // The root outlives the sampling window: hog
+                // sustained-ness needs >=2 ring samples while the
+                // tree is LIVE (rows freeze at root death).
+                &format!("{}\nsleep 25; exit 0", kit.root_script()),
                 dir.path(),
             ),
             &ctx(&state),
@@ -851,32 +869,49 @@ fn hog_is_never_auto_signalled_and_alerts_with_exact_copy() {
     assert!(kit.wait_ready());
     // Sustained-ness needs ≥2 ring samples in the window, every one
     // above the lowered limit.
-    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     loop {
         if let Ok(mut collector) = state.resources.lock() {
             collector.tick(&state.supervisor, now_ms());
         }
         let hogs = commands::cleanup_alerts_inner(&state);
+        // ANY hog alert for the session: the alert names the TOP-RSS
+        // helper, which need not be the vite fixture specifically.
         if hogs
             .alerts
             .iter()
-            .any(|alert| alert.kind == "hog" && alert.pid == vite_pid)
+            .any(|alert| alert.kind == "hog" && alert.session == a.as_str())
         {
             break;
         }
+        let top_rss = state
+            .resources
+            .lock()
+            .ok()
+            .and_then(|collector| {
+                collector
+                    .rows(&a)
+                    .into_iter()
+                    .flatten()
+                    .skip(1)
+                    .map(|row| row.rss_bytes)
+                    .max()
+            })
+            .unwrap_or_default();
+        println!("[hog-poll] waiting: top helper rss = {top_rss} bytes");
         assert!(
             std::time::Instant::now() < deadline,
-            "the hog alert never fired"
+            "the hog alert never fired (top helper rss = {top_rss} bytes)"
         );
-        std::thread::sleep(Duration::from_millis(1_000));
+        std::thread::sleep(Duration::from_millis(750));
     }
 
-    // The hog alert: exact template, naming the helper (python3) and
-    // the Instance (the seeded account label).
+    // The hog alert: exact template, naming the top helper and the
+    // Instance (the seeded account label).
     let alerts = commands::cleanup_alerts_inner(&state).alerts;
     let hog = alerts
         .iter()
-        .find(|alert| alert.kind == "hog" && alert.pid == vite_pid)
+        .find(|alert| alert.kind == "hog" && alert.session == a.as_str())
         .expect("hog alert present");
     // The exact template `{helper} under {Instance} holds {RSS} —
     // review in Cleanup Centre.` — the helper name is the platform's

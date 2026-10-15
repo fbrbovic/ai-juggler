@@ -1,62 +1,70 @@
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.65s
      Running tests/guardrails.rs (target/debug/deps/guardrails-c90369156e7ed3c0)
 
 running 8 tests
-kill: 33407: No such process
+kill: 33913: No such process
 [hog] alert text: Python under acc-guard holds 11 MiB — review in Cleanup Centre.
-kill: 33407: No such process
-kill: 33410: No such process
-kill: 33408: No such process
-kill: 33411: No such process
+kill: 33913: No such process
+kill: 33916: No such process
+kill: 33914: No such process
+kill: 33917: No such process
 test hog_is_never_auto_signalled_and_alerts_with_exact_copy ... ok
-ai-juggler: pid 33517 failed re-verification — flipped unverifiable
-[recovery-collateral] RecoverySummaryInfo { summary: "1 Instances re-adopted, 0 helpers left behind, 0 processes could not be verified and were left alone.", adopted: 1, left_behind: 0, unverifiable: 0 }
-[recovery-collateral] adopted stop scoped to the group; escapee/stranger/unmanaged: zero signals
-kill: 33506: No such process
-kill: 33508: No such process
-kill: 33510: No such process
-kill: 33512: No such process
-kill: 33513: No such process
-kill: 33515: No such process
-kill: 33517: No such process
-test crash_recovery_signals_nothing_and_stop_stays_scoped ... ok
-[idle] nudge text: Python has been idle for 0m — review it in the Cleanup Centre.
-kill: 33618: No such process
-test idle_nudge_fires_exactly_once_per_orphan ... ok
-ai-juggler: pid 33863 failed re-verification — flipped unverifiable
-kill: 33846: No such process
-kill: 33854: No such process
-kill: 33855: No such process
-kill: 33848: No such process
-[manual-pgid] confirmed group only (33846/33854/33855); escapee, neighbour, stranger, unmanaged: zero signals
-kill: 33846: No such process
-kill: 33854: No such process
-kill: 33848: No such process
-kill: 33855: No such process
-test manual_pgid_scope_is_warned_and_confined_to_the_group ... ok
-ai-juggler: pid 34007 failed re-verification — flipped unverifiable
-kill: 33998: No such process
-[manual-pid] vite 33998 only; same-group shell/mcp, stranger, unmanaged: zero signals
-kill: 33998: No such process
-kill: 34002: No such process
-kill: 33999: No such process
-kill: 34003: No such process
-test manual_pid_scope_signals_only_the_verified_pid ... ok
-kill: 34072: No such process
-[term-ignorer] 34072: TERM logged, survived grace, KILLed; collateral zero signals
-kill: 34072: No such process
-test term_ignorer_gets_term_then_kill_only_after_grace ... ok
-ai-juggler: pid 34440 failed re-verification — flipped unverifiable
-kill: 34422: No such process
-[tier1-collateral] vite 34422 TERMed + port free; stranger 34440, unmanaged 34426, neighbour, mcp/shell/ignorer/escapee: zero signals
-kill: 34422: No such process
+ai-juggler: pid 35512 failed re-verification — flipped unverifiable
+kill: 35494: No such process
+[tier1-collateral] vite 35494 TERMed + port free; stranger 35512, unmanaged 35497, neighbour, mcp/shell/ignorer/escapee: zero signals
+kill: 35494: No such process
 test tier1_sweep_spares_every_collateral_fixture ... ok
-ai-juggler: pid 34796 failed re-verification — flipped unverifiable
-test tier2_crash_flow_spares_every_collateral_fixture has been running for over 60 seconds
-kill: 34786: No such process
-[tier2-collateral] vite 34786 TERMed after notice+lapse; stranger/unmanaged/mcp/shell/ignorer/escapee: zero signals
-kill: 34786: No such process
+ai-juggler: pid 36134 failed re-verification — flipped unverifiable
+kill: 36121: No such process
+[tier2-collateral] vite 36121 TERMed after notice+lapse; stranger/unmanaged/mcp/shell/ignorer/escapee: zero signals
+kill: 36121: No such process
 test tier2_crash_flow_spares_every_collateral_fixture ... ok
+kill: 36374: No such process
+kill: 36380: No such process
+kill: 36382: No such process
+kill: 36375: No such process
+[manual-pgid] confirmed group only (36374/36380/36382); escapee, neighbour, stranger, unmanaged: zero signals
+kill: 36374: No such process
+kill: 36380: No such process
+kill: 36375: No such process
+kill: 36382: No such process
+test manual_pgid_scope_is_warned_and_confined_to_the_group ... ok
+test crash_recovery_signals_nothing_and_stop_stays_scoped has been running for over 60 seconds
+test idle_nudge_fires_exactly_once_per_orphan has been running for over 60 seconds
+test manual_pid_scope_signals_only_the_verified_pid has been running for over 60 seconds
+test term_ignorer_gets_term_then_kill_only_after_grace has been running for over 60 seconds
+[idle] nudge text: Python has been idle for 0m — review it in the Cleanup Centre.
+kill: 37122: No such process
+test idle_nudge_fires_exactly_once_per_orphan ... ok
+kill: 37583: No such process
+[term-ignorer] 37583: TERM logged, survived grace, KILLed; collateral zero signals
+kill: 37583: No such process
+test term_ignorer_gets_term_then_kill_only_after_grace ... ok
+kill: 38377: No such process
+[manual-pid] vite 38377 only; same-group shell/mcp, stranger, unmanaged: zero signals
+kill: 38377: No such process
+kill: 38381: No such process
+kill: 38379: No such process
+kill: 38382: No such process
+test manual_pid_scope_signals_only_the_verified_pid ... ok
+[recovery-collateral] RecoverySummaryInfo { summary: "1 Instances re-adopted, 0 helpers left behind, 1 processes could not be verified and were left alone.", adopted: 1, left_behind: 0, unverifiable: 1 }
+[recovery-pre-stop] pid=Some(38509) role=root state=running exe=/bin/sh alive=true
+[recovery-pre-stop] pid=Some(38511) role=helper state=running exe=/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python alive=true
+[recovery-pre-stop] pid=Some(38513) role=helper state=running exe=/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python alive=true
+[recovery-pre-stop] pid=Some(38514) role=helper state=running exe=/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python alive=true
+[recovery-pre-stop] pid=Some(38515) role=helper state=running exe=/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python alive=true
+[recovery-pre-stop] pid=Some(38516) role=helper state=running exe=/bin/bash alive=true
+[recovery-pre-stop] pid=Some(38520) role=helper state=running exe=/bin/sleep alive=true
+[recovery-pre-stop] pid=Some(38527) role=helper state=unverifiable exe=/bin/python3 alive=true
+[recovery-collateral] adopted stop scoped to the group; escapee/stranger/unmanaged: zero signals
+kill: 38509: No such process
+kill: 38511: No such process
+kill: 38513: No such process
+kill: 38515: No such process
+kill: 38516: No such process
+kill: 38520: No such process
+kill: 38527: No such process
+test crash_recovery_signals_nothing_and_stop_stays_scoped ... ok
 
-test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 60.40s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 82.92s
 

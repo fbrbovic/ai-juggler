@@ -122,8 +122,14 @@ impl FixtureSet {
                     format!("python3 {helper} --trap-log {trap} --ready {ready} --setsid &")
                 }
                 "mcp" => format!("python3 {helper} --trap-log {trap} --ready {ready} mcp-server &"),
+                // bash, NOT sh: on Ubuntu /bin/sh is a symlink to
+                // dash, and sysinfo reports the exe path differently
+                // across reads (symlink vs resolved) — the helper's
+                // full-triple verify flaps and the row flips
+                // `unverifiable`. bash is a stable real path on both
+                // platforms and still guesses TerminalShell.
                 "shell" => format!(
-                    "sh -c 'trap \"echo TERM >> {trap}\" TERM; trap \"echo HUP >> {trap}\" HUP; \
+                    "bash -c 'trap \"echo TERM >> {trap}\" TERM; trap \"echo HUP >> {trap}\" HUP; \
                      trap \"echo INT >> {trap}\" INT; touch {ready}; sleep 300' &"
                 ),
                 _ => unreachable!("fixture kind"),
