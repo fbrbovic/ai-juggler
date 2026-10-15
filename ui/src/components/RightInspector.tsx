@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button, Card, Chip, type ChipTone } from "./primitives";
 import { TerminalView } from "./TerminalView";
 import { DesktopPreview } from "./DesktopPreview";
+import { PortInventoryList } from "./PortMap";
 import {
   IconFleet,
   IconJuggler,
@@ -2384,6 +2385,12 @@ function ProcessesTab(props: PanelProps & { readOnly?: boolean }) {
               )}
             </>
           )}
+          {/* AJ-E505: the machine-wide port occupancy map below the
+          Instance tree — every listener classified, unmanaged rows
+          display-only (the F3 collateral guard). */}
+          <div className="mt-3">
+            <PortInventoryList />
+          </div>
         </Card>
       )}
     </div>

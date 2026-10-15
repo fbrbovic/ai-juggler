@@ -17,6 +17,7 @@ pub mod heuristics;
 pub mod journal;
 pub mod lifecycle;
 pub mod orphans;
+pub mod ports;
 pub mod ring;
 pub mod supervisor;
 pub mod tree;
@@ -31,6 +32,14 @@ pub use lifecycle::{ExitKind, LifecycleEvent};
 pub use orphans::{
     AUTO_CLEANUP_GRACE_MS, DescendantRow, ExitSnapshot, ORPHAN_GRACE_MS, Orphan, OrphanTracker,
     OwnerState, StopOutcome, process_alive, stop_pid_ladder, verify_owner,
+};
+#[cfg(unix)]
+pub use ports::NetstatProbe;
+#[cfg(not(unix))]
+pub use ports::UnsupportedProbe;
+pub use ports::{
+    Listener, ListenerClass, PORTS_UNKNOWN_ON_THIS_PLATFORM, PortProbe, PortProbeError, PortRow,
+    WELL_KNOWN_DEV_PORTS, classify_listeners, well_known_hint,
 };
 pub use ring::OutputRing;
 pub use supervisor::{

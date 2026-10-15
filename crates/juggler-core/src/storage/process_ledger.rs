@@ -414,6 +414,35 @@ impl ProcessLedgerRepo {
         Ok(())
     }
 
+    /// Batched listener join (AJ-E505 Req.2): sets `listens_on` for
+    /// the newest running-or-orphaned row of each `(pid, boot_id)` —
+    /// ONE transaction for the whole tick; a pid absent from the
+    /// table is NOT cleared (its ports simply stop refreshing; the
+    /// exit patch owns the row's fate).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::Storage`] on SQLite failures.
+    pub fn apply_ports(&self, entries: &[(u32, &str, &str)]) -> Result<(), CoreError> {
+        let conn = self.lock()?;
+        let tx = conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "UPDATE process_ledger SET listens_on = ?3
+                 WHERE rowid IN (
+                     SELECT rowid FROM process_ledger
+                     WHERE pid = ?1 AND boot_id = ?2 AND state IN (?4, ?5)
+                     ORDER BY first_seen DESC LIMIT 1
+                 )",
+            )?;
+            for (pid, boot_id, ports) in entries {
+                stmt.execute(params![pid, boot_id, ports, STATE_RUNNING, STATE_ORPHANED])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Flips a RUNNING helper row to `orphaned` (AJ-E504 Req.3):
     /// root exited, grace elapsed, two ticks agreed. The row stays a
     /// candidate; an orphan that later exits flips to `exited` via

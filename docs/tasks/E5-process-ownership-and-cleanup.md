@@ -175,7 +175,7 @@ Trap: `sysinfo` CPU% needs two samples — first tick after spawn shows
 - Ledger vocabulary: `STATE_ORPHANED` — orphaned rows STAY candidates (re-verified per tick) and resolve to `exited` on death; `candidates` selects `running|orphaned`; `mark_exited` accepts both.
 - Evidence: `docs/qa/evidence/AJ-E504/` — grace drill + early-exit drill + 50-instance soak (avg 12 ms/tick, max 25 ms, self CPU 0.34%, 0 constructions) + the orphaned-row sqlite dump with full attribution.
 
-### AJ-E505 Port occupancy map and leftover inventory data | Status: TODO | Priority P0 | Effort M | Depends: AJ-E504
+### AJ-E505 Port occupancy map and leftover inventory data | Status: DONE-EVIDENCED (evidence: docs/qa/evidence/AJ-E505/manifest.md) | Priority P0 | Effort M | Depends: AJ-E504
 
 **Goal**:
 Join ledger ownership to the OS listener table so every left-behind process can be explained as "PID 8123 holds :5173 for Instance X", and launch can warn before `EADDRINUSE` instead of after.
@@ -225,6 +225,14 @@ Screenshots (1440×900 and 1024×700, light+dark): port-collision launch warning
 
 **Handover note**:
 Trap: a port hint list is a display hint, never ownership proof — identity still comes from AJ-E503. Trap: do not add a second polling loop for ports; AJ-E504's tick is the only cadence. Windows probe is a seam in this task; do not fake it with `netstat.exe` parsing.
+
+*Implementation mapping (recorded in this task's PR per the claiming protocol)*:
+- Probe (Req.1): `crates/juggler-supervisor/src/ports.rs` — `PortProbe` trait, `NetstatProbe` (netstat2, ONE pass over listening TCP both families, pids; 5-6 ms for ~119 listeners), `UnsupportedProbe` on non-unix (`ports unknown on this platform`, the GetExtendedTcpTable seam stays M7-5); no lsof/netstat shell-outs anywhere.
+- Join (Req.2): rides the E504 tick — JOIN every tick on the CACHED listener table, ENUMERATION every 5th tick (`PORT_PROBE_EVERY`; loaded-box cost ~90 ms vs the ≤100 ms tick budget — the budget governs); `apply_ports` = one batched transaction per tick onto the newest running-or-orphaned row; candidates fetched once per tick and shared with reconcile (duplicate query stalled under disk pressure); hints display-only.
+- Classification (Req.3): pure `classify_listeners` — pid→newest running-or-orphaned row; unverifiable/exited rows grant nothing (recycled-pid fixture); helper-of-dead-root = Managed orphan; adopted (excluding currently-supervised — bug found by the fixture, fixed in `alive_adopted_sessions`) = Re-adopted; no match = Not managed (`killable:false`, zero kill ids in the DTO — the F3 guard lives in the API).
+- Warning (Req.4): `launch_port_warning(project)` = learned ports (ledger `listens_on` history) ∩ current orphan-held; copy-exact message + humanized age; the App pre-checks before spawn and NEVER blocks (Launch anyway proceeds; probe failure launches).
+- Hogs (Req.5): `hog_facts` — 60 s sustained window over the collector rings: helper >2 GiB, tree >90% core, tree > provider-p95 (≥3-peer floor); returned by `port_inventory`.
+- Evidence: `docs/qa/evidence/AJ-E505/` — full API JSON dumps (live/orphan/warning phases, unmanaged :8000 with zero kill ids), unit tests (unmanaged + recycled fixtures), gallery `_gallery/18-ports/` (inventory 4 classifications + collision sheet, both themes/sizes; icon+text never colour alone).
 
 ### AJ-E506 Cleanup Centre (read-only) and per-Instance Processes view | Status: TODO | Priority P0 | Effort L | Depends: AJ-E504, AJ-E505
 

@@ -3113,6 +3113,365 @@ fn unavailable_processes(reason: &str) -> ProcessesInfo {
     }
 }
 
+// --- AJ-E505: the port occupancy map ----------------------------------
+
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|dur| i64::try_from(dur.as_millis()).unwrap_or_default())
+        .unwrap_or_default()
+}
+
+/// One port-inventory row (the API DTO; `NotManaged` rows carry
+/// `killable: false` and NO stop/kill command ids — the F3 guard).
+#[derive(Clone, Debug, serde::Serialize, PartialEq)]
+pub struct PortRowInfo {
+    /// The listening port (the headline).
+    pub port: u16,
+    /// The owning process id (the evidence).
+    pub pid: u32,
+    /// `managed-orphan` | `managed-running` | `re-adopted` |
+    /// `not-managed`.
+    pub class: String,
+    /// Owning Instance, when managed.
+    pub session: Option<String>,
+    /// Provider id, when managed.
+    pub provider: Option<String>,
+    /// Account id, when managed.
+    pub account: Option<String>,
+    /// Project id, when managed.
+    pub project: Option<String>,
+    /// Listener age from the kernel process start, ms.
+    pub listener_age_ms: Option<i64>,
+    /// Process display name, when managed.
+    pub name: Option<String>,
+    /// The well-known dev-port hint (a LABEL, never identity).
+    pub hint: Option<String>,
+    /// False exactly for `not-managed` rows: no kill affordance, ever.
+    pub killable: bool,
+}
+
+/// One sustained-breach hog fact (Req.5 — the Cleanup Centre's input).
+#[derive(Clone, Debug, serde::Serialize, PartialEq)]
+pub struct HogFactInfo {
+    /// The hog pid (helper for RSS rules, the root for tree rules).
+    pub pid: u32,
+    /// Owning Instance.
+    pub session: String,
+    /// Provider id.
+    pub provider: String,
+    /// Live (or last-seen) RSS, bytes.
+    pub rss_bytes: u64,
+    /// Live CPU%, when sampled.
+    pub cpu_pct: Option<f64>,
+    /// Which rule fired: `helper-rss>2GiB` | `tree-cpu>90%` |
+    /// `tree-rss>p95(provider)`.
+    pub rule: String,
+}
+
+/// The inventory response: rows + the honest probe note + hog facts.
+#[derive(Clone, Debug, serde::Serialize, PartialEq, Default)]
+pub struct PortInventoryInfo {
+    /// Rows sorted by port.
+    pub rows: Vec<PortRowInfo>,
+    /// `Some` when the platform has no probe or the OS call failed —
+    /// the honest note, never an empty map presented as truth.
+    pub note: Option<String>,
+    /// Sustained-breach hogs (60 s window).
+    pub hogs: Vec<HogFactInfo>,
+}
+
+/// The pre-launch collision warning (advisor informs, never blocks).
+#[derive(Clone, Debug, serde::Serialize, PartialEq)]
+pub struct PortWarningInfo {
+    /// The contested port.
+    pub port: u16,
+    /// The orphan holding it.
+    pub pid: u32,
+    /// The Instance label (`Provider (id-prefix)`).
+    pub instance: String,
+    /// How long the holder has lived, ms.
+    pub age_ms: i64,
+    /// The copy-exact warning (Req.4).
+    pub message: String,
+}
+
+/// The port inventory (Req.3): every listener classified as exactly
+/// one of managed-orphan / managed-running / re-adopted /
+/// not-managed; unmanaged rows are display-only.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on failure.
+#[tauri::command]
+pub fn port_inventory(state: tauri::State<'_, Arc<AppState>>) -> AppResult<PortInventoryInfo> {
+    Ok(port_inventory_inner(&state))
+}
+
+/// The pre-launch warning (Req.4): a project's expected dev port
+/// (learned from its instances' observed listeners) held by a managed
+/// orphan. Launch itself is NEVER blocked — the UI offers `Launch
+/// anyway` beside `Free this port`.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on failure.
+#[tauri::command]
+pub fn launch_port_warning(
+    state: tauri::State<'_, Arc<AppState>>,
+    project_id: Option<String>,
+) -> AppResult<Option<PortWarningInfo>> {
+    Ok(launch_port_warning_inner(&state, project_id))
+}
+
+/// Humanized age for the copy-exact warning: `45s` / `12m` / `3h` /
+/// `2d`.
+fn human_age(ms: i64) -> String {
+    let secs = ms.div_euclid(1000).max(0);
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3_600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h", secs / 3_600)
+    } else {
+        format!("{}d", secs / 86_400)
+    }
+}
+
+/// The real probe for THIS platform (query-time freshness; the tick
+/// join stores the durable view).
+fn os_listeners() -> Result<Vec<juggler_supervisor::Listener>, String> {
+    use juggler_supervisor::PortProbe as _;
+    #[cfg(unix)]
+    let probe = juggler_supervisor::NetstatProbe;
+    #[cfg(not(unix))]
+    let probe = juggler_supervisor::UnsupportedProbe;
+    probe.listeners().map_err(|error| error.to_string())
+}
+
+/// Every ledger row of the local machine's sessions (all states —
+/// dead roots matter for classification).
+fn local_ledger_rows(state: &Arc<AppState>) -> Vec<juggler_core::storage::LedgerRow> {
+    use juggler_supervisor::tree::LedgerStore as _;
+    let machine = local_machine_id(state);
+    let mut rows = Vec::new();
+    let mut sessions = std::collections::HashSet::new();
+    if let Ok(candidates) = state.ledger.candidates(&machine) {
+        for row in candidates {
+            sessions.insert(row.session_id.clone());
+        }
+    }
+    for session in sessions {
+        if let Ok(mut session_rows) = state.ledger.session_rows(&SessionId::new(session)) {
+            rows.append(&mut session_rows);
+        }
+    }
+    rows
+}
+
+/// `port_inventory` sans-Tauri (tests + evidence runs).
+pub fn port_inventory_inner(state: &Arc<AppState>) -> PortInventoryInfo {
+    let now = now_millis();
+    let listeners = match os_listeners() {
+        Ok(listeners) => listeners,
+        Err(note) => {
+            return PortInventoryInfo {
+                rows: Vec::new(),
+                note: Some(note),
+                hogs: Vec::new(),
+            };
+        }
+    };
+    let rows = local_ledger_rows(state);
+    let adopted: std::collections::HashSet<String> = state
+        .supervisor
+        .alive_adopted_sessions()
+        .into_iter()
+        .map(|session| session.as_str().to_string())
+        .collect();
+    let inventory = juggler_supervisor::classify_listeners(&listeners, &rows, &adopted, now);
+    PortInventoryInfo {
+        rows: inventory
+            .into_iter()
+            .map(|row| PortRowInfo {
+                port: row.port,
+                pid: row.pid,
+                class: row.class.as_str().to_string(),
+                session: row.session,
+                provider: row.provider,
+                account: row.account,
+                project: row.project,
+                listener_age_ms: row.listener_age_ms,
+                name: row.name,
+                hint: row.hint.map(str::to_string),
+                killable: row.class != juggler_supervisor::ListenerClass::NotManaged,
+            })
+            .collect(),
+        note: state
+            .resources
+            .lock()
+            .ok()
+            .and_then(|collector| collector.ports_note()),
+        hogs: hog_facts(state, now),
+    }
+}
+
+/// Sustained-breach hog facts (Req.5): a helper >2 GiB, a tree >90%
+/// of one core, or a tree above its Provider's learned p95 — each
+/// sustained over the 60 s window of the collector's rings. The p95
+/// rule needs ≥3 Provider trees to compare against (an honest floor;
+/// smaller populations never fire it).
+#[allow(clippy::similar_names)] // state/stats read naturally here
+fn hog_facts(state: &Arc<AppState>, now_ms: i64) -> Vec<HogFactInfo> {
+    const HOG_WINDOW_MS: i64 = 60_000;
+    const HELPER_RSS_LIMIT: u64 = 2 * 1024 * 1024 * 1024;
+    let Some(collector) = state.resources.lock().ok() else {
+        return Vec::new();
+    };
+    let stats = collector.stats_snapshot();
+    let contexts: Vec<(SessionId, String)> = state
+        .supervisor
+        .spawn_contexts_snapshot()
+        .into_iter()
+        .map(|(session, ctx)| (session, ctx.provider.clone()))
+        .collect();
+    let mut facts = Vec::new();
+    for (session, provider) in &contexts {
+        let Some(tree_stats) = stats.get(session) else {
+            continue;
+        };
+        // Sustained = every ring sample in the window breaches.
+        let ring = collector.ring(session);
+        let in_window: Vec<_> = ring
+            .iter()
+            .filter(|sample| now_ms - sample.at_ms <= HOG_WINDOW_MS)
+            .collect();
+        if in_window.len() < 2 {
+            continue; // not enough samples to call anything sustained
+        }
+        let cpu_sustained = in_window
+            .iter()
+            .all(|sample| sample.cpu_pct.is_some_and(|cpu| cpu > 90.0));
+        if cpu_sustained {
+            facts.push(HogFactInfo {
+                pid: 0, // tree-level: the Cleanup Centre resolves the
+                // Instance's live root pid at render time
+                session: session.as_str().to_string(),
+                provider: provider.clone(),
+                rss_bytes: tree_stats.rss_bytes,
+                cpu_pct: tree_stats.cpu_pct,
+                rule: "tree-cpu>90%".to_string(),
+            });
+        }
+        // The per-Provider p95 population: the OTHER trees of this
+        // Provider (self-excluded), needing at least three peers.
+        let peers: Vec<u64> = contexts
+            .iter()
+            .filter(|(peer, peer_provider)| peer_provider == provider && peer != session)
+            .filter_map(|(peer, _)| stats.get(peer).map(|s| s.rss_bytes))
+            .collect();
+        if peers.len() >= 3 {
+            let mut sorted = peers.clone();
+            sorted.sort_unstable();
+            let p95 = sorted[sorted.len() * 95 / 100];
+            let rss_sustained = in_window.iter().all(|sample| sample.rss_bytes > p95);
+            if rss_sustained && tree_stats.rss_bytes > p95 {
+                facts.push(HogFactInfo {
+                    pid: 0,
+                    session: session.as_str().to_string(),
+                    provider: provider.clone(),
+                    rss_bytes: tree_stats.rss_bytes,
+                    cpu_pct: tree_stats.cpu_pct,
+                    rule: "tree-rss>p95(provider)".to_string(),
+                });
+            }
+        }
+        // Single-helper RSS: the live rows of the tree (root excluded).
+        for row in collector.rows(session).into_iter().flatten().skip(1) {
+            if row.rss_bytes > HELPER_RSS_LIMIT {
+                facts.push(HogFactInfo {
+                    pid: row.pid,
+                    session: session.as_str().to_string(),
+                    provider: provider.clone(),
+                    rss_bytes: row.rss_bytes,
+                    cpu_pct: row.cpu_pct,
+                    rule: "helper-rss>2GiB".to_string(),
+                });
+            }
+        }
+    }
+    facts
+}
+
+/// `launch_port_warning` sans-Tauri: the learned expected ports of
+/// `project_id`'s instances (their observed `listens_on` history,
+/// any row state) crossed with CURRENT orphan-held listeners.
+pub fn launch_port_warning_inner(
+    state: &Arc<AppState>,
+    project_id: Option<String>,
+) -> Option<PortWarningInfo> {
+    let now = now_millis();
+    let expected: std::collections::HashSet<u16> = local_ledger_rows(state)
+        .into_iter()
+        .filter(|row| {
+            project_id
+                .as_deref()
+                .is_none_or(|project| row.project_id.as_deref() == Some(project))
+        })
+        .filter_map(|row| row.listens_on)
+        .flat_map(|ports| {
+            ports
+                .split(',')
+                .filter_map(|port| port.parse::<u16>().ok())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    if expected.is_empty() {
+        return None;
+    }
+    let listeners = os_listeners().ok()?;
+    let rows = local_ledger_rows(state);
+    let adopted: std::collections::HashSet<String> = state
+        .supervisor
+        .alive_adopted_sessions()
+        .into_iter()
+        .map(|session| session.as_str().to_string())
+        .collect();
+    let inventory = juggler_supervisor::classify_listeners(&listeners, &rows, &adopted, now);
+    inventory
+        .into_iter()
+        .find(|row| {
+            expected.contains(&row.port)
+                && row.class == juggler_supervisor::ListenerClass::ManagedOrphan
+        })
+        .map(|row| {
+            let row_port = row.port;
+            let instance = format!(
+                "{} ({})",
+                row.provider.as_deref().unwrap_or("instance"),
+                row.session
+                    .as_deref()
+                    .map(str::chars)
+                    .map(|mut chars| chars.by_ref().take(8).collect::<String>())
+                    .unwrap_or_default()
+            );
+            let age_ms = row.listener_age_ms.unwrap_or_default();
+            let message = format!(
+                ":{} is already held by an orphan from {instance} ({}).",
+                row_port,
+                human_age(age_ms)
+            );
+            PortWarningInfo {
+                port: row_port,
+                pid: row.pid,
+                instance,
+                age_ms,
+                message,
+            }
+        })
+}
+
 /// Stops one orphan: the allow-list guard refuses PIDs that were not
 /// recorded as descendants (fail closed, PROPOSAL.md:47), then the
 /// TERM→KILL ladder runs with the post-stop re-read built in (Req.6).
