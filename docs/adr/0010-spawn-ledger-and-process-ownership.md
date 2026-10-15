@@ -45,3 +45,51 @@ and manual cleanups "all with verifications"
 The §1 automation invariant now carries exactly two recorded
 amendments (this and D-14's user-owned policy). E5 builds the ledger,
 reconciler, and Cleanup Centre; zero-false-kill is a beta-exit metric.
+
+## Amendment (AJ-E508 — the operating tiers, per pass2 §10 as settled
+by D-08)
+
+Accepted 2026-10-13 with the tier implementation (same change; this
+ADR and the SPEC §5.2 wording land before any tier code merges).
+
+1. **Tier 0 — Observe (default everywhere).** Detect, list, alert,
+   pre-stage. Never signals. The Cleanup Centre plus the manual
+   verify-before-kill sheet IS Tier 0's full surface.
+2. **Tier 1 — Tidy verified orphans (opt-in per Account, off by
+   default; exact label `Automatically tidy left-behind dev
+   servers`).** After `orphan_grace` and a same-tick identity
+   re-verification, TERM→KILL through the AJ-E507 ladder — ONLY
+   helpers whose root exited cleanly (code 0) and whose role guess is
+   `DevServer|Watcher`. Audit intent before the signal (AJ-E509).
+3. **Tier 2 — Tidy after crash (a SEPARATE per-Account opt-in, off by
+   default; exact label `Also tidy after a crash (with
+   notification)`).** As Tier 1 but for crash-exited roots, only
+   after 5 minutes AND one user-visible notification with an Undo
+   window of ≥30 s before any signal. The Undo window, not a settings
+   page, is the consent surface at crash time.
+4. **Tier 3 — Hog shed.** NO automatic implementation exists or may
+   be added without a new decision-log entry: alert + the staged
+   sheet only.
+5. **Hard exclusions at EVERY tier:** roots; role guesses
+   `McpServer`, `TerminalShell`, any database-role guess; re-adopted
+   (T3) survivors; unverifiable (T5) rows; escaped-group helpers;
+   processes of non-opted-in Accounts; any process on another
+   `machine_id`. The eligible role set (`DevServer|Watcher`) may not
+   be widened without a new decision-log entry — role is a GUESS
+   (pass2 C4), which is exactly why only these two are ever
+   auto-eligible.
+6. **Demotion, not escalation:** if same-tick re-verification fails
+   for an automatic candidate, it is silently demoted to Tier 0
+   (list-only) with an audit note — never signalled on stale
+   evidence.
+7. **Global pause kill-switch** (`Pause automatic cleanup`, in
+   Settings and the Cleanup Centre header): takes effect within one
+   tick; a persistent banner names it while active. **Crash
+   suspension:** after any Juggler crash recovery, Tiers 1-2 are
+   suspended for 24 h until the user re-confirms in the Cleanup
+   Centre — shown, never silent.
+8. **Storage shape:** per-Account `cleanup_settings`
+   (`tier1_opt_in`, `tier2_opt_in` — never one bundled toggle). The
+   E410 prototype's single `accounts.cleanup_opt_in` migrates to
+   Tier 1 only (its promise was tidy-after-exit); Tier 2 starts off
+   for everyone, including previous opt-ins.

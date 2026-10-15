@@ -12,6 +12,7 @@ mod profiles;
 mod sessions;
 
 mod cleanup_audit;
+mod cleanup_settings;
 mod process_ledger;
 mod projects;
 mod settings;
@@ -22,9 +23,10 @@ use rusqlite::Connection;
 
 pub use accounts::AccountsRepo;
 pub use cleanup_audit::{
-    ACTOR_AUTO_TIER1, ACTOR_PREFIX_USER, AuditOutcomeInfo, CleanupAuditRecord, CleanupAuditRepo,
-    OUTCOME_PENDING,
+    ACTOR_AUTO_TIER1, ACTOR_AUTO_TIER2, ACTOR_PREFIX_USER, AuditOutcomeInfo, CleanupAuditRecord,
+    CleanupAuditRepo, OUTCOME_PENDING,
 };
+pub use cleanup_settings::{CleanupSettingsRepo, CleanupTierSettings};
 pub use process_ledger::{
     LedgerRow, ProcessLedgerRepo, ROLE_HELPER, ROLE_LOGIN, ROLE_ROOT, STATE_EXITED, STATE_ORPHANED,
     STATE_RUNNING, STATE_STARTING, STATE_UNVERIFIABLE,
@@ -212,7 +214,24 @@ CREATE INDEX cleanup_audit_at ON cleanup_audit(at_ms);
 CREATE INDEX cleanup_audit_account ON cleanup_audit(account_id, at_ms);
 ";
 
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14];
+/// v15 (AJ-E508): per-Account cleanup tier settings — TWO separate
+/// opt-ins (D-08 / ADR-0010's E508 amendment), both off by default.
+/// The E410 prototype's single `accounts.cleanup_opt_in` seeds Tier 1
+/// only (its promise was tidy-after-exit); Tier 2 starts off for
+/// everyone, including previous opt-ins.
+const V15: &str = "
+CREATE TABLE IF NOT EXISTS cleanup_settings (
+    account_id TEXT PRIMARY KEY,
+    tier1_opt_in INTEGER NOT NULL DEFAULT 0,
+    tier2_opt_in INTEGER NOT NULL DEFAULT 0
+);
+INSERT INTO cleanup_settings (account_id, tier1_opt_in, tier2_opt_in)
+    SELECT id, cleanup_opt_in, 0 FROM accounts WHERE cleanup_opt_in = 1;
+";
+
+const MIGRATIONS: &[&str] = &[
+    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15,
+];
 
 /// An opened AI Juggler database with typed repositories.
 #[derive(Debug)]

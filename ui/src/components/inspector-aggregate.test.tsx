@@ -169,7 +169,7 @@ describe("AJ-E408 Account (§5.4, Req.3-4)", () => {
     expect(toggle).not.toBeNull();
     expect(toggle.querySelector("input")!.checked).toBe(false);
     expect(container.querySelector('[data-testid="account-overview"]')!.textContent).toContain(
-      "Off by default",
+      "Both off by default",
     );
     expect(container.querySelector('[data-testid="account-overview"]')!.textContent).toContain(
       "audit-logged (D-08)",

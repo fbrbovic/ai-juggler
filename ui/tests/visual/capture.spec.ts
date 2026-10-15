@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -1522,5 +1522,163 @@ for (const state of [
         });
       });
     }
+  }
+}
+
+
+// ---------------------------------------------------------------------------
+// AJ-E508 — the tier surfaces: the per-Account toggles (off/on) in the
+// Account launch-settings area, the Cleanup Centre's paused banner,
+// the suspended-after-crash banner, and the Tier-2 notification with
+// its Undo window (at appearance and at 5 s remaining).
+// ---------------------------------------------------------------------------
+
+async function seedTiersPage(
+  page: import("@playwright/test").Page,
+  vp: { width: number; height: number },
+  theme: string,
+  seams: Record<string, unknown>,
+) {
+  await page.addInitScript(
+    ({ fixture, t0, theme: t, seams: s }) => {
+      const w = window as unknown as Record<string, unknown>;
+      w.__AIJ_FIXTURE__ = fixture;
+      for (const [key, value] of Object.entries(s)) {
+        w[key] = value;
+      }
+      localStorage.setItem("aij.theme", t);
+      localStorage.setItem("aij.onboarding.dismissed", "1");
+      sessionStorage.setItem("aij.ready.skipped", "1");
+      Date.now = () => t0;
+    },
+    { fixture: allStatuses, t0: T0, theme, seams },
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: vp.width, height: vp.height });
+  await page.goto("/");
+}
+
+for (const theme of THEMES) {
+  for (const vp of [{ name: "1440x900", width: 1440, height: 900 }]) {
+    test(`tiers — account toggles off — ${vp.name} — ${theme}`, async ({ page }) => {
+      await seedTiersPage(page, vp, theme, {
+        __AIJ_CLEANUP_TIERS__: { tier1_opt_in: false, tier2_opt_in: false },
+      });
+      await openAccountOverview(page);
+      await expect(page.getByTestId("account-tier-toggles")).toBeVisible();
+      await expect(page.getByTestId("account-cleanup-toggle")).toContainText(
+        "Automatically tidy left-behind dev servers",
+      );
+      await expect(page.getByTestId("account-tier2-toggle")).toContainText(
+        "Also tidy after a crash (with notification)",
+      );
+      await page.screenshot({
+        path: resolve(GALLERY, `21-tiers/toggles-off-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`tiers — account toggles on — ${vp.name} — ${theme}`, async ({ page }) => {
+      await seedTiersPage(page, vp, theme, {
+        __AIJ_CLEANUP_TIERS__: { tier1_opt_in: true, tier2_opt_in: true },
+      });
+      await openAccountOverview(page);
+      await expect(page.getByTestId("account-tier-toggles")).toBeVisible();
+      await expect(
+        page.getByTestId("account-cleanup-toggle").locator("input"),
+      ).toBeChecked();
+      await expect(
+        page.getByTestId("account-tier2-toggle").locator("input"),
+      ).toBeChecked();
+      await page.screenshot({
+        path: resolve(GALLERY, `21-tiers/toggles-on-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`tiers — centre paused banner — ${vp.name} — ${theme}`, async ({ page }) => {
+      await seedTiersPage(page, vp, theme, {
+        __AIJ_CLEANUP_STATUS__: {
+          paused: true,
+          suspended: false,
+          suspended_until_ms: null,
+          tier2_pending: [],
+        },
+      });
+      await page.getByRole("button", { name: "Cleanup" }).click();
+      await expect(page.getByTestId("cleanup-paused-banner")).toContainText(
+        "Automatic cleanup is paused.",
+      );
+      await expect(page.getByTestId("cleanup-pause-toggle")).toContainText("Resume");
+      await page.screenshot({
+        path: resolve(GALLERY, `21-tiers/paused-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`tiers — suspended after crash — ${vp.name} — ${theme}`, async ({ page }) => {
+      await seedTiersPage(page, vp, theme, {
+        __AIJ_CLEANUP_STATUS__: {
+          paused: false,
+          suspended: true,
+          suspended_until_ms: T0 + 24 * 3_600_000,
+          tier2_pending: [],
+        },
+      });
+      await page.getByRole("button", { name: "Cleanup" }).click();
+      await expect(page.getByTestId("cleanup-suspended-banner")).toContainText(
+        "suspended for 24 h",
+      );
+      await page.screenshot({
+        path: resolve(GALLERY, `21-tiers/suspended-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`tiers — tier-2 notification at appearance — ${vp.name} — ${theme}`, async ({ page }) => {
+      await seedTiersPage(page, vp, theme, {
+        __AIJ_CLEANUP_STATUS__: {
+          paused: false,
+          suspended: false,
+          suspended_until_ms: null,
+          tier2_pending: [
+            {
+              pid: 8123,
+              session: "s-1",
+              cmdline_trunc: "node vite dev",
+              deadline_ms: T0 + 30_000,
+            },
+          ],
+        },
+      });
+      await page.getByRole("button", { name: "Cleanup" }).click();
+      await expect(page.getByTestId("cleanup-tier2-notice-8123")).toContainText(
+        "survived a crash",
+      );
+      await expect(page.getByTestId("cleanup-tier2-notice-8123")).toContainText("in 30s");
+      await page.screenshot({
+        path: resolve(GALLERY, `21-tiers/tier2-appearance-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`tiers — tier-2 notification at 5 s remaining — ${vp.name} — ${theme}`, async ({ page }) => {
+      await seedTiersPage(page, vp, theme, {
+        __AIJ_CLEANUP_STATUS__: {
+          paused: false,
+          suspended: false,
+          suspended_until_ms: null,
+          tier2_pending: [
+            {
+              pid: 8123,
+              session: "s-1",
+              cmdline_trunc: "node vite dev",
+              deadline_ms: T0 + 5_000,
+            },
+          ],
+        },
+      });
+      await page.getByRole("button", { name: "Cleanup" }).click();
+      await expect(page.getByTestId("cleanup-tier2-notice-8123")).toContainText("in 5s");
+      await expect(page.getByTestId("cleanup-tier2-undo-8123")).toContainText("Undo");
+      await page.screenshot({
+        path: resolve(GALLERY, `21-tiers/tier2-5s-${vp.name}-${theme}.png`),
+      });
+    });
   }
 }

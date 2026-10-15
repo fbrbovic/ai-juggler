@@ -34,6 +34,12 @@ pub struct AppState {
     pub ledger: std::sync::Arc<juggler_supervisor::tree::CoreLedgerStore>,
     /// The append-only cleanup audit (AJ-E509): intent before signal.
     pub audit: std::sync::Arc<juggler_core::storage::CleanupAuditRepo>,
+    /// Per-Account cleanup tier opt-ins (AJ-E508, D-08): TWO separate
+    /// toggles on their own WAL connection.
+    pub cleanup_settings: std::sync::Arc<juggler_core::storage::CleanupSettingsRepo>,
+    /// Live Tier-2 notices (AJ-E508 Req.1): one per crash-orphan, the
+    /// Undo window's state. Entries exist only while a window is open.
+    pub tier2_pending: Mutex<std::collections::HashMap<u32, crate::commands::Tier2Notice>>,
     /// The one live preview session (AJ-E415 Req.5: one at a time).
     /// Lock ordering: never held together with `storage`.
     pub preview: Mutex<Option<crate::commands::PreviewSession>>,
@@ -99,6 +105,11 @@ impl AppState {
             &data_dir.join("juggler.sqlite"),
         )?);
         let _ = audit.prune(cutoff);
+        // AJ-E508: per-Account tier opt-ins — own connection, seeded
+        // from the E410 prototype flag by the v15 migration.
+        let cleanup_settings = std::sync::Arc::new(
+            juggler_core::storage::CleanupSettingsRepo::open(&data_dir.join("juggler.sqlite"))?,
+        );
         let supervisor =
             Supervisor::with_journal(&data_dir.join("supervision"))?.with_ledger(ledger.clone());
         // Orphan grace (AJ-E504 Req.3): the user-tunable default, from
@@ -134,8 +145,19 @@ impl AppState {
                 }
             }
         }
+        // AJ-E508 Req.5: a crash recovery (adopted survivors found at
+        // boot) suspends Tiers 1-2 for 24 h until the user re-confirms
+        // in the Cleanup Centre — shown, never silent.
+        if !adopted.is_empty() {
+            let suspended_until = now_epoch_ms() + 24 * 3_600_000;
+            let _ = storage
+                .app_settings()
+                .set("cleanup_suspended_until", &suspended_until.to_string());
+        }
         Ok(Self {
             audit,
+            cleanup_settings,
+            tier2_pending: Mutex::new(std::collections::HashMap::new()),
             supervisor,
             ledger,
             registry,
@@ -198,6 +220,11 @@ pub fn default_registry() -> AdapterRegistry {
         juggler_adapters::ClaudeCodeAdapter::new(),
     ));
     registry
+}
+
+/// Current epoch milliseconds (the suspension stamp).
+fn now_epoch_ms() -> i64 {
+    juggler_core::model::Timestamp::now().millis()
 }
 
 /// Resolves the per-platform app data directory (spec §11 layout).

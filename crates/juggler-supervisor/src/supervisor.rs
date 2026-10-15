@@ -114,6 +114,11 @@ pub struct ProcessRow {
     /// Kernel-reported executable path (`None` when unreadable — then
     /// identity verification honestly skips the exe fact).
     pub exe: Option<String>,
+    /// The full command line, joined (`None` when unreadable). The
+    /// ledger's helper rows record THIS (AJ-E508: the automatic
+    /// tier's role gate decides on the true command line, never a
+    /// bare process name — a name like `Python` guesses nothing).
+    pub cmd: Option<String>,
 }
 
 /// The reconciler's cached process table (AJ-E504 Req.1): the ppid map
@@ -401,13 +406,23 @@ impl LiveStatsCollector {
                     (Some(root), Some(live)) => live != root,
                     _ => false,
                 };
+                // AJ-E508: the helper row records the TRUE command
+                // line (the automatic tier's role gate reads it; a
+                // bare process name — `Python`, `node` — guesses
+                // nothing and must never gate a kill).
+                let cmdline = row.cmd.clone().unwrap_or_else(|| row.name.clone());
                 helpers.push(juggler_core::storage::LedgerRow {
                     pid: Some(row.pid),
                     pgid: live_pgid,
                     started_at,
                     exe_path: row.exe.clone().unwrap_or_else(|| row.name.clone()),
-                    cmdline_hash: format!("name:{}", row.name),
-                    cmdline_trunc: row.name.clone(),
+                    cmdline_hash: {
+                        use std::hash::{Hash, Hasher as _};
+                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                        cmdline.hash(&mut hasher);
+                        format!("cmd:{}", hasher.finish())
+                    },
+                    cmdline_trunc: cmdline,
                     boot_id: boot_id.clone(),
                     session_id: session.as_str().to_string(),
                     instance_id: None,
@@ -769,7 +784,8 @@ impl LiveStatsCollector {
             ProcessRefreshKind::nothing()
                 .with_cpu()
                 .with_memory()
-                .with_exe(sysinfo::UpdateKind::Always),
+                .with_exe(sysinfo::UpdateKind::Always)
+                .with_cmd(sysinfo::UpdateKind::Always),
         );
     }
 
@@ -786,7 +802,8 @@ impl LiveStatsCollector {
             ProcessRefreshKind::nothing()
                 .with_cpu()
                 .with_memory()
-                .with_exe(sysinfo::UpdateKind::Always),
+                .with_exe(sysinfo::UpdateKind::Always)
+                .with_cmd(sysinfo::UpdateKind::Always),
         );
     }
 
@@ -935,6 +952,14 @@ fn tree_rows(
             depth,
             start_time: i64::try_from(process.start_time()).unwrap_or_default(),
             exe: process.exe().map(|exe| exe.to_string_lossy().into_owned()),
+            cmd: (!process.cmd().is_empty()).then(|| {
+                process
+                    .cmd()
+                    .iter()
+                    .map(|part| part.to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            }),
         });
         cpu += f64::from(process.cpu_usage());
         rss += process.memory();

@@ -1561,26 +1561,12 @@ function AccountOverview(props: PanelProps) {
             })()}
           </span>
           <RenewalEditor account={account} />
-          <label data-testid="account-cleanup-toggle" className="flex items-center gap-1.5">
-            <input
-              type="checkbox"
-              checked={account.cleanup_opt_in}
-              onChange={(event) => {
-                const optIn = event.target.checked;
-                void import("../lib/bridge").then((bridge) =>
-                  bridge.accountSetCleanup(account.id, optIn).catch(() => {
-                    /* the checkbox re-reads from props on the next list refresh */
-                  }),
-                );
-              }}
-            />
-            <span className="text-muted">Clean up leftover processes after exit (opt-in)</span>
-          </label>
-          <span className="text-[10px] leading-relaxed text-faint">
-            Off by default — nothing is ever killed automatically unless you opt in per account.
-            Only PIDs the journal recorded as descendants are touched, and every kill is
-            audit-logged (D-08).
-          </span>
+          {/*
+           * AJ-E508 (D-08): the Account launch-settings area's TWO
+           * separate tier toggles — never one bundled "auto-cleanup"
+           * switch. Exact labels; both off by default.
+           */}
+          <TierToggles accountId={account.id} initial={account.cleanup_opt_in} />
           <label data-testid="account-preview-toggle" className="flex items-center gap-1.5">
             <input
               type="checkbox"
@@ -1853,6 +1839,78 @@ function TierTag({ tier }: { tier: "Measured" | "Computed" | "Estimated" }) {
 /// The `Renewal date (optional)` editor (AJ-E411 Req.4): date input +
 /// Clear, helper text `Entered by you - Juggler does not read billing`,
 /// and focus hand-off from Account Actions (`aij:edit-renewal`).
+/**
+ * AJ-E508 (D-08): the Account launch-settings area's per-tier
+ * opt-ins — TWO separate toggles with the exact labels, both off by
+ * default, never bundled (ADR-0010's amendment). Deliberately
+ * mouse-only (no shortcut could enable automation).
+ */
+export function TierToggles(props: { accountId: string; initial: boolean }) {
+  const [tiers, setTiers] = useState({ tier1: props.initial, tier2: false });
+  const [loaded, setLoaded] = useState(false);
+  // The tier table is the source of truth (the account row only
+  // mirrors Tier 1 for older readers).
+  useEffect(() => {
+    let alive = true;
+    import("../lib/bridge")
+      .then((bridge) => bridge.cleanupTiersGet(props.accountId))
+      .then((settings) => {
+        if (alive) {
+          setTiers({ tier1: settings.tier1_opt_in, tier2: settings.tier2_opt_in });
+          setLoaded(true);
+        }
+      })
+      .catch(() => {
+        /* keep the both-off default on failure — never a silent opt-in */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [props.accountId]);
+  const set = (tier: "tier1" | "tier2", value: boolean) => {
+    setTiers((current) => ({ ...current, [tier]: value }));
+    void import("../lib/bridge")
+      .then((bridge) =>
+        bridge.cleanupTiersSet(
+          props.accountId,
+          tier === "tier1" ? value : tiers.tier1,
+          tier === "tier2" ? value : tiers.tier2,
+        ),
+      )
+      .catch(() => {
+        /* the checkboxes re-read on the next mount */
+      });
+  };
+  return (
+    <span className="flex flex-col gap-1" data-testid="account-tier-toggles">
+      <label data-testid="account-cleanup-toggle" className="flex items-center gap-1.5">
+        <input
+          type="checkbox"
+          checked={tiers.tier1}
+          disabled={!loaded}
+          onChange={(event) => set("tier1", event.target.checked)}
+        />
+        <span className="text-muted">Automatically tidy left-behind dev servers</span>
+      </label>
+      <label data-testid="account-tier2-toggle" className="flex items-center gap-1.5">
+        <input
+          type="checkbox"
+          checked={tiers.tier2}
+          disabled={!loaded}
+          onChange={(event) => set("tier2", event.target.checked)}
+        />
+        <span className="text-muted">Also tidy after a crash (with notification)</span>
+      </label>
+      <span className="text-[10px] leading-relaxed text-muted">
+        Both off by default — only verified dev servers and watchers of this Account's clean
+        exits are tidied; shells, MCP servers and databases are never touched automatically
+        and every kill is audit-logged (D-08). Crash tidies wait 5 minutes and ask first
+        with an Undo window.
+      </span>
+    </span>
+  );
+}
+
 function RenewalEditor({ account }: { account: AccountInfo }) {
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {

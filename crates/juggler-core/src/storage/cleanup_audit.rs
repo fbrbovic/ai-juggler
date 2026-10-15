@@ -19,6 +19,8 @@ use crate::error::CoreError;
 pub const ACTOR_PREFIX_USER: &str = "user:";
 /// The Tier-1 automatic actor (AJ-E508).
 pub const ACTOR_AUTO_TIER1: &str = "auto:tier-1";
+/// The Tier-2 automatic actor (AJ-E508): crash-exit tidies.
+pub const ACTOR_AUTO_TIER2: &str = "auto:tier-2";
 
 /// The outcome while the ladder is still running (or after a crash
 /// mid-ladder — read as "TERM'd, outcome unknown").
