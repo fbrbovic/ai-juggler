@@ -20,6 +20,16 @@ allow = [
     "MPL-2.0",
 ]
 
+[advisories]
+ignore = [
+    # AJ-E505 (2026-10-13): `paste` reaches us transitively through
+    # netstat2's netlink-packet chain. RUSTSEC-2024-0436 is an
+    # UNMAINTAINED notice (no soundness or security vulnerability);
+    # the crate is macro-only build-time code. Recorded exception —
+    # revisit when netstat2 drops the netlink macro dependency.
+    "RUSTSEC-2024-0436",
+]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"

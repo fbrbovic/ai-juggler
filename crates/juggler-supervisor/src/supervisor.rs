@@ -658,7 +658,9 @@ impl LiveStatsCollector {
         candidates: &[juggler_core::storage::LedgerRow],
         now_ms: i64,
     ) {
-        use crate::ports::{NetstatProbe, PortProbe as _};
+        #[cfg(unix)]
+        use crate::ports::NetstatProbe;
+        use crate::ports::PortProbe as _;
         let Some(ledger) = supervisor.ledger.clone() else {
             return;
         };
