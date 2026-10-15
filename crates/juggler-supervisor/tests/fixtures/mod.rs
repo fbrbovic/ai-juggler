@@ -75,8 +75,6 @@ fn fixture(dir: &Path, kind: &'static str) -> Fixture {
 pub struct FixtureSet {
     /// The helper script path (from [`write_helper`]).
     pub helper: PathBuf,
-    /// The port-holding fixture's port.
-    pub port: u16,
     fixtures: Vec<Fixture>,
 }
 
@@ -85,18 +83,24 @@ pub struct FixtureSet {
 pub const IN_TREE_KINDS: &[&str] = &["vite", "term-ignorer", "escapee", "mcp", "shell"];
 
 impl FixtureSet {
-    /// Builds the fixture set for `dir` (one instance per kind).
-    pub fn new(dir: &Path, port: u16) -> Self {
+    /// Builds the fixture set for `dir` (one instance per kind). The
+    /// vite fixture binds an OS-assigned port; read it with
+    /// [`FixtureSet::vite_port`] once ready.
+    pub fn new(dir: &Path) -> Self {
         let helper = write_helper(dir);
         let fixtures = IN_TREE_KINDS
             .iter()
             .map(|kind| fixture(dir, kind))
             .collect();
-        Self {
-            helper,
-            port,
-            fixtures,
-        }
+        Self { helper, fixtures }
+    }
+
+    /// The port the vite fixture actually bound (ready-file
+    /// handshake; call after [`FixtureSet::wait_ready`]). Port 0 in
+    /// the script = OS-assigned, killing the probe-then-bind race.
+    pub fn vite_port(&self) -> u16 {
+        let text = std::fs::read_to_string(&self.get("vite").ready).unwrap_or_default();
+        text.trim().parse::<u16>().unwrap_or_default()
     }
 
     /// One background line per in-tree fixture, for the root script
@@ -111,10 +115,7 @@ impl FixtureSet {
             let ready = fixture.ready.to_string_lossy();
             let helper = self.helper.to_string_lossy();
             let line = match fixture.kind {
-                "vite" => format!(
-                    "python3 {helper} --trap-log {trap} --ready {ready} --port {} &",
-                    self.port
-                ),
+                "vite" => format!("python3 {helper} --trap-log {trap} --ready {ready} --port 0 &"),
                 "term-ignorer" => {
                     format!("python3 {helper} --trap-log {trap} --ready {ready} --ignore-term &")
                 }
@@ -223,11 +224,18 @@ pub fn spawn_detached(helper: &Path, args: &[&str], trap: &Path, ready: &Path) -
 
 /// Spawns the UNMANAGED user server (outside any supervised root, no
 /// ledger row — never ours to signal). Returns its pid.
-pub fn spawn_unmanaged(dir: &Path, port: u16) -> u32 {
+pub fn spawn_unmanaged(dir: &Path) -> u32 {
     let helper = write_helper(dir);
     let trap = dir.join("unmanaged.traps");
     let ready = dir.join("unmanaged.ready");
-    spawn_detached(&helper, &["--port", &port.to_string()], &trap, &ready)
+    spawn_detached(&helper, &["--port", "0"], &trap, &ready)
+}
+
+/// The port the unmanaged server actually bound.
+#[allow(dead_code)] // used by the suites that assert on it
+pub fn unmanaged_port(dir: &Path) -> u16 {
+    let text = std::fs::read_to_string(dir.join("unmanaged.ready")).unwrap_or_default();
+    text.trim().parse::<u16>().unwrap_or_default()
 }
 
 /// The unmanaged fixture's paths (for zero-signal assertions).
@@ -266,6 +274,7 @@ pub fn wait_for(timeout_ms: u64, mut pred: impl FnMut() -> bool) -> bool {
 }
 
 /// A free ephemeral port (bind :0, read it, drop the listener).
+#[allow(dead_code)] // superseded by the ready-file port handshake
 pub fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()

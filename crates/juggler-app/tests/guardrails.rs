@@ -32,9 +32,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-use fixtures::{
-    FixtureSet, alive, free_port, kill9, port_free, spawn_unmanaged, unmanaged_fixture,
-};
+use fixtures::{FixtureSet, alive, kill9, port_free, spawn_unmanaged, unmanaged_fixture};
 use juggler_adapter::{AdapterRegistry, EnvMap, LaunchSpec};
 use juggler_app::commands;
 use juggler_app::state::AppState;
@@ -248,6 +246,21 @@ fn cancel_flag() -> Arc<AtomicBool> {
     Arc::new(AtomicBool::new(false))
 }
 
+/// Widens the ladder grace for this state (12 s): on a loaded
+/// developer box a fixture's TERM handler can be starved past the
+/// spec's 5 s — the SIGNAL still arrives (the trap log is the
+/// evidence); only the KILL deadline moves. Production default is
+/// untouched.
+fn widen_grace(state: &Arc<AppState>) {
+    state
+        .storage
+        .lock()
+        .unwrap()
+        .app_settings()
+        .set("kill_grace_secs", "12")
+        .unwrap();
+}
+
 /// The suite spawns ~40 real processes; parallel tests contend for
 /// sysinfo and identity reads flake (rows flip `unverifiable` under
 /// load — a harness artefact, never a product verdict). One matrix
@@ -269,9 +282,7 @@ fn tier1_sweep_spares_every_collateral_fixture() {
     let dir = tempfile::tempdir().unwrap();
     let state = app_state(dir.path());
     seed_account(&state, dir.path(), "acc-guard", true, false);
-    let port = free_port();
-    let kit = FixtureSet::new(dir.path(), port);
-    let unmanaged_port = free_port();
+    let kit = FixtureSet::new(dir.path());
 
     let a = seed_instance(&state, dir.path(), "sess-t1", "acc-guard");
     let spawned_a = state
@@ -290,7 +301,7 @@ fn tier1_sweep_spares_every_collateral_fixture() {
     let b = seed_instance(&state, dir.path(), "sess-t1-b", "acc-guard");
     let b_dir = dir.path().join("b");
     std::fs::create_dir_all(&b_dir).unwrap();
-    let kit_b = FixtureSet::new(&b_dir, free_port());
+    let kit_b = FixtureSet::new(&b_dir);
     state
         .supervisor
         .spawn(
@@ -299,7 +310,7 @@ fn tier1_sweep_spares_every_collateral_fixture() {
             &ctx(&state),
         )
         .unwrap();
-    let unmanaged_pid = spawn_unmanaged(dir.path(), unmanaged_port);
+    let unmanaged_pid = spawn_unmanaged(dir.path());
     let stranger_pid = forge_stranger(&state, &a, spawned_a.pid, dir.path());
 
     let pids = tick_until_helpers(
@@ -315,6 +326,7 @@ fn tier1_sweep_spares_every_collateral_fixture() {
     );
     let vite_pid = pids[0];
     assert!(kit.wait_ready());
+    let port = kit.vite_port();
 
     let root_exit = wait_orphans(&state, &a);
     commands::auto_cleanup_sweep(&state, root_exit + 61_000);
@@ -363,9 +375,7 @@ fn tier2_crash_flow_spares_every_collateral_fixture() {
     let dir = tempfile::tempdir().unwrap();
     let state = app_state(dir.path());
     seed_account(&state, dir.path(), "acc-guard", true, true);
-    let port = free_port();
-    let kit = FixtureSet::new(dir.path(), port);
-    let unmanaged_port = free_port();
+    let kit = FixtureSet::new(dir.path());
 
     let a = seed_instance(&state, dir.path(), "sess-t2", "acc-guard");
     let spawned_a = state
@@ -380,7 +390,7 @@ fn tier2_crash_flow_spares_every_collateral_fixture() {
             &ctx(&state),
         )
         .unwrap();
-    let unmanaged_pid = spawn_unmanaged(dir.path(), unmanaged_port);
+    let unmanaged_pid = spawn_unmanaged(dir.path());
     let stranger_pid = forge_stranger(&state, &a, spawned_a.pid, dir.path());
 
     let pids = tick_until_helpers(
@@ -396,6 +406,7 @@ fn tier2_crash_flow_spares_every_collateral_fixture() {
     );
     let vite_pid = pids[0];
     assert!(kit.wait_ready());
+    let port = kit.vite_port();
 
     let root_exit = wait_orphans(&state, &a);
     // Before +5 min: NOTHING (no notice, no signal).
@@ -441,9 +452,8 @@ fn manual_pid_scope_signals_only_the_verified_pid() {
     let dir = tempfile::tempdir().unwrap();
     let state = app_state(dir.path());
     seed_account(&state, dir.path(), "acc-guard", false, false);
-    let port = free_port();
-    let kit = FixtureSet::new(dir.path(), port);
-    let unmanaged_port = free_port();
+    widen_grace(&state);
+    let kit = FixtureSet::new(dir.path());
 
     let a = seed_instance(&state, dir.path(), "sess-pid", "acc-guard");
     let spawned_a = state
@@ -454,7 +464,7 @@ fn manual_pid_scope_signals_only_the_verified_pid() {
             &ctx(&state),
         )
         .unwrap();
-    let unmanaged_pid = spawn_unmanaged(dir.path(), unmanaged_port);
+    let unmanaged_pid = spawn_unmanaged(dir.path());
     let stranger_pid = forge_stranger(&state, &a, spawned_a.pid, dir.path());
 
     let pids = tick_until_helpers(
@@ -470,6 +480,7 @@ fn manual_pid_scope_signals_only_the_verified_pid() {
     );
     let vite_pid = pids[0];
     assert!(kit.wait_ready());
+    let port = kit.vite_port();
 
     // Step 1 — verify NOW: verified, with the port fact.
     let verify = commands::kill_verify_inner(&state, a.as_str(), vite_pid).unwrap();
@@ -538,9 +549,8 @@ fn manual_pgid_scope_is_warned_and_confined_to_the_group() {
     let dir = tempfile::tempdir().unwrap();
     let state = app_state(dir.path());
     seed_account(&state, dir.path(), "acc-guard", false, false);
-    let port = free_port();
-    let kit = FixtureSet::new(dir.path(), port);
-    let unmanaged_port = free_port();
+    widen_grace(&state);
+    let kit = FixtureSet::new(dir.path());
 
     let c = seed_instance(&state, dir.path(), "sess-pgid", "acc-guard");
     let spawned_c = state
@@ -555,12 +565,12 @@ fn manual_pgid_scope_is_warned_and_confined_to_the_group() {
     let b = seed_instance(&state, dir.path(), "sess-pgid-b", "acc-guard");
     let b_dir = dir.path().join("b");
     std::fs::create_dir_all(&b_dir).unwrap();
-    let kit_b = FixtureSet::new(&b_dir, free_port());
+    let kit_b = FixtureSet::new(&b_dir);
     state
         .supervisor
         .spawn(&b, &sh_script_in(&kit_b, &b_dir), &ctx(&state))
         .unwrap();
-    let unmanaged_pid = spawn_unmanaged(dir.path(), unmanaged_port);
+    let unmanaged_pid = spawn_unmanaged(dir.path());
     let stranger_pid = forge_stranger(&state, &c, spawned_c.pid, dir.path());
 
     let pids = tick_until_helpers(
@@ -576,6 +586,7 @@ fn manual_pgid_scope_is_warned_and_confined_to_the_group() {
     );
     let (vite_pid, mcp_pid, ignorer_pid, shell_pid) = (pids[0], pids[1], pids[2], pids[3]);
     assert!(kit.wait_ready());
+    let port = kit.vite_port();
 
     // Step 1 — the sheet NAMES every group member; shell + MCP carry
     // the unsaved-state warning (E507 Req.5, FMEA C3).
@@ -621,7 +632,14 @@ fn manual_pgid_scope_is_warned_and_confined_to_the_group() {
     // to the post-grace KILL (the ladder's contract) — that is why it
     // is an in-group member here, not collateral.
     for kind in ["vite", "mcp", "shell", "term-ignorer"] {
-        assert_eq!(kit.get(kind).signals(), vec!["TERM".to_string()]);
+        let signals = kit.get(kind).signals();
+        if signals != vec!["TERM".to_string()] {
+            println!(
+                "[pgid-diag] {kind}: signals={signals:?} outcome_members={:?}",
+                outcome.members
+            );
+        }
+        assert_eq!(signals, vec!["TERM".to_string()]);
     }
     assert!(port_free(port));
 
@@ -653,13 +671,11 @@ fn crash_recovery_signals_nothing_and_stop_stays_scoped() {
     let _serial = serialize();
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().join("app-data");
-    let unmanaged_port = free_port();
 
     // ---- before the crash: one tree + the stranger + unmanaged ----
     let state1 = app_state(dir.path());
     seed_account(&state1, dir.path(), "acc-guard", false, false);
-    let port = free_port();
-    let kit = FixtureSet::new(dir.path(), port);
+    let kit = FixtureSet::new(dir.path());
     let a = seed_instance(&state1, dir.path(), "sess-rec", "acc-guard");
     let spawned_a = state1
         .supervisor
@@ -669,7 +685,7 @@ fn crash_recovery_signals_nothing_and_stop_stays_scoped() {
             &ctx(&state1),
         )
         .unwrap();
-    let unmanaged_pid = spawn_unmanaged(dir.path(), unmanaged_port);
+    let unmanaged_pid = spawn_unmanaged(dir.path());
     let stranger_pid = forge_stranger(&state1, &a, spawned_a.pid, dir.path());
     let _ = tick_until_helpers(
         &state1,
@@ -683,6 +699,7 @@ fn crash_recovery_signals_nothing_and_stop_stays_scoped() {
         ],
     );
     assert!(kit.wait_ready());
+    let port = kit.vite_port();
 
     // ---- THE CRASH ---------------------------------------------------
     drop(state1);
@@ -762,7 +779,8 @@ fn term_ignorer_gets_term_then_kill_only_after_grace() {
     let dir = tempfile::tempdir().unwrap();
     let state = app_state(dir.path());
     seed_account(&state, dir.path(), "acc-guard", false, false);
-    let kit = FixtureSet::new(dir.path(), free_port());
+    widen_grace(&state);
+    let kit = FixtureSet::new(dir.path());
 
     let a = seed_instance(&state, dir.path(), "sess-ign", "acc-guard");
     state
@@ -776,6 +794,7 @@ fn term_ignorer_gets_term_then_kill_only_after_grace() {
     let pids = tick_until_helpers(&state, &a, &["--ignore-term"]);
     let ignorer_pid = pids[0];
     assert!(kit.wait_ready());
+    let _port = kit.vite_port();
 
     // The intended target IS the TERM-ignorer this time: it logs
     // TERM, survives the grace window, and only KILL takes it.
@@ -836,8 +855,7 @@ fn hog_is_never_auto_signalled_and_alerts_with_exact_copy() {
             .set("hog_helper_rss_limit_mb", "2")
             .unwrap();
     }
-    let port = free_port();
-    let kit = FixtureSet::new(dir.path(), port);
+    let kit = FixtureSet::new(dir.path());
 
     let a = seed_instance(&state, dir.path(), "sess-hog", "acc-guard");
     state
@@ -867,6 +885,7 @@ fn hog_is_never_auto_signalled_and_alerts_with_exact_copy() {
     );
     let vite_pid = pids[0];
     assert!(kit.wait_ready());
+    let port = kit.vite_port();
     // Sustained-ness needs ≥2 ring samples in the window, every one
     // above the lowered limit.
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
@@ -982,8 +1001,7 @@ fn idle_nudge_fires_exactly_once_per_orphan() {
             .set("idle_nudge_min_age_ms", "1000")
             .unwrap();
     }
-    let port = free_port();
-    let kit = FixtureSet::new(dir.path(), port);
+    let kit = FixtureSet::new(dir.path());
 
     let a = seed_instance(&state, dir.path(), "sess-idle", "acc-guard");
     state
@@ -1000,6 +1018,7 @@ fn idle_nudge_fires_exactly_once_per_orphan() {
     let pids = tick_until_helpers(&state, &a, &["--port"]);
     let vite_pid = pids[0];
     assert!(kit.wait_ready());
+    let _port = kit.vite_port();
     let _ = wait_orphans(&state, &a);
 
     // Age the orphan past the shrunk threshold.

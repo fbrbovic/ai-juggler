@@ -1,70 +1,71 @@
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.65s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
      Running tests/guardrails.rs (target/debug/deps/guardrails-c90369156e7ed3c0)
 
 running 8 tests
-kill: 33913: No such process
+[recovery-collateral] RecoverySummaryInfo { summary: "1 Instances re-adopted, 0 helpers left behind, 1 processes could not be verified and were left alone.", adopted: 1, left_behind: 0, unverifiable: 1 }
+[recovery-pre-stop] pid=Some(87084) role=root state=running exe=/bin/sh alive=true
+[recovery-pre-stop] pid=Some(87086) role=helper state=running exe=/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python alive=true
+[recovery-pre-stop] pid=Some(87088) role=helper state=running exe=/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python alive=true
+[recovery-pre-stop] pid=Some(87089) role=helper state=running exe=/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python alive=true
+[recovery-pre-stop] pid=Some(87090) role=helper state=running exe=/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python alive=true
+[recovery-pre-stop] pid=Some(87091) role=helper state=running exe=/bin/bash alive=true
+[recovery-pre-stop] pid=Some(87094) role=helper state=running exe=/bin/sleep alive=true
+[recovery-pre-stop] pid=Some(87096) role=helper state=unverifiable exe=/bin/python3 alive=true
+[recovery-collateral] adopted stop scoped to the group; escapee/stranger/unmanaged: zero signals
+kill: 87084: No such process
+kill: 87086: No such process
+kill: 87088: No such process
+kill: 87090: No such process
+kill: 87091: No such process
+kill: 87094: No such process
+kill: 87096: No such process
+test crash_recovery_signals_nothing_and_stop_stays_scoped ... ok
+kill: 87247: No such process
 [hog] alert text: Python under acc-guard holds 11 MiB — review in Cleanup Centre.
-kill: 33913: No such process
-kill: 33916: No such process
-kill: 33914: No such process
-kill: 33917: No such process
+kill: 87247: No such process
+kill: 87250: No such process
+kill: 87248: No such process
+kill: 87251: No such process
 test hog_is_never_auto_signalled_and_alerts_with_exact_copy ... ok
-ai-juggler: pid 35512 failed re-verification — flipped unverifiable
-kill: 35494: No such process
-[tier1-collateral] vite 35494 TERMed + port free; stranger 35512, unmanaged 35497, neighbour, mcp/shell/ignorer/escapee: zero signals
-kill: 35494: No such process
-test tier1_sweep_spares_every_collateral_fixture ... ok
-ai-juggler: pid 36134 failed re-verification — flipped unverifiable
-kill: 36121: No such process
-[tier2-collateral] vite 36121 TERMed after notice+lapse; stranger/unmanaged/mcp/shell/ignorer/escapee: zero signals
-kill: 36121: No such process
-test tier2_crash_flow_spares_every_collateral_fixture ... ok
-kill: 36374: No such process
-kill: 36380: No such process
-kill: 36382: No such process
-kill: 36375: No such process
-[manual-pgid] confirmed group only (36374/36380/36382); escapee, neighbour, stranger, unmanaged: zero signals
-kill: 36374: No such process
-kill: 36380: No such process
-kill: 36375: No such process
-kill: 36382: No such process
-test manual_pgid_scope_is_warned_and_confined_to_the_group ... ok
-test crash_recovery_signals_nothing_and_stop_stays_scoped has been running for over 60 seconds
-test idle_nudge_fires_exactly_once_per_orphan has been running for over 60 seconds
+[idle] nudge text: Python has been idle for 0m — review it in the Cleanup Centre.
+kill: 87620: No such process
+test idle_nudge_fires_exactly_once_per_orphan ... ok
+test manual_pgid_scope_is_warned_and_confined_to_the_group has been running for over 60 seconds
 test manual_pid_scope_signals_only_the_verified_pid has been running for over 60 seconds
 test term_ignorer_gets_term_then_kill_only_after_grace has been running for over 60 seconds
-[idle] nudge text: Python has been idle for 0m — review it in the Cleanup Centre.
-kill: 37122: No such process
-test idle_nudge_fires_exactly_once_per_orphan ... ok
-kill: 37583: No such process
-[term-ignorer] 37583: TERM logged, survived grace, KILLed; collateral zero signals
-kill: 37583: No such process
-test term_ignorer_gets_term_then_kill_only_after_grace ... ok
-kill: 38377: No such process
-[manual-pid] vite 38377 only; same-group shell/mcp, stranger, unmanaged: zero signals
-kill: 38377: No such process
-kill: 38381: No such process
-kill: 38379: No such process
-kill: 38382: No such process
+test tier1_sweep_spares_every_collateral_fixture has been running for over 60 seconds
+test tier2_crash_flow_spares_every_collateral_fixture has been running for over 60 seconds
+kill: 87862: No such process
+kill: 87869: No such process
+kill: 87871: No such process
+kill: 87864: No such process
+[manual-pgid] confirmed group only (87862/87869/87871); escapee, neighbour, stranger, unmanaged: zero signals
+kill: 87862: No such process
+kill: 87869: No such process
+kill: 87864: No such process
+kill: 87871: No such process
+test manual_pgid_scope_is_warned_and_confined_to_the_group ... ok
+kill: 88767: No such process
+[manual-pid] vite 88767 only; same-group shell/mcp, stranger, unmanaged: zero signals
+kill: 88767: No such process
+kill: 88771: No such process
+kill: 88769: No such process
+kill: 88772: No such process
 test manual_pid_scope_signals_only_the_verified_pid ... ok
-[recovery-collateral] RecoverySummaryInfo { summary: "1 Instances re-adopted, 0 helpers left behind, 1 processes could not be verified and were left alone.", adopted: 1, left_behind: 0, unverifiable: 1 }
-[recovery-pre-stop] pid=Some(38509) role=root state=running exe=/bin/sh alive=true
-[recovery-pre-stop] pid=Some(38511) role=helper state=running exe=/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python alive=true
-[recovery-pre-stop] pid=Some(38513) role=helper state=running exe=/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python alive=true
-[recovery-pre-stop] pid=Some(38514) role=helper state=running exe=/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python alive=true
-[recovery-pre-stop] pid=Some(38515) role=helper state=running exe=/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python alive=true
-[recovery-pre-stop] pid=Some(38516) role=helper state=running exe=/bin/bash alive=true
-[recovery-pre-stop] pid=Some(38520) role=helper state=running exe=/bin/sleep alive=true
-[recovery-pre-stop] pid=Some(38527) role=helper state=unverifiable exe=/bin/python3 alive=true
-[recovery-collateral] adopted stop scoped to the group; escapee/stranger/unmanaged: zero signals
-kill: 38509: No such process
-kill: 38511: No such process
-kill: 38513: No such process
-kill: 38515: No such process
-kill: 38516: No such process
-kill: 38520: No such process
-kill: 38527: No such process
-test crash_recovery_signals_nothing_and_stop_stays_scoped ... ok
+kill: 88873: No such process
+[term-ignorer] 88873: TERM logged, survived grace, KILLed; collateral zero signals
+kill: 88873: No such process
+test term_ignorer_gets_term_then_kill_only_after_grace ... ok
+ai-juggler: pid 88980 failed re-verification — flipped unverifiable
+kill: 88963: No such process
+[tier1-collateral] vite 88963 TERMed + port free; stranger 88980, unmanaged 88966, neighbour, mcp/shell/ignorer/escapee: zero signals
+kill: 88963: No such process
+test tier1_sweep_spares_every_collateral_fixture ... ok
+ai-juggler: pid 89103 failed re-verification — flipped unverifiable
+kill: 89092: No such process
+[tier2-collateral] vite 89092 TERMed after notice+lapse; stranger/unmanaged/mcp/shell/ignorer/escapee: zero signals
+kill: 89092: No such process
+test tier2_crash_flow_spares_every_collateral_fixture ... ok
 
-test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 82.92s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 96.60s
 

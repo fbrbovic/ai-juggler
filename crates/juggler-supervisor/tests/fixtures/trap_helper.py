@@ -63,14 +63,19 @@ def handler(name):
 for name in TRAPPED:
     signal.signal(getattr(signal, "SIG" + name), handler(name))
 
+bound_port = 0
 if args.port is not None:
+    # Port 0 = let the OS assign — the ready file then carries the
+    # BOUND port, killing the probe-then-bind race entirely (CI
+    # runners recycle ephemeral ports between the two syscalls).
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(("127.0.0.1", args.port))
     sock.listen(8)
+    bound_port = sock.getsockname()[1]
 
 with open(args.ready, "w") as handle:
-    handle.write("ready\n")
+    handle.write(f"{bound_port}\n")
 
 # 5-minute cap: fixtures outlive every suite, and a tree leaked by a
 # failing test self-cleans instead of lingering for an hour.

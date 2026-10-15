@@ -4635,7 +4635,10 @@ pub fn kill_execute_as(
     // Guardrail 3 — the ladder itself (cancellable through grace).
     let cancel = std::sync::Arc::clone(cancel_flag);
     let outcome = juggler_supervisor::terminate_group(
-        std::time::Duration::from_secs(KILL_GRACE_SECS),
+        // AJ-E512: settings-backed (default the spec's 5 s) so the
+        // collateral suites can widen it on loaded machines — a starved
+        // fixture's TERM handler must land inside the grace window.
+        std::time::Duration::from_secs(setting_u64(state, "kill_grace_secs", KILL_GRACE_SECS)),
         move || members,
         move || cancel.load(std::sync::atomic::Ordering::Relaxed),
     );

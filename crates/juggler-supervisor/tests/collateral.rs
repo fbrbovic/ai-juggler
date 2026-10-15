@@ -25,7 +25,7 @@ mod fixtures;
 use std::sync::Arc;
 use std::time::Duration;
 
-use fixtures::{FixtureSet, alive, free_port, port_free, spawn_unmanaged, unmanaged_fixture};
+use fixtures::{FixtureSet, alive, port_free, spawn_unmanaged, unmanaged_fixture};
 use juggler_adapter::{EnvMap, LaunchSpec};
 use juggler_core::model::SessionId;
 use juggler_supervisor::tree::{CoreLedgerStore, LedgerStore};
@@ -62,9 +62,7 @@ fn helper_pid_by(ledger: &Arc<dyn LedgerStore>, session: &SessionId, needle: &st
 #[test]
 fn stop_signals_only_the_own_group_and_kills_survivors_after_grace() {
     let dir = tempfile::tempdir().unwrap();
-    let port = free_port();
-    let kit = FixtureSet::new(dir.path(), port);
-    let unmanaged_port = free_port();
+    let kit = FixtureSet::new(dir.path());
 
     let ledger: Arc<dyn LedgerStore> = Arc::new(CoreLedgerStore::new(
         juggler_core::storage::ProcessLedgerRepo::open_in_memory().unwrap(),
@@ -86,7 +84,7 @@ fn stop_signals_only_the_own_group_and_kills_survivors_after_grace() {
     let b = SessionId::new("sess-b");
     let b_dir = dir.path().join("b");
     std::fs::create_dir_all(&b_dir).unwrap();
-    let kit_b = FixtureSet::new(&b_dir, free_port());
+    let kit_b = FixtureSet::new(&b_dir);
     let _spawned_b = supervisor
         .spawn(
             &b,
@@ -95,7 +93,7 @@ fn stop_signals_only_the_own_group_and_kills_survivors_after_grace() {
         )
         .unwrap();
     // The unmanaged user server: ours to observe, never ours to signal.
-    let unmanaged_pid = spawn_unmanaged(dir.path(), unmanaged_port);
+    let unmanaged_pid = spawn_unmanaged(dir.path());
 
     // Discover the fixture pids through the ledger (ticks land the
     // helper rows).
@@ -116,6 +114,7 @@ fn stop_signals_only_the_own_group_and_kills_survivors_after_grace() {
         std::thread::sleep(Duration::from_millis(250));
     };
     assert!(kit.wait_ready(), "in-tree fixtures ready");
+    let port = kit.vite_port();
 
     // THE STOP: 2 s grace — the TERM-ignorer deliberately survives it.
     supervisor.stop(&a, Duration::from_secs(2)).unwrap();
