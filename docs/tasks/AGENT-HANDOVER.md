@@ -99,6 +99,9 @@ Process (this task system):
 4. Run the gates the task names (`just verify`, `cargo test
    --workspace`, `pnpm --dir ui build`, visual/a11y suites as they
    land). A red gate is a finding, not an obstacle to route around.
+   BATCH them (maintainer directive 2026-10-13): affected suites only
+   while iterating; ONE full chunked pass just before the PR — see
+   IMPLEMENTATION-AGENT-PROMPT.md §5 "Test batching strategy".
 5. Store evidence as you go (AJ-E801 manifest), including failures;
    a failed run with analysis beats a curated green one.
 6. Flip to `DONE-EVIDENCED` only with evidence links in the same PR.

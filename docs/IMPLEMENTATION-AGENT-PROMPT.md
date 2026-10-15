@@ -175,6 +175,20 @@ Process:
    (AJ-E802/E803), a11y (AJ-E804) and performance (AJ-E805) proofs
    as those land. A red gate is a finding to fix, never to route
    around.
+
+   **Test batching strategy (maintainer directive, 2026-10-13 —
+   do NOT run the full workspace suite repeatedly):** while
+   iterating, run ONLY the directly-affected suites
+   (`cargo test -p <crate> --test <file>` for the files you
+   touched, plus `cargo check`/`clippy` for the crate) and the
+   matching UI file's `vitest run`. Run exactly ONE full pass —
+   `just verify` equivalents (fmt, clippy `-D warnings`, all
+   workspace tests, doc, evidence, terminology) chunked per test
+   binary on the CLT machine (the desktop suite alone needs ~80 s;
+   a single `just verify` exceeds tool timeouts) — immediately
+   before the PR, never after every feature or fix inside a task.
+   CI re-runs everything on the PR anyway; local repetition is
+   pure latency.
 6. Store evidence as you go using the AJ-E801 manifest (requirement,
    command, threshold, observed result, PASS/FAIL, commit SHA, date,
    reviewer). Include failures with analysis.
