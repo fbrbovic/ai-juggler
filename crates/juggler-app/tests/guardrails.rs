@@ -316,13 +316,7 @@ fn tier1_sweep_spares_every_collateral_fixture() {
     let pids = tick_until_helpers(
         &state,
         &a,
-        &[
-            "--port",
-            "mcp-server",
-            "--ignore-term",
-            "sleep 300",
-            "--setsid",
-        ],
+        &["--port", "mcp-server", "--ignore-term", "touch", "--setsid"],
     );
     let vite_pid = pids[0];
     assert!(kit.wait_ready());
@@ -396,13 +390,7 @@ fn tier2_crash_flow_spares_every_collateral_fixture() {
     let pids = tick_until_helpers(
         &state,
         &a,
-        &[
-            "--port",
-            "mcp-server",
-            "--ignore-term",
-            "sleep 300",
-            "--setsid",
-        ],
+        &["--port", "mcp-server", "--ignore-term", "touch", "--setsid"],
     );
     let vite_pid = pids[0];
     assert!(kit.wait_ready());
@@ -470,13 +458,7 @@ fn manual_pid_scope_signals_only_the_verified_pid() {
     let pids = tick_until_helpers(
         &state,
         &a,
-        &[
-            "--port",
-            "mcp-server",
-            "--ignore-term",
-            "sleep 300",
-            "--setsid",
-        ],
+        &["--port", "mcp-server", "--ignore-term", "touch", "--setsid"],
     );
     let vite_pid = pids[0];
     assert!(kit.wait_ready());
@@ -576,13 +558,7 @@ fn manual_pgid_scope_is_warned_and_confined_to_the_group() {
     let pids = tick_until_helpers(
         &state,
         &c,
-        &[
-            "--port",
-            "mcp-server",
-            "--ignore-term",
-            "sleep 300",
-            "--setsid",
-        ],
+        &["--port", "mcp-server", "--ignore-term", "touch", "--setsid"],
     );
     let (vite_pid, mcp_pid, ignorer_pid, shell_pid) = (pids[0], pids[1], pids[2], pids[3]);
     assert!(kit.wait_ready());
@@ -690,13 +666,7 @@ fn crash_recovery_signals_nothing_and_stop_stays_scoped() {
     let _ = tick_until_helpers(
         &state1,
         &a,
-        &[
-            "--port",
-            "mcp-server",
-            "--ignore-term",
-            "sleep 300",
-            "--setsid",
-        ],
+        &["--port", "mcp-server", "--ignore-term", "touch", "--setsid"],
     );
     assert!(kit.wait_ready());
     let port = kit.vite_port();
@@ -875,13 +845,7 @@ fn hog_is_never_auto_signalled_and_alerts_with_exact_copy() {
     let pids = tick_until_helpers(
         &state,
         &a,
-        &[
-            "--port",
-            "mcp-server",
-            "--ignore-term",
-            "sleep 300",
-            "--setsid",
-        ],
+        &["--port", "mcp-server", "--ignore-term", "touch", "--setsid"],
     );
     let vite_pid = pids[0];
     assert!(kit.wait_ready());

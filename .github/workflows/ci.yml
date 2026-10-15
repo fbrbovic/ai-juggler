@@ -104,10 +104,11 @@ jobs:
       - name: Collateral suite (AJ-E512)
         run: |
           cargo test -p juggler-supervisor --test collateral
-          # The app test binary links the Swift bridge; the runner's
-          # Xcode toolchain provides libswift_Concurrency.dylib at
-          # dyld time via the fallback path (no rebuild needed).
-          DYLD_FALLBACK_LIBRARY_PATH="/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macosx" \
+          # The app test binary links the Swift bridge; cargo STRIPS
+          # DYLD_* from spawned processes, so the runner's Xcode swift
+          # dir is baked in as an rpath at link time instead (the CI
+          # analogue of scripts/ensure_swift_runtime.sh).
+          RUSTFLAGS="-C link-arg=-Wl,-rpath,/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macosx" \
             cargo test -p juggler-app --test guardrails
 
   build-linux:

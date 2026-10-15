@@ -103,7 +103,7 @@ fn stop_signals_only_the_own_group_and_kills_survivors_after_grace() {
         let vite = helper_pid_by(&ledger, &a, "--port");
         let ignorer = helper_pid_by(&ledger, &a, "--ignore-term");
         let mcp = helper_pid_by(&ledger, &a, "mcp-server");
-        let shell = helper_pid_by(&ledger, &a, "sleep 300");
+        let shell = helper_pid_by(&ledger, &a, "touch");
         if let (Some(vite), Some(ignorer), Some(mcp), Some(shell)) = (vite, ignorer, mcp, shell) {
             break (vite, ignorer, mcp, shell);
         }
@@ -115,6 +115,31 @@ fn stop_signals_only_the_own_group_and_kills_survivors_after_grace() {
     };
     assert!(kit.wait_ready(), "in-tree fixtures ready");
     let port = kit.vite_port();
+
+    // Diagnostics (CI debugging): the root's captured output (a
+    // fixture crashing at startup prints here), per-fixture readiness
+    // and liveness, and the ledger rows before the stop.
+    {
+        let out = supervisor.output(&a).unwrap_or_default();
+        println!(
+            "[collateral-diag] root output ({} bytes): {:?}",
+            out.len(),
+            String::from_utf8_lossy(&out)
+        );
+        for kind in ["vite", "term-ignorer", "escapee", "mcp"] {
+            let ready = kit.get(kind).ready.exists();
+            println!("[collateral-diag] {kind}: ready={ready}");
+        }
+        for row in ledger.session_rows(&a).unwrap_or_default() {
+            println!(
+                "[collateral-diag] row pid={:?} role={} state={} alive={}",
+                row.pid,
+                row.role,
+                row.state,
+                row.pid.map(alive).unwrap_or(false)
+            );
+        }
+    }
 
     // THE STOP: 2 s grace — the TERM-ignorer deliberately survives it.
     supervisor.stop(&a, Duration::from_secs(2)).unwrap();
@@ -132,6 +157,12 @@ fn stop_signals_only_the_own_group_and_kills_survivors_after_grace() {
         fixtures::wait_for(6_000, || !alive(ignorer)),
         "TERM-ignorer taken by the post-grace KILL"
     );
+    if kit.get("vite").signals() != vec!["TERM".to_string()] {
+        println!(
+            "[collateral-diag] vite signals={:?} (root output above)",
+            kit.get("vite").signals()
+        );
+    }
     assert_eq!(kit.get("vite").signals(), vec!["TERM".to_string()]);
     assert_eq!(kit.get("shell").signals(), vec!["TERM".to_string()]);
     assert_eq!(kit.get("term-ignorer").signals(), vec!["TERM".to_string()]);
