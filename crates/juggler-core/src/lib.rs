@@ -16,6 +16,7 @@ pub mod error;
 pub mod fs;
 pub mod model;
 pub mod quality;
+pub mod quota;
 pub mod renewal;
 pub mod storage;
 

@@ -183,7 +183,7 @@ UTC+8 (zcode.md:16); fixtures must state timezone or credit maths is unverifiabl
 
 
 *Implementation mapping (recorded in this task's PR per the claiming protocol)*: evidence packet `docs/research/evidence/billing/zcode-captures.md` + `zcode-recompute.py` (60-line read-only script; ±0 hand-check) — model_usage verified across two days; the published formula/tiers/off-peak re-verified dated 2026-10-15 (unchanged; NEW: MCP tool calls bill at output ×1.2 — script gap recorded); the bucket→column mapping stated as inferred (computed_total = input + output pins input as all-inclusive); clone-first probe with zero writes (the running app's own WAL explains mtime movement); pool totals Estimate-at-best vs user-entered caps; renewal negative; addendum appended to zcode.md §B8.
-### AJ-E605 Gemini CLI billing, quota & renewal-date investigation | Status: TODO | Priority P1 | Effort M | Depends: AJ-E601
+### AJ-E605 Gemini CLI billing, quota & renewal-date investigation | Status: DONE-EVIDENCED | Priority P1 | Effort M | Depends: AJ-E601
 **Goal**: Create the missing Gemini research baseline: what Gemini CLI / Google AI plans expose
 locally or via documented APIs for quota, usage, cost, and renewal dates, graded under AJ-E601
 (expected starting state: unverified, pass2/09 U-4).
@@ -221,7 +221,24 @@ assumptions. Reviewer reproduces one graded claim from the cited doc/capture.
 of a quota API — account switching ≠ usage telemetry. Successor Providers reuse this file's
 structure via AJ-E601; add a section, don't fork the protocol.
 
-### AJ-E606 Two-clock quota engine: window maths + subscription clock domain model | Status: TODO | Priority P0 | Effort L | Depends: AJ-E602, AJ-E603, AJ-E604
+
+**Status report (2026-10-16)**: DONE-EVIDENCED — evidence
+`docs/qa/evidence/AJ-E605/manifest.md`; packet
+`docs/research/evidence/billing/gemini-captures.md`; baseline
+`docs/research/gemini.md`. Headline verified fact: Gemini CLI was
+SUNSET for individual users 2026-06-18 (moved to closed-source
+Antigravity CLI) — the open-source CLI serves API-key/Vertex paths
+only. No install existed locally: docs-only packet with live items
+`unverified — no install` (the budget's documented passing outcome).
+D-12 renewal answer: ABSENT (5-surface negative log) → user-entered.
+Gemini quota renders unavailable-with-reason (D-06); headroom unknown.
+
+**Implementation-mapping**: `docs/research/gemini.md` (new, 8
+sections incl. §7 Antigravity successor),
+`docs/research/evidence/billing/gemini-captures.md` (new),
+`docs/research/evidence/billing/README.md` (row). Zero product code.
+
+### AJ-E606 Two-clock quota engine: window maths + subscription clock domain model | Status: DONE-EVIDENCED | Priority P0 | Effort L | Depends: AJ-E602, AJ-E603, AJ-E604
 **Goal**: Implement the pure domain core that keeps the window clock (rolling 5h/weekly pools) and
 the subscription clock (renewal/expiry per D-12) as separate, testable models over one append-only
 event store, replacing today's empty `UsageSnapshot::default()` inserts (crates/juggler-app/src/commands.rs:706,1182).
@@ -274,6 +291,22 @@ model.rs:261-309 (TokenCounts/QuotaWindow/Confidence/UsageSnapshot); EPICS.md:91
 **Handover note**: Trap: bucketed hourly aggregation looks simpler and silently breaks rolling
 windows at boundaries — the property tests exist to catch exactly that. The subscription clock is
 deliberately boring (a date + provenance); resist "smart" inference — D-12 settled that. Forecast lives in AJ-E608, not here.
+
+
+**Status report (2026-10-16)**: DONE-EVIDENCED — evidence
+`docs/qa/evidence/AJ-E606/manifest.md`; gate section
+`docs/qa/gate-M3.md` (test output + module sizes + §Q8 timeline
+dump). Schema V18 additive; §Q3 boundary/monotone/cap/skew properties
+×256 green; D-12 isolation property green; dedupe contract pinned on
+the real store; the three UsageSnapshot insert sites migrated to
+`engine_usage_snapshot` (single representation).
+
+**Implementation-mapping**: `crates/juggler-core/src/quota.rs` (new),
+`crates/juggler-core/src/storage/usage.rs` (new) + storage/mod.rs
+(V18, UsageRepo, settings keys), `crates/juggler-core/tests/quota_windows.rs`
+(new), `crates/juggler-app/src/commands.rs` (engine_usage_snapshot at
+launch_session / desktop_launch_arc / session_handover_impl),
+`docs/qa/gate-M3.md` (new).
 
 ### AJ-E607 Ingest pipeline: statusline spool, transcript, rollout & SQLite sources | Status: TODO | Priority P0 | Effort L | Depends: AJ-E606, AJ-E602, AJ-E603, AJ-E604, AJ-E605
 **Goal**: Feed AJ-E606 from every sanctioned local source — Claude statusline spool + transcript

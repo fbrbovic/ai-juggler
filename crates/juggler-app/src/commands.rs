@@ -930,6 +930,113 @@ pub fn profile_delete(state: tauri::State<'_, Arc<AppState>>, profile_id: String
 /// Launches a session for a profile through the supervisor (one click on
 /// the UI side; the only writer of harness state is the harness itself,
 /// inside its managed dir).
+/// The account's usage snapshot from the two-clock engine (AJ-E606):
+/// the single producer of `UsageSnapshot.window` — every session
+/// insert site calls this, so quota state has exactly one
+/// representation. Until ingest (AJ-E607) feeds the store this is the
+/// honest zero (`window: None`, default confidence) — never an
+/// invented 0%. Errors degrade to the same honest zero (a broken
+/// quota read must never block launching).
+fn engine_usage_snapshot(
+    storage: &juggler_core::storage::Storage,
+    profile: &juggler_core::model::ProfileId,
+) -> juggler_core::model::UsageSnapshot {
+    use juggler_core::quota::{self, QuotaCap, SubscriptionClock, WindowKind};
+    use juggler_core::storage::{anchor_settings_key, cap_settings_key};
+
+    let account = match storage.profiles().get(profile) {
+        Ok(recipe) => recipe.account,
+        Err(_) => return juggler_core::model::UsageSnapshot::default(),
+    };
+    let account = account.as_str().to_string();
+    let Ok(account_row) = storage
+        .accounts()
+        .get(&juggler_core::model::AccountId::new(account.clone()))
+    else {
+        return juggler_core::model::UsageSnapshot::default();
+    };
+    let now_ms = Timestamp::now().millis();
+    let usage_repo = storage.usage();
+    let Ok(events) = usage_repo.events_for_account(&account, now_ms - quota::WEEK_MS) else {
+        return juggler_core::model::UsageSnapshot::default();
+    };
+    let samples = usage_repo.samples_for_account(&account).unwrap_or_default();
+    let settings = storage.app_settings();
+    let cap = |kind: WindowKind| -> QuotaCap {
+        settings
+            .get(&cap_settings_key(&account, kind))
+            .ok()
+            .flatten()
+            .map(|raw| QuotaCap::decode(&raw))
+            .unwrap_or_default()
+    };
+    let anchor = settings
+        .get(&anchor_settings_key(&account))
+        .ok()
+        .flatten()
+        .and_then(|raw| raw.parse::<i64>().ok());
+    let subscription = SubscriptionClock {
+        renewal_date: account_row.renewal_date.clone(),
+        entered_by_user: account_row.renewal_date.is_some(),
+        from_vendor_feed: false,
+    };
+    let evaluation = quota::evaluate_account(quota::AccountEvaluation {
+        events: &events,
+        samples: &samples,
+        account: &account,
+        cap_five_hour: cap(WindowKind::FiveHour),
+        cap_weekly: cap(WindowKind::Weekly { anchor_ms: anchor }),
+        weekly_anchor_ms: anchor,
+        subscription: &subscription,
+        now_ms,
+        today: epoch_today(now_ms),
+    });
+    // The session snapshot carries the 5 h pool (the pool a session
+    // draws down first); the weekly clock + renewal stay account-level
+    // surfaces (AccountInfo / AJ-E610). Unknown/Learning carry no
+    // percentage — the window stays absent rather than reading 0%.
+    let five_hour = evaluation.five_hour;
+    match five_hour.percentage {
+        Some(used) => juggler_core::model::UsageSnapshot {
+            tokens: juggler_core::model::TokenCounts::default(),
+            window: Some(juggler_core::model::QuotaWindow {
+                used_percentage: used,
+                resets_at: five_hour
+                    .resets_at
+                    .map(juggler_core::model::Timestamp::from_millis),
+            }),
+            confidence: five_hour.confidence,
+        },
+        None => juggler_core::model::UsageSnapshot::default(),
+    }
+}
+
+/// Today as a UTC calendar date (the engine's injected day; renewal
+/// rendering stays a UI concern per AJ-E411).
+fn epoch_today(now_ms: i64) -> juggler_core::renewal::CalendarDate {
+    civil_from_days(now_ms.div_euclid(24 * 60 * 60 * 1000))
+}
+
+/// Howard Hinnant's `civil_from_days` — the day count back to a
+/// proleptic-Gregorian date (mirrors renewal.rs's test-side inverse).
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn civil_from_days(z: i64) -> juggler_core::renewal::CalendarDate {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    juggler_core::renewal::CalendarDate {
+        year: if m <= 2 { y + 1 } else { y },
+        month: m as u32,
+        day: d as u32,
+    }
+}
+
 #[tauri::command]
 ///
 /// # Errors
@@ -1004,6 +1111,7 @@ pub fn launch_profile(
         let machine = local_machine_id(state);
         let storage = lock_storage_arc(state)?;
         let project = storage.projects().touch(&canonical_cwd, None)?;
+        let usage = engine_usage_snapshot(&storage, &profile.id);
         storage.sessions().insert(&SessionRecord {
             id: session_id.clone(),
             conversation: None,
@@ -1015,7 +1123,7 @@ pub fn launch_profile(
             status: SessionStatus::Starting,
             started_at: Timestamp::now(),
             last_activity: None,
-            usage: juggler_core::model::UsageSnapshot::default(),
+            usage,
             attention: None,
             running: None,
             // Terminal Instances own no window identity (AJ-E414).
@@ -1108,6 +1216,7 @@ pub fn desktop_launch_arc(state: &Arc<AppState>, account_id: &str) -> AppResult<
         let machine = local_machine_id(state);
         let storage = lock_storage_arc(state)?;
         let project = storage.projects().touch(&launch.cwd, None)?;
+        let usage = engine_usage_snapshot(&storage, &recipe_id);
         storage.sessions().insert(&SessionRecord {
             id: session_id.clone(),
             conversation: None,
@@ -1119,7 +1228,7 @@ pub fn desktop_launch_arc(state: &Arc<AppState>, account_id: &str) -> AppResult<
             status: SessionStatus::Starting,
             started_at: Timestamp::now(),
             last_activity: None,
-            usage: juggler_core::model::UsageSnapshot::default(),
+            usage,
             attention: None,
             running: None,
             // Window identity recorded at launch (AJ-E414 Req.2): the
@@ -2771,6 +2880,7 @@ pub fn session_handover_impl(
         handed.status = SessionStatus::HandedOver;
         storage.sessions().update(&handed)?;
         // The continuation session, linked to the same project.
+        let usage = engine_usage_snapshot(&storage, &profile_b.id);
         storage.sessions().insert(&SessionRecord {
             id: new_session.clone(),
             conversation: Some(juggler_core::model::ConversationId::new(native_id)),
@@ -2782,7 +2892,7 @@ pub fn session_handover_impl(
             status: SessionStatus::Starting,
             started_at: Timestamp::now(),
             last_activity: None,
-            usage: juggler_core::model::UsageSnapshot::default(),
+            usage,
             attention: None,
             running: None,
             window: None,
