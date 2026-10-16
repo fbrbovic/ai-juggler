@@ -225,9 +225,11 @@ impl AppState {
 #[must_use]
 pub fn default_registry() -> AdapterRegistry {
     let mut registry = AdapterRegistry::new();
-    registry.register(std::sync::Arc::new(
-        juggler_adapters::ClaudeCodeAdapter::new(),
-    ));
+    let claude = std::sync::Arc::new(juggler_adapters::ClaudeCodeAdapter::new());
+    registry.register(claude.clone());
+    // AJ-E204: the same adapter, coerced to the optional handover
+    // sub-trait (transplant mechanics live behind it).
+    registry.register_handover(claude);
     registry
 }
 

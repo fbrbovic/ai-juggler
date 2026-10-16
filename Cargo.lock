@@ -2216,6 +2216,8 @@ version = "0.0.1"
 dependencies = [
  "bitflags 2.13.2",
  "juggler-core",
+ "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.21",
 ]
 
@@ -2242,6 +2244,7 @@ dependencies = [
  "juggler-adapter",
  "juggler-adapters",
  "juggler-core",
+ "juggler-handover",
  "juggler-scap-init",
  "juggler-supervisor",
  "screencapturekit",
@@ -2274,6 +2277,7 @@ dependencies = [
 name = "juggler-handover"
 version = "0.0.1"
 dependencies = [
+ "juggler-adapter",
  "juggler-core",
  "serde",
  "serde_json",

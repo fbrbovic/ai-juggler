@@ -5,7 +5,7 @@
 //! matrix + user policy land with AJ-E208; the guard here is the
 //! floor that can never be switched off).
 
-use sha2::{Digest, Sha256};
+pub use juggler_adapter::handover::sha256_hex;
 
 /// One manifest row: a file the switch touched (or explicitly
 /// dropped), hashed and dispositioned. Mirrors
@@ -23,20 +23,6 @@ pub struct ManifestRow {
     pub kind: String,
     /// Disposition: `copy | translate | regenerate | drop`.
     pub disposition: String,
-}
-
-/// sha256 hex of `bytes`.
-#[must_use]
-pub fn sha256_hex(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let digest = hasher.finalize();
-    let mut out = String::with_capacity(64);
-    for byte in digest {
-        use std::fmt::Write as _;
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
 }
 
 /// A credential-pattern hit (values are NEVER captured — kind only,

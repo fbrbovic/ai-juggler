@@ -21,6 +21,9 @@ pub struct ParsedTranscript {
     pub lines_malformed: usize,
     /// Count per `type` field value (`"unknown"` when absent).
     pub kinds: BTreeMap<String, usize>,
+    /// Count per `type/subtype` pair (e.g. `system/compact_boundary`)
+    /// — the compaction scar lives in the subtype (AJ-E204 §H2.1).
+    pub subtypes: BTreeMap<String, usize>,
     /// Extracted conversation messages (user + assistant, in file order).
     pub messages: Vec<ParsedMessage>,
     /// Summed token usage across assistant messages.
@@ -81,6 +84,12 @@ pub fn parse_transcript(bytes: &[u8]) -> ParsedTranscript {
             .unwrap_or("unknown")
             .to_string();
         *parsed.kinds.entry(kind.clone()).or_default() += 1;
+        if let Some(subtype) = value.get("subtype").and_then(serde_json::Value::as_str) {
+            *parsed
+                .subtypes
+                .entry(format!("{kind}/{subtype}"))
+                .or_default() += 1;
+        }
         if (kind == "user" || kind == "assistant")
             && let Some(message) = extract_message(&value, &kind)
         {
@@ -197,9 +206,16 @@ impl ParsedTranscript {
     /// fidelity engine caps such sources at F2.
     #[must_use]
     pub fn has_compact_boundary(&self) -> bool {
-        self.kinds
-            .get("compact_boundary")
-            .is_some_and(|count| *count > 0)
+        // The verified line shape is `type:system,
+        // subtype:compact_boundary` (session-malformed.jsonl:6); a
+        // bare `compact_boundary` type is tolerated defensively.
+        self.subtypes
+            .iter()
+            .any(|(key, count)| key.ends_with("/compact_boundary") && *count > 0)
+            || self
+                .kinds
+                .get("compact_boundary")
+                .is_some_and(|count| *count > 0)
     }
 }
 

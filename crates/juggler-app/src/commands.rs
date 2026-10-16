@@ -3971,7 +3971,7 @@ pub fn session_handover_impl(
     target_profile_id: &str,
 ) -> AppResult<LaunchResult> {
     let (profile_b, account_b) = find_profile_with_account_arc(state, target_profile_id)?;
-    let (source, account_a) = handover_source(state, session_id)?;
+    let (source, _account_a) = handover_source(state, session_id)?;
     if source.project.is_none() {
         return Err(AppError::Io {
             context: "hand over",
@@ -3979,33 +3979,40 @@ pub fn session_handover_impl(
         });
     }
 
-    // The newest transcript for the source cwd in account A's config.
-    let encoded = source.cwd.to_string_lossy().replace('/', "-");
-    let dir_a = account_a.state_dir.join("projects").join(&encoded);
-    let transcript = newest_jsonl(&dir_a).ok_or_else(|| AppError::Io {
+    // F-H-01: the source resolves via the instance's transcript_ref
+    // — never newest-mtime guessing. A missing ref is the honest
+    // "pick it" stop.
+    let reference = source.transcript_ref.clone().ok_or_else(|| AppError::Io {
         context: "hand over",
-        message: "no transcript found for this session's project".into(),
+        message: "Couldn't tell which file is this session — pick it".into(),
     })?;
-    let native_id = transcript
-        .file_stem()
-        .map(|stem| stem.to_string_lossy().into_owned())
+
+    // AJ-E204: tier logic lives in the engine (deep/09 D3) — this
+    // command parses args, calls it, and emits. The bundle copies the
+    // FULL sibling set (credentials never involved), the target dir
+    // is discovered by embedded cwd, and an id collision forks.
+    let support = state
+        .registry
+        .handover(&account_b.harness)
         .ok_or_else(|| AppError::Io {
             context: "hand over",
-            message: "transcript has no session id".into(),
+            message: format!(
+                "{} has no transplant support — replay/pack only",
+                account_b.harness
+            ),
         })?;
-
-    // Transplant: same encoded subpath under account B (same cwd → same
-    // encoding), byte copy, credentials never involved.
-    let dir_b = account_b.state_dir.join("projects").join(&encoded);
-    std::fs::create_dir_all(&dir_b).map_err(|e| AppError::Io {
-        context: "hand over",
-        message: format!("cannot create target dir: {e}"),
-    })?;
-    let dest = dir_b.join(transcript.file_name().unwrap_or_default());
-    std::fs::copy(&transcript, &dest).map_err(|e| AppError::Io {
-        context: "hand over",
-        message: format!("cannot copy transcript: {e}"),
-    })?;
+    let outcome = juggler_handover::transplant::hand_over(support.as_ref(), &reference, &account_b)
+        .map_err(|error| AppError::Io {
+            context: "hand over",
+            message: error.to_string(),
+        })?;
+    let native_id = outcome
+        .install
+        .reference
+        .native_id
+        .clone()
+        .unwrap_or_default();
+    let dest = outcome.install.reference.path.clone();
 
     // Resume under account B in the same project directory.
     let adapter = state
@@ -4047,7 +4054,7 @@ pub fn session_handover_impl(
         let usage = engine_usage_snapshot(&storage, &profile_b.id);
         storage.sessions().insert(&SessionRecord {
             id: new_session.clone(),
-            conversation: Some(juggler_core::model::ConversationId::new(native_id)),
+            conversation: Some(juggler_core::model::ConversationId::new(native_id.clone())),
             profile: profile_b.id,
             machine: machine.clone(),
             kind: juggler_core::model::InstanceKind::Terminal,
@@ -4062,7 +4069,7 @@ pub fn session_handover_impl(
             window: None,
             transcript_ref: Some(juggler_core::model::TranscriptRef {
                 path: dest,
-                native_id: None,
+                native_id: Some(native_id),
             }),
         })?;
     }

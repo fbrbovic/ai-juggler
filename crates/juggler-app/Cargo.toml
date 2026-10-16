@@ -16,6 +16,7 @@ dirs = "7.0.0"
 juggler-adapter = { version = "0.0.1", path = "../juggler-adapter" }
 juggler-adapters = { version = "0.0.1", path = "../juggler-adapters" }
 juggler-core = { version = "0.0.1", path = "../juggler-core" }
+juggler-handover = { version = "0.0.1", path = "../juggler-handover" }
 juggler-supervisor = { version = "0.0.1", path = "../juggler-supervisor" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
@@ -31,6 +32,7 @@ ts-rs = { version = "12.0.1", features = ["serde-json-impl", "no-serde-warnings"
 tauri-build = { version = "2.7.2", features = [] }
 
 [dev-dependencies]
+juggler-handover = { version = "0.0.1", path = "../juggler-handover" }
 tempfile = "3.27.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
