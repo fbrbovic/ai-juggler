@@ -308,7 +308,7 @@ the real store; the three UsageSnapshot insert sites migrated to
 launch_session / desktop_launch_arc / session_handover_impl),
 `docs/qa/gate-M3.md` (new).
 
-### AJ-E607 Ingest pipeline: statusline spool, transcript, rollout & SQLite sources | Status: TODO | Priority P0 | Effort L | Depends: AJ-E606, AJ-E602, AJ-E603, AJ-E604, AJ-E605
+### AJ-E607 Ingest pipeline: statusline spool, transcript, rollout & SQLite sources | Status: DONE-EVIDENCED | Priority P0 | Effort L | Depends: AJ-E606, AJ-E602, AJ-E603, AJ-E604, AJ-E605
 **Goal**: Feed AJ-E606 from every sanctioned local source — Claude statusline spool + transcript
 usage, Codex rollout/`exec --json`, ZCode SQLite `model_usage`, Gemini per AJ-E605's packet — with
 dedupe and per-source confidence, and no undocumented endpoint ever contacted.
@@ -359,6 +359,21 @@ docs/research/claude-code.md:54-55 (ccusage local-JSONL proof); EPICS.md:90-93 (
 emitter ships value alone. Trap: ZCode pool % is not in the SQLite DB — credits are; do not let a
 "helpful" join invent the pool. Gemini emitter stays absent until AJ-E605 verifies a source; an
 absent emitter with honest `unknown` beats a speculative parser.
+
+
+**Status report (2026-10-16)**: DONE-EVIDENCED — evidence
+`docs/qa/evidence/AJ-E607/manifest.md`; gate section `docs/qa/gate-M3.md`
+§AJ-E607. Fixture corpus (5 sources' captured shapes) 13/13 +
+pipeline integration 1/1 green; chaining byte-for-byte; idempotency
+proven at store and pipeline level; no-HTTP grep gate test-pinned.
+The live ±5% dogfood + chained-statusline screenshot are PENDING the
+maintainer's authenticated Claude login (the gate-E5 open item) —
+recorded in gate-M3, rides the next authenticated session.
+
+**Implementation-mapping**: `quota_ingest.rs` (adapters, new),
+`usage_pipeline.rs` (app, new) + `usage_source_health` command,
+fixtures `tests/fixtures/quota/` + `quota_ingest.rs` (13) +
+`usage_pipeline.rs` (1) tests, `gate-M3.md` §AJ-E607.
 
 ### AJ-E608 Burn-rate forecast: EWMA, time-to-exhaust & confidence inheritance | Status: TODO | Priority P0 | Effort M | Depends: AJ-E606, AJ-E607
 **Goal**: Turn AJ-E606 window state into honest burn forecasts — EWMA burn-rate, time-to-exhaust

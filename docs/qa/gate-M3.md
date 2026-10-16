@@ -59,3 +59,72 @@ single producer of `UsageSnapshot.window`; all three session-insert
 sites (`launch_session`, `desktop_launch_arc`, `session_handover_impl`)
 query the engine. Pre-ingest (AJ-E607 pending) this is honestly the
 zero snapshot (`window: None`) — never 0%.
+
+## AJ-E607 — ingest pipeline (2026-10-16)
+
+### Fixture corpus (`crates/juggler-adapters/tests/fixtures/quota/`, shapes from the AJ-E602–E604 packets, ids redacted)
+
+`claude-statusline.spool` (4 lines: 2 quota-bearing, 1 cost-only, 1
+malformed) · `claude-transcript.jsonl` (keyed usage lines + one
+no-uuid usage line + one resumed duplicate) · `codex-rollout.jsonl`
+(session_meta + 2 `token_usage_record` with rollup fields + noise) ·
+`zcode-model-usage.sql` (peak + off-peak + unknown-model + non-completed
+rows) · `user-statusline.sh` (chaining marker fixture).
+
+### Test output (`cargo test -p juggler-adapters --test quota_ingest`)
+
+```text
+test gemini_has_no_emitter_by_design ... ok
+test install_chains_and_uninstall_restores_exactly ... ok
+test install_over_nothing_uninstalls_to_nothing ... ok
+test iso_timestamps_parse_strictly ... ok
+test no_http_client_anywhere_in_the_adapters_crate ... ok
+test re_ingesting_the_same_fixtures_inserts_zero_new_rows ... ok
+test rollout_events_read_only_the_response_level_usage ... ok
+test spool_parses_with_zero_dropped_valid_lines ... ok
+test spool_rotates_at_threshold ... ok
+test spool_tail_is_offset_incremental_and_truncation_aware ... ok
+test statusline_wrapper_chains_user_script_byte_for_byte ... ok
+test transcript_events_skip_unkeyed_and_double_usage ... ok
+test zcode_events_compute_credits_with_peak_and_offpeak ... ok
+
+test result: ok. 13 passed; 0 failed
+```
+
+Pipeline-level (`cargo test -p juggler-app --test usage_pipeline`):
+`one_pass_ingests_all_sources_and_repeats_insert_nothing ... ok` — one
+pass ingests spool+transcript (duplicate uuid absorbed), the wrapper
+installs, the second pass inserts ZERO rows, health records both
+sources with `last_event_at`.
+
+### Idempotency proof (Req.3, COUNT-level)
+
+Store-level: re-running the transcript fixture ingest twice →
+`events_for_account` len identical (2: `a-1`, `a-2` once each) — the
+resumed-file duplicate is absorbed by `UNIQUE(account, msg_uuid)`.
+Pipeline-level: pass 2 with no file changes inserts zero rows
+(offset-tracked tails).
+
+### No-HTTP gate (Quality gate)
+
+`no_http_client_anywhere_in_the_adapters_crate`: Cargo.toml carries no
+HTTP client dependency (reqwest/ureq/isahc/curl/hyper) and no source
+file constructs any network client (TcpStream/UdpSocket included) —
+grep-pinned in CI on every run.
+
+### Chaining gate (deep/09 §Q9)
+
+`statusline_wrapper_chains_user_script_byte_for_byte`: the wrapper's
+chained output is byte-identical to running the user statusline
+directly on the same stdin bytes, while the spool captures the payload
+— both outputs visible, no duplication.
+
+### Pending live evidence (rides the maintainer login — gate-E5 open item)
+
+The live-dogfood (one real authenticated Claude session ≥20 min where
+the spool-derived 5h % matches `/usage` within ±5%; one terminal
+screenshot of the chained statusline) requires an authenticated
+session; the maintained login is pending re-auth (the same blocker as
+the E5 authenticated-helper dogfood, gate-E5.md). Fixture gates above
+pass; the live check is recorded as PENDING here and rides the next
+authenticated session.

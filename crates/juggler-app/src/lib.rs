@@ -17,6 +17,7 @@ pub mod focus;
 pub mod preview;
 pub mod state;
 pub mod terminal;
+pub mod usage_pipeline;
 
 use std::sync::Arc;
 
@@ -74,6 +75,7 @@ pub fn run() {
     let resource_tick_state = Arc::clone(&app_state);
     let processes_tick_state = Arc::clone(&app_state);
     let quota_tick_state = Arc::clone(&app_state);
+    let pipeline_state = Arc::clone(&app_state);
 
     tauri::Builder::default()
         // Registered first: a second launch defers to the running app
@@ -103,6 +105,7 @@ pub fn run() {
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
+            commands::usage_source_health,
             commands::harnesses_list,
             commands::legacy_aliases::harnesses_list_alias,
             commands::accounts_list,
@@ -175,6 +178,9 @@ pub fn run() {
                 heuristic_tick_state,
                 processes_tick_state,
             );
+            // AJ-E607: the ingest pipeline — passive, single-writer,
+            // 1 s spool cadence (event→engine ≤2 s budget).
+            usage_pipeline::spawn(pipeline_state);
             Ok(())
         })
         .run(tauri::generate_context!())
