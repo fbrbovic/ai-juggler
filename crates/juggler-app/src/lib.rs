@@ -140,6 +140,7 @@ pub fn run() {
             commands::session_handover,
             commands::switch_preflight,
             commands::switch_execute,
+            commands::switch_undo,
             commands::stop_session,
             commands::dashboard_stats,
             commands::terminal_spawn_login,

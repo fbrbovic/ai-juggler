@@ -790,6 +790,10 @@ struct AlertFsmState {
 
 const ALERT_FSMS_KEY: &str = "alert_fsms";
 const ALERT_DIGEST_KEY: &str = "alert_digest";
+/// AJ-E206 §8 telemetry: local-only door counters (never networked) —
+/// `switch_oneclick` vs `switch_wizard{steps_shown}` proves the fast
+/// path is earned, not assumed.
+const SWITCH_DOOR_COUNTERS_KEY: &str = "switch_door_counters";
 const ALERT_MUTES_KEY: &str = "alert_mutes";
 
 /// AJ-E611: one account's two window FSMs + its renewal-approaching
@@ -3973,7 +3977,12 @@ pub fn session_handover_impl(
     // AJ-E205: the pipeline owns execution (freeze → stage → verify →
     // launch → record); the default freeze choice waits for the turn
     // boundary. The UI calls `switch_execute` with the user's choice.
-    switch_execute_impl(state, session_id, target_profile_id, "finish-turn")
+    switch_execute_impl(state, session_id, target_profile_id, "finish-turn").map(|switched| {
+        LaunchResult {
+            session_id: switched.session_id,
+            pid: switched.pid,
+        }
+    })
 }
 
 /// AJ-E205: the preflight verdict for one switch (rendered by the
@@ -3996,6 +4005,33 @@ pub struct PreflightInfo {
     pub source_live: bool,
     /// The F1-experimental transplant copy (until E210 proves pairs).
     pub experimental_copy: String,
+    /// AJ-E206 §8 door verdict: `one-click` or `wizard`.
+    pub door: String,
+    /// Wizard step titles in §8 order (empty for 1-click; only the
+    /// non-trivial steps ever appear — never phantom steps).
+    pub wizard_steps: Vec<String>,
+    /// Why the wizard opened (one line per failed §8 condition;
+    /// empty for 1-click).
+    pub wizard_reasons: Vec<String>,
+    /// The target is the project's dominant account (the usual
+    /// test; unique max by session count, ties are not habits).
+    pub usual_account: bool,
+    /// The carry-list the door renders (carried / rebuilt / dropped
+    /// names — the popover one-liner and the wizard's preview).
+    pub carry: CarryListInfo,
+}
+
+/// The carry-list grouped by disposition (AJ-E206; every name is a
+/// concrete artifact — "some context" is forbidden copy).
+#[derive(Clone, PartialEq, Eq, Debug, Default, serde::Serialize)]
+pub struct CarryListInfo {
+    /// Artifacts that move or copy.
+    pub carried: Vec<String>,
+    /// Artifacts the target rebuilds (replay turn / re-derived).
+    pub regenerated: Vec<String>,
+    /// Artifacts that do not carry — must be listed (§8 1-click
+    /// blocker; untranslated translates score here too, §H2).
+    pub dropped: Vec<String>,
 }
 
 /// AJ-E205: preflight for a switch — ordered checks stop BEFORE any
@@ -4020,7 +4056,6 @@ pub fn switch_preflight(
 ///
 /// Returns the typed [`AppError`] on resolution failures or hard
 /// preflight stops.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // display-copy rounding, clamped to [0, u32::MAX) before the cast
 pub fn switch_preflight_impl(
     state: &Arc<AppState>,
     session_id: &str,
@@ -4040,40 +4075,28 @@ pub fn switch_preflight_impl(
         juggler_adapters::claude_transcript::parse_transcript(&bytes).has_compact_boundary()
     });
 
-    // Target quota gate from the E606/E610 engine (hard filter =
-    // exhausted with no reset; tight = the warn copy).
+    // Target quota gate + the usual-account test (one storage pass).
     let now = Timestamp::now().millis();
     let storage = lock_storage_arc(state)?;
-    let target_display = quota_display_inner(&storage, &account_b, now);
-    let (exhausted, tight) = match target_display.five_hour.as_ref().map(|w| w.state.as_str()) {
-        Some("exhausted") => (true, None),
-        Some(_) => {
-            let used = target_display
-                .five_hour
-                .as_ref()
-                .and_then(|window| window.percentage)
-                .unwrap_or(0.0);
-            let tight = target_display
-                .forecast
-                .tte_min
-                .filter(|tte| *tte < 45.0)
-                .map(|tte| {
-                    (
-                        (100.0 - used).round().clamp(0.0, 99.0) as u32,
-                        tte.round().clamp(0.0, 999.0) as u32,
-                    )
-                });
-            (false, tight)
-        }
-        None => (false, None),
-    };
+    let (exhausted, tight) = quota_gate_of(&storage, &account_b, now);
+    // AJ-E206 §8: the "usual account" test — the project's dominant
+    // account by session count (a tie is not a habit).
+    let usual_account = source
+        .project
+        .as_ref()
+        .is_some_and(|project| usual_account_for_project(&storage, project, &account_b));
     drop(storage);
 
+    // One disposition pass feeds both the fidelity engine and the
+    // door's carry-list (same names, same truth).
+    let dispositions = juggler_handover::fidelity::base_dispositions(
+        account_a.harness.as_str(),
+        account_b.harness.as_str(),
+    );
+    let carry = carry_lists_of(&dispositions);
+
     let input = pipeline::PreflightInput {
-        fidelity: juggler_handover::fidelity::base_dispositions(
-            account_a.harness.as_str(),
-            account_b.harness.as_str(),
-        ),
+        fidelity: dispositions,
         compacted,
         gates: pipeline::PreflightGates {
             target_exhausted_no_reset: exhausted,
@@ -4094,6 +4117,24 @@ pub fn switch_preflight_impl(
         .map(|situation| pipeline::user_copy(situation.clone()))
         .collect();
     let source_live = matches!(source.status.as_str(), "running" | "starting");
+
+    // AJ-E206 §8: choose the door from the same preflight facts.
+    // Headroom ≥ Tight holds unless the tight warn fired (exhausted
+    // already stopped above at the hard gate); conflicts arrive with
+    // E207's reconciliation and rules divergence has no source yet.
+    let door_inputs = juggler_handover::door::DoorInputs {
+        usual_account,
+        mechanism: Some(report.mechanism),
+        fidelity: Some(report.pair.label),
+        compacted,
+        conflicts: false,
+        drops_listed: !carry.dropped.is_empty(),
+        target_headroom_ok: tight.is_none(),
+        rules_diverged: false,
+    };
+    let (door, wizard_steps, wizard_reasons) =
+        door_verdict(state, &door_inputs, &carry, report.pair.label);
+
     Ok(PreflightInfo {
         mechanism: match report.mechanism {
             pipeline::Mechanism::NativeResume => "native-resume".to_owned(),
@@ -4110,7 +4151,210 @@ pub fn switch_preflight_impl(
         experimental_copy: pipeline::user_copy(CopySituation::TransplantUnproven {
             account_a: account_a.label.clone(),
         }),
+        door,
+        wizard_steps,
+        wizard_reasons,
+        usual_account,
+        carry,
     })
+}
+
+/// Target quota gate from the E606/E610 engine (hard filter =
+/// exhausted with no reset; tight = the warn copy).
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // display-copy rounding, clamped to [0, u32::MAX) before the cast
+fn quota_gate_of(storage: &Storage, account: &Account, now: i64) -> (bool, Option<(u32, u32)>) {
+    let target_display = quota_display_inner(storage, account, now);
+    match target_display.five_hour.as_ref().map(|w| w.state.as_str()) {
+        Some("exhausted") => (true, None),
+        Some(_) => {
+            let used = target_display
+                .five_hour
+                .as_ref()
+                .and_then(|window| window.percentage)
+                .unwrap_or(0.0);
+            let tight = target_display
+                .forecast
+                .tte_min
+                .filter(|tte| *tte < 45.0)
+                .map(|tte| {
+                    (
+                        (100.0 - used).round().clamp(0.0, 99.0) as u32,
+                        tte.round().clamp(0.0, 999.0) as u32,
+                    )
+                });
+            (false, tight)
+        }
+        None => (false, None),
+    }
+}
+
+/// AJ-E206 §8: chooses the door from the preflight facts and counts
+/// the choice (local telemetry). Returns the wire name, the wizard
+/// step titles (empty for 1-click — never phantom steps), and the
+/// wizard's opening lines.
+fn door_verdict(
+    state: &Arc<AppState>,
+    inputs: &juggler_handover::door::DoorInputs,
+    carry: &CarryListInfo,
+    label: juggler_handover::fidelity::FidelityLabel,
+) -> (String, Vec<String>, Vec<String>) {
+    let door = juggler_handover::door::choose_door(inputs);
+    record_door_counter(state, &door);
+    match &door {
+        juggler_handover::door::Door::OneClick => ("one-click".to_owned(), Vec::new(), Vec::new()),
+        juggler_handover::door::Door::Wizard { steps } => (
+            "wizard".to_owned(),
+            steps.iter().map(|step| step.title().to_owned()).collect(),
+            wizard_reasons_of(inputs, carry, label),
+        ),
+    }
+}
+
+/// AJ-E206 §8: whether `target` is the project's dominant account —
+/// strictly the unique maximum by occurrence count (live session
+/// records by account, plus one occurrence per imported-history
+/// label). No history ⇒ nobody is usual ⇒ the wizard opens.
+fn usual_account_for_project(
+    storage: &Storage,
+    project: &juggler_core::model::ProjectId,
+    target: &Account,
+) -> bool {
+    let mut counts: std::collections::BTreeMap<juggler_core::model::AccountId, u64> =
+        std::collections::BTreeMap::new();
+    let sessions = storage.sessions().list(None).unwrap_or_default();
+    for record in sessions
+        .iter()
+        .filter(|row| row.project.as_ref() == Some(project))
+    {
+        if let Ok(recipe) = storage.profiles().get(&record.profile) {
+            *counts.entry(recipe.account).or_default() += 1;
+        }
+    }
+    // Imported history speaks in labels, not ids (ADR-0008 E1 rename
+    // kept `ProjectHistory.accounts` as labels) — resolve via accounts.
+    if let Ok(record) = storage.projects().get(project) {
+        let accounts = storage.accounts().list().unwrap_or_default();
+        for label in &record.history.accounts {
+            if let Some(account) = accounts.iter().find(|row| &row.label == label) {
+                *counts.entry(account.id.clone()).or_default() += 1;
+            }
+        }
+    }
+    let Some(target_count) = counts.get(&target.id).copied().filter(|count| *count > 0) else {
+        return false;
+    };
+    let others_max = counts
+        .iter()
+        .filter(|(id, _)| *id != &target.id)
+        .map(|(_, count)| *count)
+        .max()
+        .unwrap_or(0);
+    target_count > others_max
+}
+
+/// Groups the pair's dispositions into the door's carry-list names.
+fn carry_lists_of(input: &juggler_handover::fidelity::FidelityInput) -> CarryListInfo {
+    use juggler_handover::fidelity::{Disposition, FidelityInput};
+    let FidelityInput { dispositions, .. } = input;
+    let mut carry = CarryListInfo::default();
+    for (kind, disposition) in dispositions {
+        match disposition {
+            Disposition::Copy => carry.carried.push(kind.label().to_owned()),
+            Disposition::Regenerate => carry.regenerated.push(kind.label().to_owned()),
+            // A translate without a written mapping (or with dropped
+            // keys) is honestly a Drop (§H2) — it carries nothing the
+            // user can rely on, so it lists on the drop side.
+            Disposition::Translate {
+                untranslated,
+                keys_dropped,
+            } => {
+                if *untranslated || *keys_dropped {
+                    carry.dropped.push(kind.label().to_owned());
+                } else {
+                    carry.carried.push(kind.label().to_owned());
+                }
+            }
+            Disposition::Drop => carry.dropped.push(kind.label().to_owned()),
+        }
+    }
+    carry
+}
+
+/// AJ-E206 §5: the wizard's opening lines — one human sentence per
+/// failed §8 condition (never a generic "some context may be lost").
+fn wizard_reasons_of(
+    inputs: &juggler_handover::door::DoorInputs,
+    carry: &CarryListInfo,
+    label: juggler_handover::fidelity::FidelityLabel,
+) -> Vec<String> {
+    use juggler_handover::fidelity::FidelityLabel;
+    use juggler_handover::pipeline::Mechanism;
+    let mut reasons = Vec::new();
+    if !inputs.usual_account {
+        reasons.push("This isn't the usual account for this project.".to_owned());
+    }
+    match inputs.mechanism {
+        Some(Mechanism::Replay) => {
+            reasons.push("This switch replays — the target can't resume natively.".to_owned());
+        }
+        Some(Mechanism::PackOnly) => {
+            reasons.push("Only a pack can move — the target can't resume or replay.".to_owned());
+        }
+        _ => {}
+    }
+    if matches!(inputs.fidelity, Some(shown) if shown < FidelityLabel::F3) {
+        reasons.push(format!(
+            "Fidelity is {}: something would translate or drop.",
+            label.as_str()
+        ));
+    }
+    if inputs.compacted {
+        reasons.push("The source was compacted — the tail may not carry.".to_owned());
+    }
+    if !carry.dropped.is_empty() {
+        reasons.push(format!(
+            "The carry-list drops: {}.",
+            carry.dropped.join(", ")
+        ));
+    }
+    if !inputs.target_headroom_ok {
+        reasons.push("The target is running low on quota.".to_owned());
+    }
+    reasons
+}
+
+/// AJ-E206 §5 telemetry: count the door the preflight chose — local
+/// KV diagnostics only (never networked); a failed read or write
+/// never blocks the switch.
+fn record_door_counter(state: &Arc<AppState>, door: &juggler_handover::door::Door) {
+    let Ok(storage) = lock_storage_arc(state) else {
+        return;
+    };
+    let settings = storage.app_settings();
+    let mut counters: std::collections::BTreeMap<String, u64> = settings
+        .get(SWITCH_DOOR_COUNTERS_KEY)
+        .ok()
+        .flatten()
+        .and_then(|blob| serde_json::from_str(&blob).ok())
+        .unwrap_or_default();
+    *counters.entry(door.telemetry_kind()).or_insert(0) += 1;
+    if let Ok(blob) = serde_json::to_string(&counters) {
+        let _ = settings.set(SWITCH_DOOR_COUNTERS_KEY, &blob);
+    }
+}
+
+/// AJ-E206: the executed switch's handles — the new instance plus
+/// the graph edge that `switch_undo` compensates.
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize)]
+pub struct SwitchExecutedInfo {
+    /// The continuation instance's session id.
+    pub session_id: String,
+    /// The continuation instance's process id.
+    pub pid: u32,
+    /// The recorded edge (the undo handle).
+    pub edge_id: String,
+    /// The resting source session (what undo resumes).
+    pub source_session_id: String,
 }
 
 /// AJ-E205: executes a switch with the user's freeze choice — the
@@ -4127,7 +4371,7 @@ pub fn switch_execute(
     session_id: String,
     target_profile_id: String,
     freeze_choice: String,
-) -> AppResult<LaunchResult> {
+) -> AppResult<SwitchExecutedInfo> {
     switch_execute_impl(
         state.inner(),
         &session_id,
@@ -4146,7 +4390,7 @@ pub fn switch_execute_impl(
     session_id: &str,
     target_profile_id: &str,
     freeze_choice: &str,
-) -> AppResult<LaunchResult> {
+) -> AppResult<SwitchExecutedInfo> {
     use juggler_handover::pipeline::{self, FreezeChoice, Mechanism};
 
     let freeze = if freeze_choice == "stop-now" {
@@ -4224,15 +4468,300 @@ pub fn switch_execute_impl(
         &EdgeCtx {
             work: work_id,
             from_epoch,
-            edge: edge_id,
+            edge: edge_id.clone(),
             session: new_session.clone(),
         },
     )?;
 
-    Ok(LaunchResult {
+    Ok(SwitchExecutedInfo {
         session_id: new_session.to_string(),
         pid,
+        edge_id: edge_id.to_string(),
+        source_session_id: source.id.to_string(),
     })
+}
+
+/// AJ-E206 §8.2: undoes a completed switch — stops the continuation
+/// instance, resumes the source account's native session, and records
+/// the compensating edge (`parent_edge_a` = the original). User-click
+/// only; the graph keeps both edges so the travel stays explainable.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] when the edge cannot be compensated
+/// (not confirmed, missing epochs/native ids) or stop/resume fails —
+/// a failed stop aborts BEFORE the source resumes (never two live
+/// instances on one work item).
+#[tauri::command]
+pub fn switch_undo(
+    state: tauri::State<'_, Arc<AppState>>,
+    edge_id: String,
+) -> AppResult<LaunchResult> {
+    switch_undo_impl(state.inner(), &edge_id)
+}
+
+/// Core implementation shared with integration tests.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] per the command docs.
+pub fn switch_undo_impl(state: &Arc<AppState>, edge_id: &str) -> AppResult<LaunchResult> {
+    let context = undo_edge_context(state, edge_id)?;
+    stop_continuation(state, context.target_session.clone())?;
+    undo_resume_source(state, &context)
+}
+
+/// The read-side of a switch to undo (AJ-E206).
+struct UndoContext {
+    /// The work item both epochs belong to.
+    work: juggler_core::model::WorkItemId,
+    /// The source epoch (what undo resumes).
+    from_epoch: juggler_core::model::Epoch,
+    /// The confirmed switch's to-epoch.
+    to_epoch: juggler_core::model::EpochId,
+    /// The continuation instance (what undo stops), if any.
+    target_session: Option<SessionId>,
+    /// The original edge (the compensating edge's parent).
+    edge: juggler_core::model::SwitchEdge,
+    /// The source's native session id (the resume target).
+    native_id: String,
+}
+
+/// Loads and validates the edge to undo: confirmed, both epochs
+/// present, source session + native id resolvable.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] when the edge cannot be compensated.
+fn undo_edge_context(state: &Arc<AppState>, edge_id: &str) -> AppResult<UndoContext> {
+    use juggler_core::model::{EdgeState, EpochId, SwitchEdgeId};
+    let undo_of = SwitchEdgeId::new(edge_id.to_owned());
+    let storage = lock_storage_arc(state)?;
+    let graph = storage.switch_graph();
+    let edge = graph.edge(&undo_of).map_err(|_| AppError::Io {
+        context: "undo switch",
+        message: "That switch isn't in the graph — nothing to undo".to_owned(),
+    })?;
+    let not_landed = || AppError::Io {
+        context: "undo switch",
+        message: "Only a completed switch can be undone — this one never landed".to_owned(),
+    };
+    if !matches!(edge.state, EdgeState::Confirmed) {
+        return Err(not_landed());
+    }
+    let Some(to_epoch_id) = edge.to_epoch.clone() else {
+        return Err(not_landed());
+    };
+    let epochs = graph.epochs_for_work(&edge.work)?;
+    let find = |id: &EpochId| epochs.iter().find(|epoch| &epoch.id == id);
+    let from_epoch = find(&edge.from_epoch)
+        .ok_or_else(|| AppError::Io {
+            context: "undo switch",
+            message: "The switch's source epoch is missing from the graph".to_owned(),
+        })?
+        .clone();
+    let target_session = find(&to_epoch_id).and_then(|epoch| epoch.session_ref.clone());
+    if from_epoch.session_ref.is_none() {
+        return Err(AppError::Io {
+            context: "undo switch",
+            message: "The switch's source session is missing — resume it from Sessions".to_owned(),
+        });
+    }
+    let Some(native_id) = from_epoch.native_id.clone().filter(|id| !id.is_empty()) else {
+        return Err(AppError::Io {
+            context: "undo switch",
+            message: "The source has no native session to resume".to_owned(),
+        });
+    };
+    Ok(UndoContext {
+        work: edge.work.clone(),
+        from_epoch,
+        to_epoch: to_epoch_id,
+        target_session,
+        edge,
+        native_id,
+    })
+}
+
+/// Stops the continuation instance. Already-gone is fine (the stop
+/// goal already holds); a REAL stop failure aborts before the source
+/// resumes — never two live instances on one work item.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] when the stop ladder fails.
+fn stop_continuation(state: &Arc<AppState>, target: Option<SessionId>) -> AppResult<()> {
+    let Some(target_session) = target else {
+        return Ok(());
+    };
+    let stopped = state
+        .supervisor
+        .stop(&target_session, Duration::from_secs(5));
+    match stopped {
+        Ok(()) | Err(juggler_supervisor::SupervisorError::UnknownSession(_)) => Ok(()),
+        Err(error) => Err(AppError::Io {
+            context: "undo switch",
+            message: format!("Couldn't stop the continuation instance: {error}"),
+        }),
+    }
+}
+
+/// Resumes the source: its account, its recipe, its own native id —
+/// then records the compensating edge (`parent_edge_a` = the original;
+/// to-epoch on the source account; launched+confirmed in one motion,
+/// the supervisor accepting the spawn being the proof we can record
+/// today).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] when resolution, spawn, or graph
+/// recording fails.
+fn undo_resume_source(state: &Arc<AppState>, context: &UndoContext) -> AppResult<LaunchResult> {
+    let UndoContext {
+        from_epoch,
+        native_id,
+        ..
+    } = context;
+    let Some(source_session_ref) = from_epoch.session_ref.clone() else {
+        return Err(AppError::Io {
+            context: "undo switch",
+            message: "The switch's source session is missing — resume it from Sessions".to_owned(),
+        });
+    };
+
+    let (source, account_a, profile_a) = {
+        let storage = lock_storage_arc(state)?;
+        let source = storage
+            .sessions()
+            .get(&source_session_ref)
+            .map_err(|error| {
+                not_found_or_core(error, "session", &source_session_ref.to_string())
+            })?;
+        let account_a = storage
+            .accounts()
+            .get(&from_epoch.account)
+            .map_err(|error| {
+                not_found_or_core(error, "account", &from_epoch.account.to_string())
+            })?;
+        let profile_a = storage
+            .profiles()
+            .get(&source.profile)
+            .map_err(|error| not_found_or_core(error, "profile", &source.profile.to_string()))?;
+        (source, account_a, profile_a)
+    };
+    let adapter = state
+        .registry
+        .get(&account_a.harness)
+        .ok_or_else(|| AppError::UnknownHarness(account_a.harness.to_string()))?;
+    let new_session = SessionId::new(format!("sess-{}", unique_suffix()));
+    let spec = adapter.launch_spec(
+        &account_a,
+        &profile_a,
+        &source.cwd,
+        &LaunchMode::Resume {
+            session_id: native_id.clone(),
+        },
+    )?;
+    let spawned = state.supervisor.spawn(
+        &new_session,
+        &spec,
+        &ledger_ctx(
+            state,
+            &account_a,
+            source.project.as_ref().map(ToString::to_string),
+        ),
+    )?;
+
+    record_compensating_edge(state, context, &new_session, &profile_a.id, &source)?;
+
+    Ok(LaunchResult {
+        session_id: new_session.to_string(),
+        pid: spawned.pid,
+    })
+}
+
+/// Records the undo: the resumed source instance row, its epoch, and
+/// the compensating edge (`parent_edge_a` = the original; launched +
+/// confirmed in one motion — the supervisor accepting the spawn is
+/// the proof we can record today).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] when storage or graph writes fail.
+fn record_compensating_edge(
+    state: &Arc<AppState>,
+    context: &UndoContext,
+    new_session: &SessionId,
+    profile: &juggler_core::model::LaunchRecipeId,
+    source: &juggler_core::model::InstanceRecord,
+) -> AppResult<()> {
+    use juggler_core::model::{
+        ConversationId, Epoch, EpochId, InstanceKind, InstanceRecord, SwitchEdge, SwitchEdgeId,
+        SwitchMechanism,
+    };
+    let UndoContext {
+        work,
+        to_epoch,
+        edge,
+        native_id,
+        ..
+    } = context;
+    let machine = local_machine_id(state);
+    let storage = lock_storage_arc(state)?;
+    let usage = engine_usage_snapshot(&storage, profile);
+    storage.sessions().insert(&InstanceRecord {
+        id: new_session.clone(),
+        conversation: Some(ConversationId::new(native_id.to_owned())),
+        profile: profile.clone(),
+        machine,
+        kind: InstanceKind::Terminal,
+        project: source.project.clone(),
+        cwd: source.cwd.clone(),
+        status: SessionStatus::Starting,
+        started_at: Timestamp::now(),
+        last_activity: None,
+        usage,
+        attention: None,
+        running: None,
+        window: None,
+        transcript_ref: source.transcript_ref.clone(),
+    })?;
+    let graph = storage.switch_graph();
+    let epoch_undo = EpochId::new(format!("ep-{}", unique_suffix()));
+    graph.insert_epoch(&Epoch {
+        id: epoch_undo.clone(),
+        work: work.clone(),
+        session_ref: Some(new_session.clone()),
+        native_id: Some(native_id.to_owned()),
+        account: edge.from_account.clone(),
+        provider: edge.from_provider.clone(),
+        resumed_from_epoch: Some(to_epoch.clone()),
+    })?;
+    let undo_edge_id = SwitchEdgeId::new(format!("edge-{}", unique_suffix()));
+    graph.append_edge(&SwitchEdge {
+        id: undo_edge_id.clone(),
+        work: work.clone(),
+        from_epoch: to_epoch.clone(),
+        // Filled by mark_launched below (S-G1: append never sets it).
+        to_epoch: None,
+        from_account: edge.to_account.clone(),
+        to_account: edge.from_account.clone(),
+        from_provider: edge.to_provider.clone(),
+        to_provider: edge.from_provider.clone(),
+        // Same account, same native file: T1 native resume.
+        mechanism: SwitchMechanism::NativeResume,
+        pack_id: None,
+        fidelity_shown: Some("F4".to_owned()),
+        manifest_sha256: None,
+        state: juggler_core::model::EdgeState::Staged,
+        actor: juggler_core::model::EdgeActor::User,
+        parent_edge_a: Some(edge.id.clone()),
+        parent_edge_b: None,
+        created_at: Timestamp::now(),
+    })?;
+    graph.mark_launched(&undo_edge_id, &epoch_undo)?;
+    graph.mark_confirmed(&undo_edge_id)?;
+    Ok(())
 }
 
 /// The supervisor launch hook: builds the resume spec for the

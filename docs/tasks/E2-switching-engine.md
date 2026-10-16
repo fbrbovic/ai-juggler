@@ -377,7 +377,7 @@ hope" — if a reviewer asks for it, cite §5.2. Trap: v0 does raw
 `std::fs::copy` (`commands.rs:1143-1146`); that path must become
 unreachable, not merely avoided by convention.
 
-### AJ-E206 Hybrid door — 1-click for proven switches, wizard for lossy ones (D-03) | Status: TODO | Priority P0 | Effort M | Depends: AJ-E205
+### AJ-E206 Hybrid door — 1-click for proven switches, wizard for lossy ones (D-03) | Status: DONE-EVIDENCED | Priority P0 | Effort M | Depends: AJ-E205
 **Goal**: Implement settled D-03: same-Provider proven-fidelity
 switches run in one click with an undo window; cross-Provider,
 low-fidelity, or diverged switches open a brief data-driven wizard.
@@ -628,6 +628,33 @@ recording + copy-never-move. UI: SwitchFlow (freeze dialog, labelled
 stages, source-safe banner) + gallery 28-switch (16) + axe 0; visual
 298/298. Live mid-switch-kill dogfood PENDING maintainer login
 (recorded).
+
+**Status report (2026-10-13, AJ-E206)**: DONE-EVIDENCED — evidence
+`docs/qa/evidence/AJ-E206/manifest.md`. The §8 door engine
+(`juggler-handover::door`: DoorInputs + choose_door + telemetry_kind,
+one test fixture per tree leaf) is wired into preflight: the usual
+account is the project's UNIQUE-maximum account by session count
+(+ imported-history labels; ties are not habits), headroom ≥ Tight
+maps to the E606/E610 quota gate, drops come from the E203 base
+dispositions — so today every real pair opens the wizard (todos
+default Drop until E210's fixtures, by design: the P0 test proves a
+DOMINANT-account transplant still gets the wizard). switch_execute
+now returns the edge id (SwitchExecutedInfo) and switch_undo
+compensates: stop target (abort-before-resume on real stop failure —
+never two live instances), resume the source's own native id under
+its own recipe, parent-linked NativeResume/F4 edge (S-G1 append
+rules kept). UI: 1-click popover (carry one-liner + cost + §5.2
+freeze) → undo toast with visible 10 s countdown; wizard renders
+ONLY non-trivial steps ("Step 2 of 3", no phantom steps) with the
+confirm click on the last step; local-only KV door counters
+(`switch_oneclick` vs `switch_wizard{steps}`). Guardrails 7/7 vitest
+(zero executions without click; undo only from click); switch_door
+integration 3/3; handover 34/34; vitest 224/224; visual 320/320
+(gallery 29-door 20 new + gallery 28 re-captured door-aware; axe 0
+both themes). Spec's "2-step wizard" render cannot exist (min 3 by
+the tree — recorded, not skipped); ⌘⇧H/⌘R left to the screen spec
+that owns final bindings; live quota-wall dogfood PENDING
+maintainer login + E210 fixture flip.
 
 ---
 
