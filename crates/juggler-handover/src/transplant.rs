@@ -2,7 +2,7 @@
 //! the Tauri command, owns tier logic).
 //!
 //! `hand_over` bundles the source via the adapter's
-//! [`HandoverSupport`](juggler_adapter::handover::HandoverSupport)
+//! [`HandoverSupport`]
 //! (full sibling set, copy-never-move, torn-tail refusal), installs
 //! under the target (discovered dir, collision fork), and returns
 //! the evidence the caller records on the switch edge: source hashes
