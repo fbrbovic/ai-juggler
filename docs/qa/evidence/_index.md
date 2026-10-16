@@ -36,11 +36,13 @@
 | AJ-E509 | PASS9 | 2026-10-15 | [manifest](AJ-E509/manifest.md) |
 | AJ-E510 | PASS11 | 2026-10-13 | [manifest](AJ-E510/manifest.md) |
 | AJ-E511 | PASS10 | 2026-10-13 | [manifest](AJ-E511/manifest.md) |
-| AJ-E512 | PASS14 | 2026-10-13 | [manifest](AJ-E512/manifest.md) |
+| AJ-E512 | PASS14 | 2026-10-16 | [manifest](AJ-E512/manifest.md) |
 | AJ-E601 | PASS11 | 2026-10-13 | [manifest](AJ-E601/manifest.md) |
 | AJ-E602 | PASS6 | 2026-10-15 | [manifest](AJ-E602/manifest.md) |
 | AJ-E603 | PASS6 | 2026-10-15 | [manifest](AJ-E603/manifest.md) |
 | AJ-E604 | PASS6 | 2026-10-15 | [manifest](AJ-E604/manifest.md) |
+| AJ-E605 | PASS6 | 2026-10-16 | [manifest](AJ-E605/manifest.md) |
+| AJ-E606 | PASS7 | 2026-10-16 | [manifest](AJ-E606/manifest.md) |
 | AJ-E801 | PASS5 | 2026-10-13 | [manifest](AJ-E801/manifest.md) |
 | AJ-E802 | PASS7 | 2026-10-13 | [manifest](AJ-E802/manifest.md) |
 | AJ-E806 | PASS4 | 2026-10-13 | [manifest](AJ-E806/manifest.md) |

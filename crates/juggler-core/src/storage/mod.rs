@@ -16,6 +16,7 @@ mod cleanup_settings;
 mod process_ledger;
 mod projects;
 mod settings;
+mod usage;
 
 use std::path::Path;
 
@@ -35,6 +36,7 @@ pub use profiles::ProfilesRepo;
 pub use projects::ProjectsRepo;
 pub use sessions::SessionsRepo;
 pub use settings::AppSettingsRepo;
+pub use usage::{UsageRepo, anchor_settings_key, cap_settings_key};
 
 use crate::error::CoreError;
 
@@ -243,8 +245,52 @@ const V16: &str = "ALTER TABLE process_ledger ADD COLUMN down_period INTEGER NOT
 const V17: &str = "CREATE INDEX IF NOT EXISTS process_ledger_session_machine
     ON process_ledger(session_id, machine_id);";
 
+/// v18 (AJ-E606, deep/09 §Q8): the two-clock engine's append-only
+/// stores. `usage_events` dedupes on `UNIQUE(account, msg_uuid)`
+/// (NULL uuids are distinct — resumed files never double-count);
+/// `quota_samples` is the vendor Measured tail; `reset_queue` is the
+/// AJ-E611 surface. Additive only — no existing row's semantics move.
+const V18: &str = "
+CREATE TABLE usage_events (
+    id INTEGER PRIMARY KEY,
+    account TEXT NOT NULL,
+    session TEXT,
+    ts INTEGER NOT NULL,
+    model TEXT,
+    input INTEGER NOT NULL DEFAULT 0,
+    output INTEGER NOT NULL DEFAULT 0,
+    cache_r INTEGER NOT NULL DEFAULT 0,
+    cache_w INTEGER NOT NULL DEFAULT 0,
+    reasoning INTEGER NOT NULL DEFAULT 0,
+    credits REAL,
+    usd_est REAL,
+    source TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    msg_uuid TEXT,
+    UNIQUE(account, msg_uuid)
+);
+CREATE TABLE quota_samples (
+    account TEXT NOT NULL,
+    window TEXT NOT NULL,
+    ts INTEGER NOT NULL,
+    used_pct REAL NOT NULL,
+    resets_at INTEGER,
+    confidence TEXT NOT NULL,
+    PRIMARY KEY (account, window, ts)
+);
+CREATE TABLE reset_queue (
+    id TEXT PRIMARY KEY,
+    session TEXT NOT NULL,
+    account TEXT NOT NULL,
+    resume_at INTEGER NOT NULL,
+    state TEXT NOT NULL DEFAULT 'queued',
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_usage_acct_ts ON usage_events(account, ts);
+";
+
 const MIGRATIONS: &[&str] = &[
-    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17,
+    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17, V18,
 ];
 
 /// An opened AI Juggler database with typed repositories.
@@ -348,6 +394,13 @@ impl Storage {
     #[must_use]
     pub fn app_settings(&self) -> AppSettingsRepo<'_> {
         AppSettingsRepo::new(&self.conn)
+    }
+
+    /// Repository for usage events & quota samples (schema v18,
+    /// AJ-E606): append-only with uuid dedupe.
+    #[must_use]
+    pub fn usage(&self) -> UsageRepo<'_> {
+        UsageRepo::new(&self.conn)
     }
 
     /// Raw connection access for migrations/fixture tooling (tests,
