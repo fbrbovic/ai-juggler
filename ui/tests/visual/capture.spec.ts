@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -2229,5 +2229,168 @@ for (const theme of THEMES) {
         });
       });
     }
+  }
+}
+
+/**
+ * AJ-E611 — the ranking + notification surfaces: the NewSession
+ * ranked list (Suggested badge + top-2 factors + TTE, greyed filtered
+ * row with its reason, "Why this order?" expander) and the
+ * notification region (actionable 90% line, the hourly digest's
+ * renewal item visually distinct, reset-queue queued/ready rows with
+ * an explicit Resume click) across the required 1440×900 + 1280×800 ×
+ * light+dark matrix. Copy conformance is asserted before every
+ * capture (≥2 factors without hover, badge adjacent, no silent
+ * drops).
+ */
+const rankedRows: Record<string, unknown>[] = [
+  {
+    account: "claude-work",
+    score: 0.87,
+    top_factors: ["82% headroom (Measured)", "usual account for this repo"],
+    factors: [["headroom 82%", 0.37], ["affinity", 0.2], ["fidelity", 0.075], ["cost fit", 0.1], ["calm", 0.1]],
+    headroom_unknown: false,
+    confidence: "Measured",
+    tte_min: 210,
+    suggested: true,
+  },
+  {
+    account: "claude-personal",
+    score: 0.54,
+    top_factors: ["headroom unknown — ranked without quota", "low session load"],
+    factors: [["headroom unknown", 0], ["affinity", 0.04], ["fidelity", 0.075], ["cost fit", 0.05], ["calm", 0.1]],
+    headroom_unknown: true,
+    confidence: "Estimate",
+    suggested: false,
+  },
+  {
+    account: "claude-lab",
+    filtered_reason: "logged out — sign in from the Ready home",
+    top_factors: [],
+    factors: [],
+    headroom_unknown: true,
+    confidence: "Estimate",
+    suggested: false,
+  },
+];
+
+const notificationEvents: Record<string, unknown>[] = [
+  { kind: "actionable", account: "claude-work", text: "claude-work at 92% used (Measured), five-hour window — hand over or queue at reset", at_ms: T0 - 60_000 },
+  { kind: "digest", account: "claude-personal", text: "Renews in 6 days — check your plan", at_ms: T0 - 3_600_000 },
+];
+
+const queueRows: Record<string, unknown>[] = [
+  { id: "rq-1", session: "sess-1", account: "claude-work", resume_at_ms: T0 + 45 * 60_000, state: "queued" },
+  { id: "rq-2", session: "sess-2", account: "claude-lab", resume_at_ms: T0 - 60_000, state: "ready" },
+];
+
+for (const theme of THEMES) {
+  for (const vp of RAIL_QUOTA_VP) {
+    test(`ranking — NewSession ranked list — ${vp.name} — ${theme}`, async ({ page }) => {
+      await page.addInitScript(
+        ({ fixture, t0, theme: themeName, ranked }) => {
+          const w = window as unknown as Record<string, unknown>;
+          w.__AIJ_FIXTURE__ = fixture;
+          w.__AIJ_RANKING__ = ranked;
+          localStorage.setItem("aij.theme", themeName);
+          localStorage.setItem("aij.onboarding.dismissed", "1");
+          sessionStorage.setItem("aij.ready.skipped", "1");
+          Date.now = () => t0;
+        },
+        { fixture: allStatuses, t0: T0, theme, ranked: rankedRows },
+      );
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await page.getByRole("button", { name: "New", exact: true }).click();
+      await expect(page.getByTestId("ranked-rows")).toBeVisible();
+      // Copy conformance before capture: Suggested badge, ≥2 factors
+      // without hover, TTE, and the greyed filtered row keeps its seat.
+      await expect(page.getByText("Suggested")).toBeVisible();
+      await expect(page.getByText(/82% headroom \(Measured\)/)).toBeVisible();
+      await expect(page.getByText(/exhausts ≈210 min/)).toBeVisible();
+      await expect(page.getByText("logged out — sign in from the Ready home")).toBeVisible();
+      await page.screenshot({
+        path: resolve(GALLERY, `27-ranking/ranked-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`ranking — why-this-order expanded — ${vp.name} — ${theme}`, async ({ page }) => {
+      await page.addInitScript(
+        ({ fixture, t0, theme: themeName, ranked }) => {
+          const w = window as unknown as Record<string, unknown>;
+          w.__AIJ_FIXTURE__ = fixture;
+          w.__AIJ_RANKING__ = ranked;
+          localStorage.setItem("aij.theme", themeName);
+          localStorage.setItem("aij.onboarding.dismissed", "1");
+          sessionStorage.setItem("aij.ready.skipped", "1");
+          Date.now = () => t0;
+        },
+        { fixture: allStatuses, t0: T0, theme, ranked: rankedRows },
+      );
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await page.getByRole("button", { name: "New", exact: true }).click();
+      await page.getByRole("button", { name: "Why this order?" }).click();
+      // All five inputs are listed once expanded (both scored rows
+      // expand — assert on the first).
+      await expect(page.getByText(/calm/).first()).toBeVisible();
+      await expect(page.getByText(/fidelity/).first()).toBeVisible();
+      await page.screenshot({
+        path: resolve(GALLERY, `27-ranking/why-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`notification — actionable + digest — ${vp.name} — ${theme}`, async ({ page }) => {
+      await page.addInitScript(
+        ({ fixture, t0, theme: themeName, events }) => {
+          const w = window as unknown as Record<string, unknown>;
+          w.__AIJ_FIXTURE__ = fixture;
+          w.__AIJ_ALERTS__ = events;
+          localStorage.setItem("aij.theme", themeName);
+          localStorage.setItem("aij.onboarding.dismissed", "1");
+          sessionStorage.setItem("aij.ready.skipped", "1");
+          Date.now = () => t0;
+        },
+        { fixture: allStatuses, t0: T0, theme, events: notificationEvents },
+      );
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await expect(page.getByTestId("alert-actionable")).toContainText("92%");
+      // The digest's renewal item is visually distinct (dashed, quiet)
+      // and never reads as a window alert.
+      await expect(page.getByTestId("alert-digest")).toContainText("Digest · Renews in 6 days");
+      await page.screenshot({
+        path: resolve(GALLERY, `27-ranking/notification-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`queue — queued + ready with explicit Resume — ${vp.name} — ${theme}`, async ({ page }) => {
+      await page.addInitScript(
+        ({ fixture, t0, theme: themeName, rows }) => {
+          const w = window as unknown as Record<string, unknown>;
+          w.__AIJ_FIXTURE__ = fixture;
+          w.__AIJ_RESET_QUEUE__ = rows;
+          localStorage.setItem("aij.theme", themeName);
+          localStorage.setItem("aij.onboarding.dismissed", "1");
+          sessionStorage.setItem("aij.ready.skipped", "1");
+          Date.now = () => t0;
+        },
+        { fixture: allStatuses, t0: T0, theme, rows: queueRows },
+      );
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await expect(page.getByTestId("queue-queued")).toContainText("claude-work");
+      await expect(page.getByTestId("queue-ready")).toContainText("ready to resume");
+      // The Resume action is keyboard-focusable (the click is the only
+      // launch path) — capture it focused.
+      await page.getByRole("button", { name: "Resume" }).focus();
+      await page.screenshot({
+        path: resolve(GALLERY, `27-ranking/queue-${vp.name}-${theme}.png`),
+      });
+    });
   }
 }

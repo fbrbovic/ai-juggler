@@ -366,7 +366,20 @@ pub fn quota_display_inner(
     let events = usage
         .events_for_account(account_id, now_ms - quota::WEEK_MS)
         .unwrap_or_default();
-    let samples = usage.samples_for_account(account_id).unwrap_or_default();
+    let anchor = settings
+        .get(&juggler_core::storage::anchor_settings_key(account_id))
+        .ok()
+        .flatten()
+        .and_then(|raw| raw.parse::<i64>().ok());
+    let samples_five_hour = usage
+        .samples_for_account(account_id, juggler_core::quota::WindowKind::FiveHour)
+        .unwrap_or_default();
+    let samples_weekly = usage
+        .samples_for_account(
+            account_id,
+            juggler_core::quota::WindowKind::Weekly { anchor_ms: anchor },
+        )
+        .unwrap_or_default();
     let cap = |kind: WindowKind| -> QuotaCap {
         settings
             .get(&juggler_core::storage::cap_settings_key(account_id, kind))
@@ -375,11 +388,6 @@ pub fn quota_display_inner(
             .map(|raw| QuotaCap::decode(&raw))
             .unwrap_or_default()
     };
-    let anchor = settings
-        .get(&juggler_core::storage::anchor_settings_key(account_id))
-        .ok()
-        .flatten()
-        .and_then(|raw| raw.parse::<i64>().ok());
     let clock = SubscriptionClock {
         renewal_date: account.renewal_date.clone(),
         entered_by_user: account.renewal_date.is_some(),
@@ -388,7 +396,8 @@ pub fn quota_display_inner(
     let today = epoch_today(now_ms);
     let evaluation = quota::evaluate_account(AccountEvaluation {
         events: &events,
-        samples: &samples,
+        samples_five_hour: &samples_five_hour,
+        samples_weekly: &samples_weekly,
         account: account_id,
         cap_five_hour: cap(WindowKind::FiveHour),
         cap_weekly: cap(WindowKind::Weekly { anchor_ms: anchor }),
@@ -399,8 +408,9 @@ pub fn quota_display_inner(
     });
 
     // Staleness (Q-1): the freshest Measured sample's age.
-    let last_measured = samples
+    let last_measured = samples_five_hour
         .iter()
+        .chain(samples_weekly.iter())
         .filter(|sample| sample.confidence == juggler_core::model::Confidence::Measured)
         .map(|sample| sample.ts)
         .max();
@@ -546,6 +556,562 @@ pub fn quota_display_inner(
         forecast,
         unavailable_reason,
     }
+}
+
+/// AJ-E611: one ranked (or filtered) row on the wire — greyed rows
+/// carry their filter reason; survivors carry the score + their
+/// explanation (top-2 factors in words; the full five in `factors`).
+#[derive(Clone, PartialEq, Debug, serde::Serialize)]
+pub struct RankedRowInfo {
+    /// Account id.
+    pub account: String,
+    /// The weighted score, when the account survived the hard filters.
+    pub score: Option<f64>,
+    /// The hard filter's reason (greyed row copy).
+    pub filtered_reason: Option<String>,
+    /// Top-2 contributing factors in words.
+    pub top_factors: Vec<String>,
+    /// All five named inputs (the "Why this order?" expander).
+    pub factors: Vec<(String, f64)>,
+    /// Unknown headroom ranked without quota.
+    pub headroom_unknown: bool,
+    /// The confidence badge copy.
+    pub confidence: String,
+    /// TTE minutes for the pill, when a forecast exists.
+    pub tte_min: Option<f64>,
+    /// True for the top row (badged "Suggested").
+    pub suggested: bool,
+}
+
+/// The display's forecast TTE, when the pill can show one.
+fn quota_tte(display: &QuotaDisplayInfo) -> Option<f64> {
+    display.forecast.tte_min
+}
+
+/// AJ-E611 Req.1–3: the explainable destination ranking — hard filters
+/// first (logged-out, wrong Provider, exhausted with no reset before
+/// need-by), survivors scored with the ONE set of core weights.
+/// Suggest-only: the rows sort and explain; the user clicks.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] on storage failures.
+#[allow(clippy::too_many_lines)] // one assembly pass — the weights live in core
+pub fn ranking_rows_inner(
+    state: &std::sync::Arc<crate::state::AppState>,
+    project: Option<String>,
+) -> AppResult<Vec<RankedRowInfo>> {
+    let storage = lock_storage_arc(state)?;
+    let accounts = storage.accounts().list()?;
+    let now = juggler_core::model::Timestamp::now().millis();
+    let sessions = storage.sessions().list(None).unwrap_or_default();
+    let recipes: Vec<juggler_core::model::LaunchRecipe> = storage
+        .accounts()
+        .list()
+        .unwrap_or_default()
+        .iter()
+        .flat_map(|account| {
+            storage
+                .profiles()
+                .list_by_account(&account.id)
+                .unwrap_or_default()
+        })
+        .collect();
+    let project_sessions: Vec<String> = project
+        .as_ref()
+        .map(|project_id| {
+            sessions
+                .iter()
+                .filter(|record| {
+                    record
+                        .project
+                        .as_ref()
+                        .is_some_and(|p| p.as_str() == project_id)
+                })
+                .map(|record| record.id.as_str().to_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    let total_project_sessions = project_sessions.len().max(1);
+
+    let mut candidates: Vec<juggler_core::ranking::Candidate> = Vec::new();
+    let mut tte_by_account: std::collections::BTreeMap<String, Option<f64>> =
+        std::collections::BTreeMap::new();
+    for account in &accounts {
+        let display = quota_display_inner(&storage, account, now);
+        tte_by_account.insert(account.id.as_str().to_owned(), quota_tte(&display));
+        let headroom_pct = [display.five_hour.as_ref(), display.weekly.as_ref()]
+            .into_iter()
+            .flatten()
+            .filter_map(|window| window.percentage.map(|pct| 100.0 - pct))
+            .reduce(f64::min);
+        let exhausted_no_reset = [display.five_hour.as_ref(), display.weekly.as_ref()]
+            .into_iter()
+            .flatten()
+            .any(|window| window.state == "exhausted" && window.resets_at_ms.is_none());
+        let confidence = match display
+            .five_hour
+            .as_ref()
+            .and_then(|window| window.badge.as_deref())
+            .or_else(|| {
+                display
+                    .weekly
+                    .as_ref()
+                    .and_then(|window| window.badge.as_deref())
+            }) {
+            Some("measured") => juggler_core::model::Confidence::Measured,
+            Some("computed") => juggler_core::model::Confidence::Computed,
+            _ => juggler_core::model::Confidence::Estimated,
+        };
+        let affinity = if project.is_some() {
+            let own = sessions
+                .iter()
+                .filter(|record| {
+                    record
+                        .project
+                        .as_ref()
+                        .is_some_and(|p| p.as_str() == project.as_deref().unwrap_or(""))
+                        && recipes.iter().any(|recipe| {
+                            recipe.id == record.profile
+                                && recipe.account.as_str() == account.id.as_str()
+                        })
+                })
+                .count();
+            f64::from(u32::try_from(own).unwrap_or(u32::MAX))
+                / f64::from(u32::try_from(total_project_sessions).unwrap_or(u32::MAX))
+        } else {
+            0.5
+        };
+        let events = storage
+            .usage()
+            .events_for_account(account.id.as_str(), now - juggler_core::quota::WEEK_MS)
+            .unwrap_or_default();
+        let session_ids: Vec<&str> = project_sessions.iter().map(String::as_str).collect();
+        let median_burn = juggler_core::quota_forecast::median_session_burn(&events, &session_ids);
+        let catalog = pricing_catalog(&storage);
+        let projected_usd = median_burn.and_then(|tokens| {
+            let counts = juggler_core::model::TokenCounts {
+                input: tokens,
+                ..juggler_core::model::TokenCounts::default()
+            };
+            catalog
+                .bundled
+                .first()
+                .map(|row| row.model.clone())
+                .and_then(|model| catalog.price_tokens(&model, now, counts))
+        });
+        let active_sessions = sessions
+            .iter()
+            .filter(|record| {
+                record.status == SessionStatus::Running
+                    && recipes.iter().any(|recipe| {
+                        recipe.id == record.profile
+                            && recipe.account.as_str() == account.id.as_str()
+                    })
+            })
+            .count();
+        let active_sessions = u32::try_from(active_sessions).unwrap_or(u32::MAX);
+        candidates.push(juggler_core::ranking::Candidate {
+            account: account.id.as_str().to_owned(),
+            logged_out: login_state_of(account) == juggler_adapters::LoginState::LoggedOut,
+            wrong_provider: false, // request-restriction surface lands with the switch epic
+            exhausted_no_reset,
+            headroom_pct,
+            headroom_confidence: confidence,
+            affinity,
+            fidelity: 0.5, // switch-fidelity matrix lands with its epic — neutral, documented
+            projected_usd,
+            active_sessions,
+            soft_cap: 4,
+        });
+    }
+
+    let ranked = juggler_core::ranking::rank(&candidates);
+    Ok(ranked
+        .into_iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let tte = tte_by_account.get(&row.account).copied().flatten();
+            RankedRowInfo {
+                account: row.account,
+                score: row.score,
+                filtered_reason: row.filtered_reason,
+                top_factors: row.top_factors,
+                factors: row.factors,
+                headroom_unknown: row.headroom_unknown,
+                confidence: match row.confidence {
+                    juggler_core::model::Confidence::Measured => "Measured".to_owned(),
+                    juggler_core::model::Confidence::Computed => "Computed".to_owned(),
+                    juggler_core::model::Confidence::Estimated => "Estimate".to_owned(),
+                },
+                tte_min: tte,
+                suggested: index == 0 && row.score.is_some(),
+            }
+        })
+        .collect())
+}
+
+/// AJ-E611: the explainable ranking command (thin wrapper over
+/// [`ranking_rows_inner`] — suggest-only, the user clicks).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] on storage failures.
+#[tauri::command]
+pub fn ranking_rows(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+    project: Option<String>,
+) -> AppResult<Vec<RankedRowInfo>> {
+    ranking_rows_inner(&state, project)
+}
+
+/// AJ-E611: one emitted alert on the wire (the notification region's
+/// payload — polite live-region semantics client-side).
+#[derive(Clone, PartialEq, Debug, serde::Serialize)]
+pub struct AlertEventInfo {
+    /// `tray-amber|actionable|exhausted|reset-reached`.
+    pub kind: String,
+    /// Account the alert belongs to.
+    pub account: String,
+    /// The copy (badge-carrying: Estimated reads differently).
+    pub text: String,
+    /// Emitted at, epoch ms.
+    pub at_ms: i64,
+}
+
+/// The per-(account, window) persisted FSM states (`alert_fsms` KV).
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct AlertFsmState {
+    #[serde(default)]
+    five_hour: juggler_core::alerts::AlertFsm,
+    #[serde(default)]
+    weekly: juggler_core::alerts::AlertFsm,
+}
+
+const ALERT_FSMS_KEY: &str = "alert_fsms";
+const ALERT_DIGEST_KEY: &str = "alert_digest";
+const ALERT_MUTES_KEY: &str = "alert_mutes";
+
+/// AJ-E611: one account's two window FSMs + its renewal-approaching
+/// digest line (Req.5 — the subscription clock NEVER steps a window
+/// machine). Pure with respect to Provider surfaces; mutates only the
+/// persisted machine entry and the digest buffer.
+fn step_account_alerts(
+    storage: &juggler_core::storage::Storage,
+    account: &juggler_core::model::Account,
+    now: i64,
+    entry: &mut AlertFsmState,
+    digest: &mut juggler_core::alerts::Digest,
+) -> Vec<AlertEventInfo> {
+    use juggler_core::alerts::{AlertEmission, WindowObservation};
+
+    let mut out = Vec::new();
+    let id = account.id.as_str().to_owned();
+    let display = quota_display_inner(storage, account, now);
+    let confidence = match display.forecast.badge.as_str() {
+        "measured" => juggler_core::model::Confidence::Measured,
+        "computed" => juggler_core::model::Confidence::Computed,
+        _ => juggler_core::model::Confidence::Estimated,
+    };
+    // One buffered line per distinct copy — the label changes as the
+    // date nears, which is the natural dedupe key.
+    if display.renewal.state == "approaching"
+        && !digest
+            .entries
+            .iter()
+            .any(|line| line.key == id && line.text == display.renewal.label)
+    {
+        *digest = juggler_core::alerts::digest_add(digest, &id, &display.renewal.label);
+    }
+    for (slot, window) in [
+        ("five_hour", &display.five_hour),
+        ("weekly", &display.weekly),
+    ] {
+        let Some(window) = window else { continue };
+        let observation = WindowObservation {
+            tte_min: display.forecast.tte_min,
+            used_pct: window.percentage,
+            confidence,
+        };
+        let machine = if slot == "five_hour" {
+            &entry.five_hour
+        } else {
+            &entry.weekly
+        };
+        let (next, emission) = juggler_core::alerts::step(machine, observation, now);
+        if slot == "five_hour" {
+            entry.five_hour = next;
+        } else {
+            entry.weekly = next;
+        }
+        let event = match emission {
+            AlertEmission::TrayAmber { .. } => Some((
+                "tray-amber",
+                format!(
+                    "{} ≈{} min left ({}), {} window",
+                    short_label(&account.label),
+                    display
+                        .forecast
+                        .tte_min
+                        .map_or_else(|| "—".into(), |tte| format!("{tte:.0}")),
+                    badge_word(confidence),
+                    slot
+                ),
+            )),
+            AlertEmission::Actionable { .. } => Some((
+                "actionable",
+                format!(
+                    "{} at {}{} used ({}), {} window — hand over or queue at reset",
+                    short_label(&account.label),
+                    window
+                        .percentage
+                        .map_or_else(String::new, |pct| format!("{pct:.0}%")),
+                    if window.percentage.is_some() {
+                        ""
+                    } else {
+                        "critical TTE"
+                    },
+                    badge_word(confidence),
+                    slot
+                ),
+            )),
+            AlertEmission::ExhaustedNotification => Some((
+                "exhausted",
+                format!("{} {} window exhausted", short_label(&account.label), slot),
+            )),
+            AlertEmission::None | AlertEmission::ResetReached => None,
+        };
+        if let Some((kind, text)) = event {
+            out.push(AlertEventInfo {
+                kind: kind.to_owned(),
+                account: id.clone(),
+                text,
+                at_ms: now,
+            });
+        }
+    }
+    out
+}
+
+/// AJ-E611 Req.4: one alert evaluation pass — steps every account's
+/// two window FSMs from the engine's current readings, emits AT MOST
+/// the §Q5 notifications, and persists the machines. Non-actionable
+/// crossings (Req.5: renewal `approaching`) batch into the hourly
+/// digest; quiet hours defer without dropping. Passive by
+/// construction: nothing here launches, signals, or writes any
+/// Provider surface (the guardrail test pins it). `local_hour` comes
+/// from the polling UI (the webview knows wall-clock local time; the
+/// backend carries no tz database) — `None` defers the flush.
+#[must_use]
+pub fn alerts_tick_inner(
+    state: &std::sync::Arc<crate::state::AppState>,
+    local_hour: Option<u32>,
+) -> Vec<AlertEventInfo> {
+    let mut out = Vec::new();
+    let now = juggler_core::model::Timestamp::now().millis();
+    let Ok(storage) = state.storage.lock() else {
+        return out;
+    };
+    let accounts = storage.accounts().list().unwrap_or_default();
+    let mut machines: std::collections::BTreeMap<String, AlertFsmState> = storage
+        .app_settings()
+        .get(ALERT_FSMS_KEY)
+        .ok()
+        .flatten()
+        .and_then(|blob| serde_json::from_str(&blob).ok())
+        .unwrap_or_default();
+    let mut digest: juggler_core::alerts::Digest = storage
+        .app_settings()
+        .get(ALERT_DIGEST_KEY)
+        .ok()
+        .flatten()
+        .and_then(|blob| serde_json::from_str(&blob).ok())
+        .unwrap_or_default();
+
+    for account in &accounts {
+        let entry = machines.entry(account.id.as_str().to_owned()).or_default();
+        out.extend(step_account_alerts(
+            &storage,
+            account,
+            now,
+            entry,
+            &mut digest,
+        ));
+    }
+    if let Ok(blob) = serde_json::to_string(&machines) {
+        let _ = storage.app_settings().set(ALERT_FSMS_KEY, &blob);
+    }
+
+    out.extend(queue_and_digest_events(&storage, now, local_hour, digest));
+    out
+}
+
+/// AJ-E611 Req.4/6 tail of the alert pass: reset-queue notifications
+/// (due items notify ONCE — `notified`; broken lineage goes `stale`,
+/// explained) plus the hourly digest flush (muted keys drop; quiet
+/// hours — a missing local hour counts as quiet — defer without
+/// dropping). The next digest state is persisted here; the caller
+/// receives only the events.
+fn queue_and_digest_events(
+    storage: &juggler_core::storage::Storage,
+    now: i64,
+    local_hour: Option<u32>,
+    digest: juggler_core::alerts::Digest,
+) -> Vec<AlertEventInfo> {
+    let mut out = Vec::new();
+    let session_ids: Vec<String> = storage
+        .sessions()
+        .list(None)
+        .unwrap_or_default()
+        .iter()
+        .map(|record| record.id.as_str().to_owned())
+        .collect();
+    let usage = storage.usage();
+    for (id, session, account, _resume_at) in usage.pending_resumes(now).unwrap_or_default() {
+        if !session_ids.contains(&session) {
+            let _ = usage.set_reset_state(&id, "stale");
+            continue;
+        }
+        out.push(AlertEventInfo {
+            kind: "reset-reached".to_owned(),
+            account,
+            text: format!("reset reached — resume {session}?"),
+            at_ms: now,
+        });
+        let _ = usage.set_reset_state(&id, "notified");
+    }
+
+    let muted: Vec<String> = storage
+        .app_settings()
+        .get(ALERT_MUTES_KEY)
+        .ok()
+        .flatten()
+        .and_then(|blob| serde_json::from_str(&blob).ok())
+        .unwrap_or_default();
+    let quiet_hour = local_hour.is_none_or(|hour| !(7..22).contains(&hour));
+    let (next_digest, flushed) = if quiet_hour {
+        (digest.clone(), Vec::new())
+    } else {
+        juggler_core::alerts::digest_flush(&digest, now, &muted, local_hour.unwrap_or(12))
+    };
+    for entry in flushed {
+        out.push(AlertEventInfo {
+            kind: "digest".to_owned(),
+            account: entry.key.clone(),
+            text: entry.text,
+            at_ms: now,
+        });
+    }
+    if let Ok(blob) = serde_json::to_string(&next_digest) {
+        let _ = storage.app_settings().set(ALERT_DIGEST_KEY, &blob);
+    }
+    out
+}
+
+fn short_label(label: &str) -> String {
+    label.chars().take(18).collect()
+}
+
+fn badge_word(confidence: juggler_core::model::Confidence) -> &'static str {
+    match confidence {
+        juggler_core::model::Confidence::Measured => "Measured",
+        juggler_core::model::Confidence::Computed => "Computed",
+        juggler_core::model::Confidence::Estimated => "estimate",
+    }
+}
+
+/// AJ-E611: the alert evaluation pass (UI polls this on its own
+/// cadence; emissions are at-most-once by the machines). The UI passes
+/// its wall-clock local hour — the quiet-hours gate for the digest
+/// flush.
+#[tauri::command]
+#[must_use]
+pub fn alerts_tick(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+    local_hour: Option<u32>,
+) -> Vec<AlertEventInfo> {
+    alerts_tick_inner(&state, local_hour)
+}
+
+/// AJ-E611: one reset-queue row.
+#[derive(Clone, PartialEq, Debug, serde::Serialize)]
+pub struct ResetQueueInfo {
+    /// Queue entry id.
+    pub id: String,
+    /// The session that hit the wall.
+    pub session: String,
+    /// Its account.
+    pub account: String,
+    /// Resume-at instant, epoch ms.
+    pub resume_at_ms: i64,
+    /// `queued|notified|ready|resumed|dismissed|stale`.
+    pub state: String,
+}
+
+/// AJ-E611 Req.6: queues a resume for an exhausted session — a
+/// PASSIVE timer + notification; the resume fires only from the
+/// notification/row click (`reset_queue_resume`).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] on storage failure.
+#[tauri::command]
+pub fn reset_queue_queue(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+    session: String,
+    account: String,
+    resume_at_ms: i64,
+) -> AppResult<()> {
+    let storage = lock_storage_arc(&state)?;
+    let id = format!("rq-{session}");
+    storage
+        .usage()
+        .queue_reset(&id, &session, &account, resume_at_ms)
+        .map_err(AppError::from)?;
+    Ok(())
+}
+
+/// AJ-E611: the queue rows (countdown/ready/stale explained).
+#[tauri::command]
+#[must_use]
+pub fn reset_queue_list(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+) -> Vec<ResetQueueInfo> {
+    let Ok(storage) = state.storage.lock() else {
+        return Vec::new();
+    };
+    let now = juggler_core::model::Timestamp::now().millis();
+    storage
+        .usage()
+        .pending_resumes(now + 365 * 24 * 3_600_000)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, session, account, resume_at)| ResetQueueInfo {
+            id,
+            session,
+            account,
+            resume_at_ms: resume_at,
+            state: if resume_at <= now { "ready" } else { "queued" }.to_owned(),
+        })
+        .collect()
+}
+
+/// AJ-E611: dismiss a queued resume (explicit user action).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] on storage failure.
+#[tauri::command]
+pub fn reset_queue_dismiss(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+    id: String,
+) -> AppResult<()> {
+    let storage = lock_storage_arc(&state)?;
+    storage
+        .usage()
+        .set_reset_state(&id, "dismissed")
+        .map_err(AppError::from)?;
+    Ok(())
 }
 
 /// AJ-E610 Req.3/E609 Req.4: the user-entered flat subscription fee
@@ -1552,8 +2118,18 @@ fn engine_usage_snapshot(
     let Ok(events) = usage_repo.events_for_account(&account, now_ms - quota::WEEK_MS) else {
         return juggler_core::model::UsageSnapshot::default();
     };
-    let samples = usage_repo.samples_for_account(&account).unwrap_or_default();
     let settings = storage.app_settings();
+    let anchor = settings
+        .get(&anchor_settings_key(&account))
+        .ok()
+        .flatten()
+        .and_then(|raw| raw.parse::<i64>().ok());
+    let samples_five_hour = usage_repo
+        .samples_for_account(&account, WindowKind::FiveHour)
+        .unwrap_or_default();
+    let samples_weekly = usage_repo
+        .samples_for_account(&account, WindowKind::Weekly { anchor_ms: anchor })
+        .unwrap_or_default();
     let cap = |kind: WindowKind| -> QuotaCap {
         settings
             .get(&cap_settings_key(&account, kind))
@@ -1562,11 +2138,6 @@ fn engine_usage_snapshot(
             .map(|raw| QuotaCap::decode(&raw))
             .unwrap_or_default()
     };
-    let anchor = settings
-        .get(&anchor_settings_key(&account))
-        .ok()
-        .flatten()
-        .and_then(|raw| raw.parse::<i64>().ok());
     let subscription = SubscriptionClock {
         renewal_date: account_row.renewal_date.clone(),
         entered_by_user: account_row.renewal_date.is_some(),
@@ -1574,7 +2145,8 @@ fn engine_usage_snapshot(
     };
     let evaluation = quota::evaluate_account(quota::AccountEvaluation {
         events: &events,
-        samples: &samples,
+        samples_five_hour: &samples_five_hour,
+        samples_weekly: &samples_weekly,
         account: &account,
         cap_five_hour: cap(WindowKind::FiveHour),
         cap_weekly: cap(WindowKind::Weekly { anchor_ms: anchor }),

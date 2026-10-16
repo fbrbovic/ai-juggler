@@ -575,7 +575,7 @@ commands, `QuotaRings.tsx` (+test), RightInspector Usage-tab/account
 card/FeeEditor, NewSession QuotaChip, `tests/quota_display.rs`,
 gallery 26-quota.
 
-### AJ-E611 Smart destination ranking inputs & quota alerts / reset-queue integration | Status: TODO | Priority P1 | Effort M | Depends: AJ-E608, AJ-E609, AJ-E610
+### AJ-E611 Smart destination ranking inputs & quota alerts / reset-queue integration | Status: DONE-EVIDENCED | Priority P1 | Effort M | Depends: AJ-E608, AJ-E609, AJ-E610
 **Goal**: Wire AJ-E606–E609 outputs into (a) the explainable destination ranking used at
 NewSession/handover/reset-return and (b) the anti-fatigue alert + reset-queue policy, so quota
 becomes the ranking/alert input D-01 intends — suggest-only, never auto-switching.
@@ -650,6 +650,30 @@ affinity can conspire to recommend the wrong-billing account; the affinity expla
 `docs/review/decision-log.md` only via maintainer decision — agents do not edit settled decisions.
 
 
+**Status report (2026-10-16)**: DONE-EVIDENCED — evidence
+`docs/qa/evidence/AJ-E611/manifest.md`; gate `docs/qa/gate-M3.md`
+§AJ-E611. Core 11/11 (weights-in-one-function, greyed filters,
+Estimated ×0.85 tie-break, exact §Q5 fixture-day sequence, 256-case
+at-most-once proptest, digest mute/quiet/cadence, purity guardrail);
+app guardrails 4/4 (no-spawn, digest-once-not-FSM, suggest-only
+storage diff, queue stale/no-launch). The guardrail suite exposed and
+fixed a REAL E606 bug (samples_for_account ignored the window column
+— a five-hour sample polluted the weekly reading). Visual 280/280
+incl. 16 new 27-ranking captures + 2 axe passes; two real a11y
+defects fixed (nested-interactive listbox; modal text-faint contrast
+— token cannot reach 4.5:1 on dark surfaces; rail's faint uses are
+flagged for a maintainer token decision). Canonical-home
+reconciliation: pass2/02 §7 adopts §Q6 wholesale — identical
+weights, nothing to flag; §7's three extension terms (switch cost,
+return likelihood, cumulative hop cost) are switch-epic scope
+(replay packs/hop graphs), documented as stubs in ranking.rs. Live
+quota-wall dogfood PENDING the authenticated session (recorded).
+This closes the E6 epic: E601–E611 all DONE-EVIDENCED.
 
-
-
+**Implementation-mapping**: `ranking.rs` + `alerts.rs` (new core),
+window-scoped `samples_for_account` + reset-queue in usage.rs,
+per-window `AccountEvaluation`, 4 app commands (ranking/alerts/queue
+— no resume command by design), `RankedRows.tsx` +
+`NotificationRegion.tsx` (new), NewSession mount, tests
+`ranking_alerts.rs` (11) + `ranking_alerts_guardrails.rs` (4),
+gallery 27-ranking + 2 axe passes.

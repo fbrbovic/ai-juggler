@@ -29,6 +29,7 @@ import { NewSessionModal } from "./screens/NewSession";
 import { ReadyHome } from "./screens/ReadyHome";
 import { SessionPanel } from "./screens/WorkPanels";
 import { CostMatrix } from "./components/CostMatrix";
+import { NotificationRegion } from "./components/NotificationRegion";
 import { RightInspector } from "./components/RightInspector";
 import {
   accountsList,
@@ -651,6 +652,11 @@ export default function App() {
             />
           ) : (
             <>
+              {/* AJ-E611: the alert/notification region — polite
+                  live-region, badge-carrying copy, reset-queue rows
+                  with an explicit Resume click (the click opens the
+                  picker; nothing ever launches by itself). */}
+              <NotificationRegion onQueueResume={() => setNewSession(true)} />
               {/* AJ-E609: the Usage cost matrix — per-session model
                   attribution, the dual subscription view, and the CSV
                   export (rides above the inspector's content). */}

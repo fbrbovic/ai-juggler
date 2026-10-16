@@ -2,11 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import { Button, Card, Chip } from "../components/primitives";
 import { IconProjects, IconTerminal } from "../components/icons";
 import { QuotaChip } from "../components/QuotaRings";
+import { RankedRows } from "../components/RankedRows";
 import {
   hasLiveBackend,
   launchSession,
   pickDirectory,
   quotaDisplayAll,
+  rankingRows,
+  type RankedRowData,
   type QuotaDisplayData,
   type AccountInfo,
   type LaunchRecipeInfo,
@@ -49,6 +52,20 @@ export function NewSessionModal({
     return map;
   }, [accounts]);
 
+  // AJ-E611: the explainable ranking (suggest-only — clicking a row
+  // highlights that account's recipes; the launch stays the user's
+  // own click on a recipe).
+  const [ranked, setRanked] = useState<RankedRowData[]>([]);
+  const [pickedAccount, setPickedAccount] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    let alive = true;
+    rankingRows().then((rows) => {
+      if (alive) setRanked(rows);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
   // AJ-E610: the account's two-clock display for the row chip (one
   // query for all rows; typed states render as copy, never 0%).
   const [quotaByAccount, setQuotaByAccount] = useState<Record<string, QuotaDisplayData>>({});
@@ -130,7 +147,7 @@ export function NewSessionModal({
           }}
         >
           {/* Step 1 — where */}
-          <p className="text-[11px] uppercase tracking-wider text-faint">
+          <p className="text-[11px] uppercase tracking-wider text-muted">
             Where do you want to work?
           </p>
           <div className="mt-2 grid grid-cols-2 gap-2">
@@ -155,7 +172,7 @@ export function NewSessionModal({
                     <span className="dot-live ml-auto size-1.5 rounded-full bg-live" />
                   )}
                 </span>
-                <span className="truncate text-[10px] text-faint">
+                <span className="truncate text-[10px] text-muted">
                   {project.history_sessions > 0
                     ? `${project.history_sessions} prior sessions · ${project.accounts_used.join(", ")}`
                     : project.root}
@@ -177,12 +194,19 @@ export function NewSessionModal({
             >
               <IconProjects width={14} height={14} />
               <span className="text-xs font-medium">Choose folder…</span>
-              <span className="text-[10px] text-faint">or drop it anywhere</span>
+              <span className="text-[10px] text-muted">or drop it anywhere</span>
             </button>
           </div>
 
           {/* Step 2 — who */}
-          <p className="mt-5 text-[11px] uppercase tracking-wider text-faint">
+          <p className="mt-5 text-[11px] uppercase tracking-wider text-muted">
+            {ranked.length > 0 && (
+              <RankedRows
+                rows={ranked}
+                activeAccount={pickedAccount}
+                onPick={(account) => setPickedAccount(account)}
+              />
+            )}
             Which account?
           </p>
           <div className="mt-2 flex flex-col gap-1.5">
@@ -205,10 +229,10 @@ export function NewSessionModal({
                   <IconTerminal width={13} height={13} />
                   <span className="font-medium">{recipe.account_label}</span>
                   <QuotaChip display={quotaByAccount[recipe.account_id]} />
-                  <span className="text-faint">·</span>
+                  <span className="text-muted">·</span>
                   <span className="text-muted">{recipe.name}</span>
                   {recipe.model && (
-                    <span className="ml-auto font-mono text-[10px] text-faint">
+                    <span className="ml-auto font-mono text-[10px] text-muted">
                       {recipe.model}
                     </span>
                   )}
@@ -224,7 +248,7 @@ export function NewSessionModal({
               </p>
             )}
             {profiles === null && (
-              <p className="py-3 text-center text-xs text-faint">Loading…</p>
+              <p className="py-3 text-center text-xs text-muted">Loading…</p>
             )}
           </div>
 
@@ -232,7 +256,7 @@ export function NewSessionModal({
         </div>
 
         <div className="flex items-center justify-between border-t border-hairline/60 px-6 py-4">
-          <span className="text-[11px] text-faint">
+          <span className="text-[11px] text-muted">
             {directory
               ? `Launching in ${directory.split("/").pop()}`
               : "No folder picked — the profile's default applies"}

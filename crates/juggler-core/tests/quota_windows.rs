@@ -162,7 +162,8 @@ proptest! {
         let evs: Vec<UsageEvent> = events.iter().map(|(_, e)| e.clone()).collect();
         let account_quota = evaluate_account(AccountEvaluation {
             events: &evs,
-            samples: &[],
+            samples_five_hour: &[],
+            samples_weekly: &[],
             account: "acc",
             cap_five_hour: QuotaCap::default(),
             cap_weekly: QuotaCap::default(),
