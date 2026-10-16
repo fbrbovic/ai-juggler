@@ -18,3 +18,6 @@ Rules:
 | Capture | Provider | Class | Grade | Verification |
 |---|---|---|---|---|
 | `claude-statusline-20261013.md` | Claude | quota | documented-sanctioned | candidate (live field observation pending the authenticated session — see the capture Note) |
+| `claude-captures.md` (AJ-E602) | Claude | tokens/cost verified; statusline candidate; renewal negative | local-observable + documented | transcripts & cost-state verified; rate_limits candidate; renewal no source |
+| `codex-captures.md` (AJ-E603) | Codex | tokens verified; percentage no sanctioned source; renewal negative | local-observable | tokens verified (2 captures ≥24h); quota ceiling Estimate; renewal unknown |
+| `zcode-captures.md` (AJ-E604) | ZCode | burn verified; pool/renewal negative | local-observable + documented | burn Computed-ready (±0 script); pool Estimate-at-best; renewal unknown |

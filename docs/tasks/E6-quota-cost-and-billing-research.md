@@ -66,7 +66,7 @@ with no broken tables at 100-col terminal width.
 two-capture rule. Trap: vendor marketing pages announcing "billing API coming soon" are `inferred`,
 not `documented-sanctioned`. Gemini has no `docs/research/gemini.md` yet; AJ-E605 creates it under this protocol.
 
-### AJ-E602 Claude (Anthropic) billing, quota & renewal-date investigation | Status: TODO | Priority P0 | Effort M | Depends: AJ-E601
+### AJ-E602 Claude (Anthropic) billing, quota & renewal-date investigation | Status: DONE-EVIDENCED (evidence: docs/qa/evidence/AJ-E602/manifest.md) | Priority P0 | Effort M | Depends: AJ-E601
 **Goal**: Determine, with live proof, exactly which Claude Code surfaces expose (a) 5h/weekly quota,
 (b) token/cost totals, and (c) any subscription renewal/billing date — and grade each under AJ-E601.
 **User story**: As Maya (P1, 2×Max, deep/10 §0), I want my renewal warning to come from a real
@@ -104,7 +104,9 @@ docs/research/claude-code.md:50-55; decision-log.md:118-122 (D-12 research manda
 — grade them reconciliation, never multi-device truth. Do not re-litigate D-12: even a found renewal
 source enters product only via AJ-E610's gate.
 
-### AJ-E603 OpenAI / Codex billing, quota & renewal-date investigation | Status: TODO | Priority P0 | Effort M | Depends: AJ-E601
+
+*Implementation mapping (recorded in this task's PR per the claiming protocol)*: evidence packet `docs/research/evidence/billing/claude-captures.md` — transcripts (`message.usage`) + `cost-state` rollups verified local-observable from the imported managed copies (tokens Measured, session cost Computed); statusline rate_limits stays candidate (the unauth login screen never invokes the statusline — live leg pending the maintainer's re-login, consistent with the protocol's worked example); stats-cache//usage candidate (no live instance; reconciliation-grade only, local-machine by the vendor's own docs); renewal negative across ≥4 surfaces (Console/Admin API is org-API scope; claude.ai/Stripe is the human surface); the ANTHROPIC_API_KEY-vs-subscription billing gotcha recorded for AJ-E607; addendum appended to claude-code.md §5.
+### AJ-E603 OpenAI / Codex billing, quota & renewal-date investigation | Status: DONE-EVIDENCED (evidence: docs/qa/evidence/AJ-E603/manifest.md) | Priority P0 | Effort M | Depends: AJ-E601
 **Goal**: Prove what Codex exposes locally for quota windows, token usage, and any ChatGPT-plan
 renewal/billing date, and fix the confidence ceiling product may claim (expected: Estimated, deep/09 §Q1).
 **User story**: As Maya (P1) with a ChatGPT-plan Codex account, I want Juggler to label my Codex
@@ -141,7 +143,9 @@ SPEC.md:203; docs/research/codex.md:51-52,70-72; pass2/09 U-5.
 conflating them is the classic false-`Measured` bug. If a future OpenAI subscription API appears, it
 still needs AJ-E601's two-capture rule before AJ-E610 may use it.
 
-### AJ-E604 ZCode (Z.ai / GLM) billing, credit & renewal-date investigation | Status: TODO | Priority P0 | Effort M | Depends: AJ-E601
+
+*Implementation mapping (recorded in this task's PR per the claiming protocol)*: evidence packet `docs/research/evidence/billing/codex-captures.md` — rollout token_usage_record verified (Desktop 0.162.0-alpha.17.2, two sessions ≥24 h) + the npm CLI 0.163.0 exec --json envelope (throwaway CODEX_HOME); the percentage feed is the undocumented rateLimits endpoint → prohibited (widgets are human surfaces); /v1/organization/costs is Admin-key org-scope API usage — never seat evidence; tier unverified recorded per U-5; ceiling: tokens Measured, plan % Estimate with ≈ resets, renewal unknown; addendum appended to codex.md §9.
+### AJ-E604 ZCode (Z.ai / GLM) billing, credit & renewal-date investigation | Status: DONE-EVIDENCED (evidence: docs/qa/evidence/AJ-E604/manifest.md) | Priority P0 | Effort M | Depends: AJ-E601
 **Goal**: Prove ZCode's locally-computable credit burn and test exhaustively for any sanctioned
 pool-total or renewal/billing-date source, fixing what AJ-E607 may compute vs what must stay user-entered.
 **User story**: As Alex (P6, Pro/Lite, deep/10 §0) on a tight budget, I need my GLM credit burn
@@ -177,6 +181,8 @@ renewal-source grade. Pass = AJ-E607 can implement Computed burn from the packet
 those grades separate in the packet or AJ-E610 will overstate. Peak window is weekdays 14:00–18:00
 UTC+8 (zcode.md:16); fixtures must state timezone or credit maths is unverifiable.
 
+
+*Implementation mapping (recorded in this task's PR per the claiming protocol)*: evidence packet `docs/research/evidence/billing/zcode-captures.md` + `zcode-recompute.py` (60-line read-only script; ±0 hand-check) — model_usage verified across two days; the published formula/tiers/off-peak re-verified dated 2026-10-15 (unchanged; NEW: MCP tool calls bill at output ×1.2 — script gap recorded); the bucket→column mapping stated as inferred (computed_total = input + output pins input as all-inclusive); clone-first probe with zero writes (the running app's own WAL explains mtime movement); pool totals Estimate-at-best vs user-entered caps; renewal negative; addendum appended to zcode.md §B8.
 ### AJ-E605 Gemini CLI billing, quota & renewal-date investigation | Status: TODO | Priority P1 | Effort M | Depends: AJ-E601
 **Goal**: Create the missing Gemini research baseline: what Gemini CLI / Google AI plans expose
 locally or via documented APIs for quota, usage, cost, and renewal dates, graded under AJ-E601

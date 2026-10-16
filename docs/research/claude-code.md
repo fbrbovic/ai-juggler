@@ -87,3 +87,11 @@
 3. Sessions are readable JSONL under each config dir — read-only parsing is proven at scale by ccusage; dedupe by message `uuid` across resumed files.
 4. Version churn is fast (weekly minors with behavior changes) — pin and re-verify field shapes per version.
 5. Stay on the right side of ToS: manage accounts a user owns, don't advertise limit-evasion, keep credentials per-account isolated.
+
+## §5 addendum — billing/quota investigation (AJ-E602, 2026-10-15)
+
+Append-only per the task law; supersedes nothing above.
+
+- Live captures + AJ-E601 grades: `docs/research/evidence/billing/claude-captures.md`. Headlines: transcript `message.usage` objects and `cost-state` rollups (`totalCostUSD`, per-model token totals) are **verified local-observable** from the imported managed copies — per-message tokens may render **Measured** (local scope) and session cost is **Computed** from the vendor's own rollup; the statusline `rate_limits` live leg needs an authenticated Pro/Max session (the unauth login screen never invokes the statusline — captured honestly; stays **candidate**, same verdict as the protocol's worked example); renewal has **no sanctioned source** (Console/Admin API is org-API scope only — claude.ai/Stripe is the human surface; ≥4 negatives recorded).
+- Launch-time gotcha for AJ-E607: a stray `ANTHROPIC_API_KEY` silently switches Claude Code to API pre-paid billing instead of the subscription (claude-code#16489) — managed launches must keep that env clean.
+- Renewal field copy consequence for AJ-E610 (unchanged from D-12): `Renewal: unknown — add date`, never a pre-filled guess.
