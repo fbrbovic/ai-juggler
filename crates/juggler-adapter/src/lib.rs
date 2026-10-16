@@ -18,6 +18,7 @@ pub mod capabilities;
 pub mod discovery;
 pub mod environment;
 pub mod error;
+pub mod handover;
 pub mod launch;
 pub mod registry;
 pub mod watcher;

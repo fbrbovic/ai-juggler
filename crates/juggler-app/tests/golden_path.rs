@@ -38,7 +38,9 @@ fn claude_stub(dir: &Path) -> std::path::PathBuf {
 fn app_state(dir: &Path) -> Arc<AppState> {
     let stub = claude_stub(dir);
     let mut registry = AdapterRegistry::new();
-    registry.register(Arc::new(ClaudeCodeAdapter::with_bin(&stub)));
+    let claude = Arc::new(ClaudeCodeAdapter::with_bin(&stub));
+    registry.register(claude.clone());
+    registry.register_handover(claude);
     Arc::new(AppState::init_with_registry(dir.join("app-data"), registry).unwrap())
 }
 
@@ -110,6 +112,28 @@ fn handover_moves_context_to_another_account_and_resumes_it() {
         &cwd,
         "native-sess-42",
     );
+    let source_transcript = config_dir_of(&state, &account_a.id)
+        .join("projects")
+        .join(cwd.replace('/', "-"))
+        .join("native-sess-42.jsonl");
+    let source_hash_before =
+        juggler_handover::manifest::sha256_hex(&std::fs::read(&source_transcript).unwrap());
+    {
+        // What the watcher would have discovered (AJ-E204: the
+        // record is the resolution source).
+        let storage = state.storage.lock().unwrap();
+        let mut record = storage
+            .sessions()
+            .get(&juggler_core::model::SessionId::new(
+                launched.session_id.clone(),
+            ))
+            .unwrap();
+        record.transcript_ref = Some(juggler_core::model::TranscriptRef {
+            path: source_transcript.clone(),
+            native_id: Some("native-sess-42".to_owned()),
+        });
+        storage.sessions().update(&record).unwrap();
+    }
     let sessions_before = {
         let storage = state.storage.lock().unwrap();
         storage.sessions().list(None).unwrap()
@@ -129,6 +153,12 @@ fn handover_moves_context_to_another_account_and_resumes_it() {
         .join(&encoded)
         .join("native-sess-42.jsonl");
     assert!(dest.is_file(), "transcript transplanted");
+    // AJ-E204: copy-never-move — the source hash is invariant.
+    assert_eq!(
+        source_hash_before,
+        juggler_handover::manifest::sha256_hex(&std::fs::read(&source_transcript).unwrap()),
+        "source byte-identical after transplant"
+    );
 
     // B's instance launched with --resume native-sess-42 (the stub runs
     // asynchronously — wait for its argv record).

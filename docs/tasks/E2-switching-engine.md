@@ -231,7 +231,7 @@ deep/09 §H6 (lines 213-235), §H2 (lines 89-110);
 direction-blind (SPEC:269-274); this engine supersedes it. E210
 owns which cells flip from capped to validated.
 
-### AJ-E204 HandoverSupport trait and honest Claude transplant rebuild | Status: TODO | Priority P0 | Effort L | Depends: AJ-E203
+### AJ-E204 HandoverSupport trait and honest Claude transplant rebuild | Status: DONE-EVIDENCED | Priority P0 | Effort L | Depends: AJ-E203
 **Goal**: Move transplant out of `commands.rs` into `juggler-handover`
 behind an optional `HandoverSupport` sub-trait, copy the full sibling
 set, and stop advertising `TRANSPLANT` until fixtures prove it.
@@ -599,6 +599,21 @@ must cost the same as the first.
 - [ ] Every lossy switch passed through a seen preview with carry-list, fidelity badge, redaction policy (D-14), and §7.1 copy.
 - [ ] Source transcripts hash-identical after every automated and live switch test.
 
+
+**Status report (2026-10-16, AJ-E204)**: DONE-EVIDENCED — evidence
+`docs/qa/evidence/AJ-E204/manifest.md`. The sub-trait landed
+(HarnessAdapter untouched, registry slot optional); the Claude rebuild
+resolves via transcript_ref (S-F1 copy on missing), bundles the FULL
+sibling set with a torn-tail refusal, installs by discovered cwd
+(mangle = flagged fallback), forks collisions with the uuid tree
+preserved, and copies never moves (hash-invariant tests). TRANSPLANT
+bit off everywhere + interim "F1 Transcript-only (experimental)" UI
+label; newest-mtime and `replace('/','-')` code paths DELETED from
+commands.rs (engine in juggler-handover::transplant). The real
+compact_boundary line shape (`system` type + subtype, per
+session-malformed.jsonl:6) is now captured by the parser. 6 fixture
+tests + updated golden_path; visual 280/280. Live two-account proof
+PENDING maintainer login (recorded); wizard visuals ride E206.
 
 ---
 

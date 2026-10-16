@@ -116,7 +116,6 @@ impl HarnessAdapter for ClaudeCodeAdapter {
             | Capabilities::USAGE_TOKENS
             | Capabilities::USAGE_QUOTA_FEED
             | Capabilities::FORK
-            | Capabilities::TRANSPLANT
     }
 
     fn verified_against(&self) -> &'static [&'static str] {

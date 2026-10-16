@@ -53,7 +53,6 @@ impl HarnessAdapter for FakeHarnessAdapter {
             | Capabilities::TRANSCRIPT_WATCH
             | Capabilities::USAGE_TOKENS
             | Capabilities::FORK
-            | Capabilities::TRANSPLANT
     }
 
     fn verified_against(&self) -> &'static [&'static str] {

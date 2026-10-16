@@ -804,8 +804,13 @@ function InstanceOverview(props: PanelProps) {
         )}
         {!isDesktop && (
         <div ref={handoverRef} className="flex flex-col gap-2" data-testid="handover-section">
-          <p className="text-[11px] uppercase tracking-wider text-faint">
+          <p className="text-[11px] uppercase tracking-wider text-muted">
             Continue on another account
+          </p>
+          {/* AJ-E204 (deep/09 D1): the honest interim label until
+              AJ-E210's fixtures prove the sibling-set transplant. */}
+          <p className="text-[10px] text-muted" data-testid="handover-fidelity-label">
+            F1 Transcript-only (experimental)
           </p>
           <div className="flex flex-wrap gap-1.5">
             {profiles
@@ -819,7 +824,7 @@ function InstanceOverview(props: PanelProps) {
                     type="button"
                     disabled={!ready}
                     onClick={() => props.onHandover(session.id, recipe.id)}
-                    title={ready ? "Moves this session's context to this account and resumes it" : "Needs sign-in first (Ready home)"}
+                    title={ready ? "Experimental: copies the full transcript set to this account and resumes it — F1 Transcript-only until validated" : "Needs sign-in first (Ready home)"}
                     className={
                       "rounded-lg border px-2.5 py-1.5 text-[11px] transition-colors " +
                       (ready

@@ -4,13 +4,18 @@ use std::sync::Arc;
 
 use crate::adapter::{HarnessAdapter, SharedAdapter};
 use crate::discovery::DiscoveryReport;
+use crate::handover::HandoverSupport;
 use crate::model::HarnessId;
+
+/// A shared handover-capable adapter handle.
+pub type SharedHandover = Arc<dyn HandoverSupport>;
 
 /// Holds every registered adapter. Registration happens at app startup
 /// (built-ins) and later via manifests (post-v1, spec §4).
 #[derive(Default)]
 pub struct AdapterRegistry {
     adapters: Vec<SharedAdapter>,
+    handovers: Vec<SharedHandover>,
 }
 
 impl AdapterRegistry {
@@ -34,6 +39,26 @@ impl AdapterRegistry {
         self.adapters
             .iter()
             .find(|adapter| adapter.id() == *id)
+            .cloned()
+    }
+
+    /// Registers the handover capability for an adapter (the same
+    /// `Arc` registered via [`Self::register`] coerced to the
+    /// sub-trait). Providers without a registration are replay/pack
+    /// only (T3/T4).
+    pub fn register_handover(&mut self, support: SharedHandover) {
+        self.handovers
+            .retain(|existing| existing.id() != support.id());
+        self.handovers.push(support);
+    }
+
+    /// Resolves the handover support for a harness id, when the
+    /// adapter opted in.
+    #[must_use]
+    pub fn handover(&self, id: &HarnessId) -> Option<SharedHandover> {
+        self.handovers
+            .iter()
+            .find(|support| support.id() == *id)
             .cloned()
     }
 
