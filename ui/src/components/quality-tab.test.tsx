@@ -1,7 +1,6 @@
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RightInspector } from "./RightInspector";
-import type { QualitySignalsInfo } from "../lib/bridge";
 import type { AccountInfo, InstanceInfo, LaunchRecipeInfo, ProjectInfo } from "../lib/bridge";
 
 /**
@@ -14,7 +13,7 @@ const NOW = 1_728_800_000_000;
 
 // Hoisted: vi.mock factories run before module scope initializes, so
 // the fixtures the factory closes over must live inside vi.hoisted.
-const { qualityMock, qualityFixtures } = vi.hoisted(() => {
+const { qualityMock } = vi.hoisted(() => {
   const NOW = 1_728_800_000_000;
   const qualityFixtures: Record<string, import("../lib/bridge").QualitySignalsInfo> = {
     full: {
@@ -45,7 +44,6 @@ const { qualityMock, qualityFixtures } = vi.hoisted(() => {
     },
   };
   return {
-    qualityFixtures,
     qualityMock: vi.fn(
       async (id: string): Promise<import("../lib/bridge").QualitySignalsInfo | null> =>
         qualityFixtures[id] ?? null,
