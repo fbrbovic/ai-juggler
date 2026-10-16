@@ -242,6 +242,61 @@ fn forge_stranger(state: &Arc<AppState>, session: &SessionId, root_pid: u32, dir
     pid
 }
 
+/// A live fixture whose ledger row carries a WRONG absolute exe and
+/// NO recorded start time — isolates the reconciler's EXE leg (the
+/// start-time stranger is [`forge_stranger`]). `first_seen` is the
+/// caller's: young rows pin the exec-settle window (AJ-E508), aged
+/// rows pin the frozen-identity PID-reuse guard.
+fn forge_exe_row(
+    state: &Arc<AppState>,
+    session: &SessionId,
+    root_pid: u32,
+    dir: &Path,
+    tag: &str,
+    first_seen: i64,
+) -> u32 {
+    let trap = dir.join(format!("{tag}.traps"));
+    let ready = dir.join(format!("{tag}.ready"));
+    let pid = fixtures::spawn_detached(&fixtures::write_helper(dir), &[], &trap, &ready);
+    state
+        .ledger
+        .upsert_helpers(
+            session,
+            &[juggler_core::storage::LedgerRow {
+                pid: Some(pid),
+                pgid: None,
+                started_at: None, // isolates the exe leg
+                exe_path: "/bin/not-the-real-image".into(),
+                cmdline_hash: tag.into(),
+                cmdline_trunc: format!("python3 trap_helper.py ({tag})"),
+                boot_id: state.ledger.boot_id().to_string(),
+                session_id: session.as_str().to_string(),
+                instance_id: None,
+                provider: "claude-code".into(),
+                account_id: Some("acc-guard".into()),
+                project_id: Some("proj-guard".into()),
+                machine_id: commands::local_machine_id(state).as_str().to_string(),
+                root_pid: Some(root_pid),
+                parent_pid: Some(root_pid),
+                depth: 1,
+                role: "helper".into(),
+                state: "running".into(),
+                listens_on: None,
+                cwd: dir.to_string_lossy().to_string(),
+                peak_rss: None,
+                peak_cpu: None,
+                exit_kind: None,
+                reaped_by_us: None,
+                escaped_group: false,
+                down_period: false,
+                first_seen,
+                last_seen: now_ms(),
+            }],
+        )
+        .unwrap();
+    pid
+}
+
 fn cancel_flag() -> Arc<AtomicBool> {
     Arc::new(AtomicBool::new(false))
 }
@@ -1010,6 +1065,98 @@ fn idle_nudge_fires_exactly_once_per_orphan() {
     println!("[idle] nudge text: {}", nudge.text);
     let _ = state.supervisor.stop(&a, Duration::from_secs(3));
     for pid in pids {
+        kill9(pid);
+    }
+}
+
+/// AJ-E508 exec-settle window (regression — CI flake PR #83,
+/// 2026-10-16, `idle_nudge_fires_exactly_once_per_orphan`): a helper
+/// discovered between fork and exec records the WRAPPER's exe; the
+/// upsert refines it inside the 10 s settle window, but its 2 s
+/// throttle races the reconciler's every-tick mismatch verdict — the
+/// row flipped `unverifiable` BEFORE the refinement could land (it
+/// only touches `running` rows) and orphans never surfaced. The exe
+/// leg now withholds its verdict for the SAME window; the start-time
+/// leg (the true PID-reuse signal) never waits. Pinned both ways:
+/// young wrong-exe rows hold, aged ones flip, and the window CLOSES.
+#[test]
+fn exe_mismatch_holds_inside_settle_window_and_flips_after_it() {
+    let _serial = serialize();
+    let dir = tempfile::tempdir().unwrap();
+    let state = app_state(dir.path());
+    seed_account(&state, dir.path(), "acc-guard", false, false);
+    let a = seed_instance(&state, dir.path(), "sess-settle", "acc-guard");
+    // A live root anchors the forged rows (orphan detection needs an
+    // EXITED root — this one never exits during the test).
+    let spawned = state
+        .supervisor
+        .spawn(&a, &sh_spec("sleep 300", dir.path()), &ctx(&state))
+        .unwrap();
+
+    let young_pid = forge_exe_row(&state, &a, spawned.pid, dir.path(), "young", now_ms());
+    let aged_pid = forge_exe_row(
+        &state,
+        &a,
+        spawned.pid,
+        dir.path(),
+        "aged",
+        now_ms() - juggler_core::storage::EXEC_SETTLE_MS - 1_000,
+    );
+
+    // Well past TWO consecutive mismatch ticks: the AGED row flips;
+    // the YOUNG row holding proves the WINDOW (not the two-tick
+    // discipline) withholds this verdict.
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        if let Ok(mut collector) = state.resources.lock() {
+            collector.tick(&state.supervisor, now_ms());
+        }
+        if let Ok(rows) = state.ledger.session_rows(&a) {
+            let aged = rows.iter().find(|row| row.pid == Some(aged_pid));
+            let young = rows.iter().find(|row| row.pid == Some(young_pid));
+            if let Some(aged) = aged
+                && aged.state == "unverifiable"
+            {
+                assert!(
+                    young.is_some_and(|row| row.state == "running"),
+                    "young row flipped inside the settle window: {:?}",
+                    young.map(|row| row.state.clone())
+                );
+                break;
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "aged wrong-exe row never flipped"
+        );
+        std::thread::sleep(Duration::from_millis(150));
+    }
+
+    // The window CLOSES — the guard is deferred, never disabled: the
+    // same young row, once past the window, flips on the same fact.
+    std::thread::sleep(Duration::from_millis(
+        u64::try_from(juggler_core::storage::EXEC_SETTLE_MS).unwrap() + 1_500,
+    ));
+    let flipped_after_window = fixtures::wait_for(10_000, || {
+        if let Ok(mut collector) = state.resources.lock() {
+            collector.tick(&state.supervisor, now_ms());
+        }
+        state
+            .ledger
+            .session_rows(&a)
+            .map(|rows| {
+                rows.iter()
+                    .any(|row| row.pid == Some(young_pid) && row.state == "unverifiable")
+            })
+            .unwrap_or(false)
+    });
+    assert!(
+        flipped_after_window,
+        "young row never flipped after the settle window closed"
+    );
+
+    let _ = state.supervisor.stop(&a, Duration::from_secs(3));
+    for pid in [young_pid, aged_pid] {
         kill9(pid);
     }
 }

@@ -597,13 +597,15 @@ impl LiveStatsCollector {
                 // Table-based re-verification (Req.2): the recorded
                 // identity facts vs THIS tick's refresh. Rows without
                 // recorded facts (legacy, unpatched) are skipped —
-                // honest absence, never a flip on missing data.
-                let mut mismatch = false;
+                // honest absence, never a flip on missing data. The
+                // leg that fired is named in the flip log — the next
+                // flake diagnoses itself from the runner output.
+                let mut start_mismatch = false;
                 if let Some(recorded_start) = row.started_at
                     && recorded_start > 0
                     && recorded_start != facts.start_time
                 {
-                    mismatch = true;
+                    start_mismatch = true;
                 }
                 // The exe fact is KERNEL-vs-kernel — only HELPER rows
                 // carry a kernel-recorded exe (the upsert writes it);
@@ -611,13 +613,29 @@ impl LiveStatsCollector {
                 // kernel may legitimately alias or replace across
                 // exec (macOS /bin/sh → bash), so roots verify below
                 // against the handle's kernel-recorded identity.
+                // Inside the exec-settle window (AJ-E508,
+                // `EXEC_SETTLE_MS`) a young helper's image is
+                // legitimately in transition: discovery can catch the
+                // fork BEFORE the exec (recorded exe = the wrapper),
+                // and the upsert's refinement — throttled to 2 s —
+                // races THIS verdict, which ticks every pass; a flip
+                // here would freeze the row `unverifiable` before the
+                // correction lands (the refinement only touches
+                // `running` rows). The exe leg waits out the window.
+                // The start time never legitimately changes — that
+                // leg (the true PID-reuse signal) never waits.
+                let mut exe_mismatch = false;
                 if row.role == "helper"
+                    && now_ms.saturating_sub(row.first_seen)
+                        >= juggler_core::storage::EXEC_SETTLE_MS
                     && let Some(live_exe) = facts.exe.as_deref()
                     && row.exe_path.starts_with('/')
                     && row.exe_path != live_exe
                 {
-                    mismatch = true;
+                    exe_mismatch = true;
                 }
+                let mut root_mismatch = false;
+                let mut mismatch = start_mismatch || exe_mismatch;
                 if row.role == "root" && !mismatch {
                     // Roots verify against the kernel-recorded handle
                     // identity (exe moves legitimately across exec;
@@ -625,6 +643,7 @@ impl LiveStatsCollector {
                     if let Some(identity) = supervisor.root_identity(&session)
                         && identity.start_time != facts.start_time
                     {
+                        root_mismatch = true;
                         mismatch = true;
                     }
                 }
@@ -643,7 +662,11 @@ impl LiveStatsCollector {
                         let _ = ledger.mark_unverifiable(pid, &row.boot_id);
                         self.orphan_agree.remove(&key);
                         eprintln!(
-                            "ai-juggler: pid {pid} failed re-verification — flipped unverifiable"
+                            "ai-juggler: pid {pid} failed re-verification \
+                             (start-time={start_mismatch}, exe={exe_mismatch}, \
+                             root-identity={root_mismatch}, \
+                             age={}ms) — flipped unverifiable",
+                            now_ms.saturating_sub(row.first_seen)
                         );
                     }
                     continue;

@@ -29,6 +29,20 @@ pub const STATE_UNVERIFIABLE: &str = "unverifiable";
 /// candidate (re-verified every tick); the Cleanup Centre surface.
 pub const STATE_ORPHANED: &str = "orphaned";
 
+/// The exec-settle window (AJ-E508): discovery can catch a helper
+/// between `fork` and `exec`, when its recorded image is still the
+/// wrapper (`/bin/sh` → python → the real tool). Within this many
+/// milliseconds of `first_seen` the upsert REFINES the recorded
+/// identity (exe/cmdline) toward the live kernel facts, and the
+/// supervisor's reconciler withholds its exe-mismatch verdict — the
+/// upsert is throttled to 2 s while the reconciler ticks faster, so a
+/// verdict racing the refinement would flip the row `unverifiable`
+/// before the correction ever lands (CI flake PR #83). After the
+/// window the identity is frozen: an exe mismatch is then a PID-reuse
+/// signal and flips as before. A start time NEVER legitimately
+/// changes — that leg is verified at every age, window or not.
+pub const EXEC_SETTLE_MS: i64 = 10_000;
+
 /// Row role: the root harness process.
 pub const ROLE_ROOT: &str = "root";
 /// Row role: a descendant helper (dev server, watcher, …).
@@ -285,7 +299,7 @@ impl ProcessLedgerRepo {
             // No unique index exists (append-first by design), so the
             // upsert is: refresh a known running row; insert only when
             // nothing matched. One transaction for the whole tick.
-            let mut update = tx.prepare(
+            let mut update = tx.prepare(&format!(
                 "UPDATE process_ledger SET
                      last_seen = ?2,
                      peak_rss = MAX(COALESCE(peak_rss, 0), COALESCE(?3, 0)),
@@ -294,21 +308,24 @@ impl ProcessLedgerRepo {
                      escaped_group = MAX(escaped_group, ?9),
                      started_at = COALESCE(started_at, ?10),
                      -- Identity refinement only inside the exec-settle
-                     -- window (AJ-E508): a helper discovered pre-exec
-                     -- legitimately changes image (sh → python → vite);
-                     -- after the window the identity is frozen and a
-                     -- mismatch flips unverifiable (PID-reuse guard).
+                     -- window (AJ-E508, EXEC_SETTLE_MS): a helper
+                     -- discovered pre-exec legitimately changes image
+                     -- (sh → python → vite); after the window the
+                     -- identity is frozen and a mismatch flips
+                     -- unverifiable (PID-reuse guard). The supervisor's
+                     -- reconciler withholds its exe verdict for the
+                     -- same window — one shared constant.
                      exe_path = CASE
-                         WHEN ?2 - first_seen < 10000 AND ?11 LIKE '/%' THEN ?11
+                         WHEN ?2 - first_seen < {EXEC_SETTLE_MS} AND ?11 LIKE '/%' THEN ?11
                          ELSE exe_path END,
                      cmdline_hash = CASE
-                         WHEN ?2 - first_seen < 10000 AND ?12 != '' THEN ?12
+                         WHEN ?2 - first_seen < {EXEC_SETTLE_MS} AND ?12 != '' THEN ?12
                          ELSE cmdline_hash END,
                      cmdline_trunc = CASE
-                         WHEN ?2 - first_seen < 10000 AND ?13 != '' THEN ?13
+                         WHEN ?2 - first_seen < {EXEC_SETTLE_MS} AND ?13 != '' THEN ?13
                          ELSE cmdline_trunc END
                  WHERE session_id = ?1 AND pid = ?5 AND boot_id = ?6 AND state = ?7",
-            )?;
+            ))?;
             let mut insert = tx.prepare(
                 "INSERT INTO process_ledger
                      (pid, pgid, started_at, exe_path, cmdline_hash, cmdline_trunc, boot_id,

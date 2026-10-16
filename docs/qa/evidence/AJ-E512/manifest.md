@@ -52,3 +52,37 @@ zcode-primary.
   verify).
 - `.github/workflows/ci.yml` — the macOS collateral step.
 - `docs/qa/gate-E5.md` (new) — the epic gate report.
+
+## Flake record (AJ-E806) — exec-settle race, 2026-10-16, PR #83
+
+**Observed.** `build-macos` → guardrails: `idle_nudge_fires_exactly_once_per_orphan`
+FAILED ("orphans never surfaced"); runner log: `pid 9036 failed
+re-verification — flipped unverifiable`. Docs-only change; suite green
+locally and in PRs #80–#82.
+
+**Diagnosis.** A full-scan discovery caught a fixture child between
+`fork` and `exec` and recorded the WRAPPER's exe (`/bin/sh`). The
+upsert's exec-settle refinement (AJ-E508, 10 s window) corrects the
+recorded exe — but it is throttled to 2 s while the reconciler counts
+mismatch ticks EVERY pass. Two consecutive mismatches landed before the
+first refinement; the flip set `state = unverifiable`, and the
+refinement's `WHERE state = running` never matched again — the row was
+stuck, never orphaned, `wait_orphans` timed out. Slow CI runners widen
+the fork→exec window enough for discovery to land inside it.
+
+**Fix (recorded, not retried).** One shared constant —
+`juggler_core::storage::EXEC_SETTLE_MS` (10 s) — now also gates the
+reconciler's exe leg: inside the window a wrong exe withholds its
+verdict (the upsert owns the refinement); after it the identity is
+frozen and a mismatch flips as before. The START-TIME leg (the true
+PID-reuse signal — a start time never legitimately changes) stays
+immediate at every age, so the stranger/foreign/forged-row defenses are
+unchanged. The flip log now names the fired leg + row age. Regression
+test `exe_mismatch_holds_inside_settle_window_and_flips_after_it`
+pins both directions: young wrong-exe rows hold, aged ones flip, and
+the window closes.
+
+**Verification.** Affected suites re-run green (storage_roundtrip 24,
+supervisor all, recovery 1, guardrails 10 — including the CI-flaking
+test and the new regression); full `just verify` + `pnpm --dir ui
+build` on the fix tree.
