@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RightInspector } from "./RightInspector";
 import type {
@@ -155,13 +155,38 @@ describe("AJ-E408 Provider (§5.3, Req.1-2)", () => {
 });
 
 describe("AJ-E408 Account (§5.4, Req.3-4)", () => {
-  it("Overview: rings carry % text and aria labels; reset countdown; affinity; renewal honest", () => {
+  it("Overview: rings carry % text and aria labels; reset countdown; affinity; renewal honest", async () => {
+    // AJ-E610: the account card renders engine-evaluated two-clock
+    // rings — seed the display seam (5h: 55% used Measured with a
+    // reset; weekly: unknown) and assert the two-clock copy.
+    (
+      window as unknown as { __AIJ_QUOTA_DISPLAY__?: unknown[] }
+    ).__AIJ_QUOTA_DISPLAY__ = [
+      {
+        account: "claude-work",
+        five_hour: {
+          state: "tracking",
+          percentage: 55,
+          badge: "measured",
+          stale_note_ms: undefined,
+          resets_at_ms: NOW + 3_600_000,
+          burned_tokens: 12_345,
+        },
+        weekly: { state: "unknown", burned_tokens: 0 },
+        renewal: { state: "none", label: "Renewal: unknown — add date", entered_by_user: false },
+        forecast: { state: "learning", badge: "estimated" },
+      },
+    ];
     const { container } = shell("account", "claude-work");
     const rings = container.querySelector('[data-testid="account-rings"]')!;
-    expect(rings.querySelectorAll('[role="img"]').length).toBe(2);
-    expect(rings.textContent).toContain("45% left");
-    expect(rings.textContent).toContain("No data");
-    expect(rings.querySelector('[aria-label="45% quota left"]')).not.toBeNull();
+    await waitFor(() =>
+      expect(rings.querySelectorAll("[role='img']").length).toBe(2),
+    );
+    expect(rings.textContent).toContain("55%");
+    expect(rings.textContent).toContain("Start a session to measure");
+    const fiveHourAria = rings.querySelector('[role="img"]')!.getAttribute("aria-label")!;
+    expect(fiveHourAria).toContain("55% used");
+    expect(fiveHourAria).toContain("Measured");
     expect(container.querySelector('[data-testid="account-reset"]')?.textContent).toContain("1h0m");
     expect(container.querySelector('[data-testid="account-renewal"]')?.textContent).toContain("Expiry: unknown");
     expect(container.querySelector('[data-testid="account-affinity"]')?.textContent).toContain("ai-juggler");
