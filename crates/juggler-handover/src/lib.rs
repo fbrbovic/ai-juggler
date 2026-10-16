@@ -18,5 +18,6 @@ pub mod manifest;
 pub mod pack;
 pub mod pipeline;
 pub mod reconcile;
+pub mod redaction;
 pub mod switch_back;
 pub mod transplant;

@@ -535,7 +535,7 @@ copy-back forks `sessionId` identity and double-counts usage on
 uuid re-ingest; if tempted, re-read pass2/02 §6.1. Nth switch-back
 must cost the same as the first.
 
-### AJ-E208 Pack redaction policy — global default plus per-Provider override (D-14) | Status: TODO | Priority P0 | Effort M | Depends: AJ-E202
+### AJ-E208 Pack redaction policy — global default plus per-Provider override (D-14) | Status: DONE-EVIDENCED | Priority P0 | Effort M | Depends: AJ-E202
 **Goal**: Secret handling in the pack is always the user's remembered choice — global policy with per-Provider override — never a hard-coded product default, with the active policy visible before any switch.
 **User story**: As a security-conscious developer, I want to choose once how secrets are treated and override it per Provider, so packs never leak keys yet I stay in control.
 **Requirements**:
@@ -621,6 +621,35 @@ axe 0 both themes). Honest notes recorded: production file conflicts
 are empty until non-transcript manifest rows ship (E209/E210) — the
 fixture seeds a todos row via the public append API to prove the full
 path; live quota-reset dogfood PENDING maintainer login (gate-E5).
+
+**Status report (2026-10-16, AJ-E208)**: DONE-EVIDENCED — evidence
+`docs/qa/evidence/AJ-E208/manifest.md`. Secret handling in packs is
+the user's REMEMBERED choice (D-14): `redaction_global` +
+`redaction_overrides[provider]` KV settings, resolution
+override-if-set-else-global, and unset BLOCKS the first pack (the
+first-run chooser has NO pre-selected default and disables Switch
+until saved — deep/09's local-off/export-on defaults appear only as
+options, never applied). Detection (no regex dep): sk-keys, Bearer
+tokens, .env values (diff-prefixed lines included), private-key
+blocks, and ZCode rollout headers — values cross the engine ONLY as
+masked previews (first char + ••• + last 4); the pack manifest
+records kinds+counts set at generation (hashes final bytes).
+Per-item un-redact addresses GLOBAL detection indices (preflight and
+pack-apply share the segment order) and rides the executed edge as
+"this-switch-only" rows — never a policy change. The ALWAYS-ON
+credential guard still refuses credential material under every
+policy incl. Keep, now tightened to real key shapes so the manifest's
+own "sk-key" kind name can't false-positive. UI: the verbatim policy
+line on popover + Confirm ("(your global choice)" / "(override)"),
+per-switch Ask radios, per-item un-redact list on the preview step,
+and the per-Provider override row in Provider settings. handover
+59/59; redaction_policy 3/3 (persist-across-restart, masked-only
+bridge, edge recording); vitest 234/234 (new guardrails 4/4); visual
+360/360 (gallery 31-redaction 16 + a11y 2; the preflight seam now
+MERGES fixtures over the default — 40 stale-fixture failures found
+in the full run and fixed at the seam). Honest notes: the literal
+diff-hunk render belongs with E209's pack previews; live canary
+export dogfood PENDING maintainer login (gate-E5).
 
 ## Epic exit criteria (all must hold)
 

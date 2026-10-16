@@ -229,7 +229,8 @@ fn undo_stops_target_resumes_source_and_compensates_the_edge() {
 
     // The switch (user click path): B's continuation instance.
     let switched =
-        commands::switch_execute_impl(&state, &source_id, &profile_b.id, "stop-now").unwrap();
+        commands::switch_execute_impl(&state, &source_id, &profile_b.id, "stop-now", None, &[])
+            .unwrap();
     assert_eq!(switched.source_session_id, source_id);
     assert!(!switched.edge_id.is_empty(), "edge id is the undo handle");
 

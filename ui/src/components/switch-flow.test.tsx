@@ -33,6 +33,14 @@ const ONECLICK: PreflightInfoData = {
     regenerated: [],
     dropped: [],
   },
+  redaction: {
+    global: "strip",
+    override: null,
+    effective: "strip",
+    source: "global",
+    line: "Redaction for claude-code: Strip — replace keys with ••• (your global choice)",
+  },
+  redaction_items: [],
 };
 
 const WIZARD: PreflightInfoData = {

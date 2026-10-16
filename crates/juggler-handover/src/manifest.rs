@@ -35,6 +35,29 @@ pub struct CredentialHit {
 
 /// The always-on credential guard: scans pack bytes for credential
 /// material that must never ship in ANY pack under ANY policy
+/// A real embedded API key: `sk-` followed by >=8 key characters
+/// (alnum, `-`, `_`).
+/// The manifest's own detection-kind name (`"kind": "sk-key"`) is
+/// shorter and must never trip the guard (AJ-E208).
+fn contains_embedded_api_key(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut at = 0;
+    while let Some(found) = line[at..].find("sk-") {
+        let start = at + found + 3;
+        let mut end = start;
+        while end < bytes.len()
+            && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'-' || bytes[end] == b'_')
+        {
+            end += 1;
+        }
+        if end - start >= 8 {
+            return true;
+        }
+        at = start;
+    }
+    false
+}
+
 /// (AJ-E202 Req.3 guardrail; AJ-E208 extends with the full detection
 /// matrix and the user-chosen redaction policy — this floor stays).
 #[must_use]
@@ -46,7 +69,7 @@ pub fn credential_scan(bytes: &[u8]) -> Vec<CredentialHit> {
             hits.push(CredentialHit {
                 kind: "private-key",
             });
-        } else if line.contains("\"sk-") || line.starts_with("sk-") {
+        } else if contains_embedded_api_key(line) {
             hits.push(CredentialHit { kind: "api-key" });
         } else if line.contains("Bearer ") && line.contains("eyJ") {
             hits.push(CredentialHit { kind: "bearer" });
@@ -93,6 +116,8 @@ mod tests {
             credential_scan(b"token = \"sk-abcdef123456\""),
             vec![CredentialHit { kind: "api-key" }]
         );
+        // The manifest's detection-kind name is not a key.
+        assert!(credential_scan(b"{\"kind\": \"sk-key\", \"count\": 2}").is_empty());
         assert!(!credential_scan(b"Authorization: Bearer eyJhbGciOi").is_empty());
     }
 }
