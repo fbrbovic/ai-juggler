@@ -23,6 +23,10 @@ pub enum LaunchMode {
     Resume {
         /// The harness's own session id (transcript file stem).
         session_id: String,
+        /// An optional first turn delivered on resume — the E207
+        /// "While you were away" delta (one summarised turn with the
+        /// pack attached; NEVER a copy-back over the transcript).
+        delta_prompt: Option<String>,
     },
 }
 

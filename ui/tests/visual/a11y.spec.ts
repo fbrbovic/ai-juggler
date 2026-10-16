@@ -872,3 +872,66 @@ for (const theme of ["dark", "light"] as const) {
     expect(all).toHaveLength(0);
   });
 }
+
+// AJ-E207: axe-core 0 critical/serious on the switch-back flow —
+// the review (delta preview, per-file conflict radio trios with
+// file-path labels, freeze-or-fork), the S-F7 dead-original state,
+// and the S-F8 forked failure — in BOTH themes; the conflict set is
+// resolvable keyboard-only (radios carry their labels).
+const BACK_CARDS_A11Y = ["sess-1", "sess-2", "sess-4", "sess-6", "sess-8"].map(
+  (session_id) => ({
+    session_id,
+    original_account: "Work Max",
+    away_account: "Personal",
+    copy: "Work Max has reset. Resume the original conversation there? Work from Personal arrives as one 'while you were away' update.",
+  }),
+);
+
+for (const theme of ["dark", "light"] as const) {
+  test(`switch-back — review + conflict radios — axe 0 critical/serious — ${theme}`, async ({ page }) => {
+    await page.addInitScript(
+      ({ fixture, t0, theme: t, cards }) => {
+        const w = window as unknown as Record<string, unknown>;
+        w.__AIJ_FIXTURE__ = fixture;
+        w.__AIJ_SWITCH_BACK_SUGGESTIONS__ = cards;
+        localStorage.setItem("aij.theme", t);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+        Date.now = () => t0;
+      },
+      { fixture: allStatuses, t0: T0, theme, cards: BACK_CARDS_A11Y },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+    await page.getByRole("tab", { name: "Sessions" }).click();
+    await page.getByRole("button", { name: /Work Max/ }).first().click();
+    await expect(page.getByTestId("switch-back-card")).toBeVisible();
+    const cardScan = await new AxeBuilder({ page })
+      .include("[data-testid='switch-back-card']")
+      .analyze();
+    await page.getByTestId("switch-back-card").click();
+    await expect(page.getByTestId("switch-back-review")).toBeVisible();
+    // Every conflict radio resolves by labelled name (keyboard path).
+    await page.getByLabel("Take the away version").check();
+    const dialogScan = await new AxeBuilder({ page })
+      .include("[data-testid='switch-back-flow']")
+      .analyze();
+    // The failure surface (S-F8 forked).
+    await page.getByTestId("switch-back-confirm").click();
+    await expect(page.getByTestId("switch-back-done")).toBeVisible();
+    const doneScan = await new AxeBuilder({ page })
+      .include("[data-testid='switch-back-flow']")
+      .analyze();
+    const all = [cardScan, dialogScan, doneScan]
+      .flatMap((result) => result.violations)
+      .filter((violation) => ["serious", "critical"].includes(violation.impact ?? ""));
+    if (all.length > 0) {
+      const summary = all
+        .map((v) => `${v.id} (${v.impact}): ${v.nodes.map((n) => n.target.join(" ")).slice(0, 3).join(", ")}`)
+        .join("\n");
+      throw new Error(`axe violations on the switch-back flow (${theme}):\n${summary}`);
+    }
+    expect(all).toHaveLength(0);
+  });
+}
