@@ -138,6 +138,8 @@ pub fn run() {
             commands::projects_list,
             commands::projects_backfill,
             commands::session_handover,
+            commands::switch_preflight,
+            commands::switch_execute,
             commands::stop_session,
             commands::dashboard_stats,
             commands::terminal_spawn_login,

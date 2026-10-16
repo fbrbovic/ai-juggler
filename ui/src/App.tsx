@@ -30,6 +30,7 @@ import { ReadyHome } from "./screens/ReadyHome";
 import { SessionPanel } from "./screens/WorkPanels";
 import { CostMatrix } from "./components/CostMatrix";
 import { NotificationRegion } from "./components/NotificationRegion";
+import { SwitchFlow } from "./components/SwitchFlow";
 import { RightInspector } from "./components/RightInspector";
 import {
   accountsList,
@@ -145,6 +146,9 @@ export default function App() {
     { id: string; title: string; ended: boolean }[]
   >([]);
   const [newSession, setNewSession] = useState(false);
+  // AJ-E205: the executing switch flow (freeze dialog → stages →
+  // source-safe failure banner). Null = closed.
+  const [switchFlow, setSwitchFlow] = useState<{ sessionId: string; targetProfileId: string; targetLabel: string } | null>(null);
   // AJ-E505: the pre-launch port collision (advisor informs, never
   // blocks — Launch always proceeds on "Launch anyway").
   const [portWarning, setPortWarning] = useState<{
@@ -725,14 +729,9 @@ export default function App() {
                 await doLaunch();
               }}
               onStopped={() => void refresh()}
-              onHandover={async (sessionId, targetProfileId) => {
-                try {
-                  const result = await sessionHandover(sessionId, targetProfileId);
-                  await refresh();
-                  selectSession(result.session_id);
-                } catch (cause) {
-                  window.alert(`Hand-over failed: ${String(cause)}`);
-                }
+              onHandover={(sessionId, targetProfileId, targetLabel) => {
+                void sessionHandover; // superseded by the E205 flow
+                setSwitchFlow({ sessionId, targetProfileId, targetLabel });
               }}
               onNew={() => setNewSession(true)}
             />
@@ -794,6 +793,19 @@ export default function App() {
         />
       )}
 
+      {switchFlow && (
+        <SwitchFlow
+          sessionId={switchFlow.sessionId}
+          targetProfileId={switchFlow.targetProfileId}
+          targetLabel={switchFlow.targetLabel}
+          onClose={() => setSwitchFlow(null)}
+          onSwitched={(sessionId) => {
+            setSwitchFlow(null);
+            void refresh();
+            selectSession(sessionId);
+          }}
+        />
+      )}
       {newSession && (
         <NewSessionModal
           projects={projects}

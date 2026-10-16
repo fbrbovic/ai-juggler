@@ -304,7 +304,7 @@ visual), focus lands on confirm, WCAG AA contrast.
 finds no target dir, flag the fallback in the manifest — never
 hide it. Do not re-add `TRANSPLANT` early "for testing" on main.
 
-### AJ-E205 Switch execution pipeline — freeze, stage, verify, launch, rollback | Status: TODO | Priority P0 | Effort L | Depends: AJ-E204
+### AJ-E205 Switch execution pipeline — freeze, stage, verify, launch, rollback | Status: DONE-EVIDENCED | Priority P0 | Effort L | Depends: AJ-E204
 **Goal**: One pipeline for every edge — Resolve→Preflight→Freeze→
 Snapshot→Stage→Verify→Launch→Confirm→Record — where any failure
 leaves the source exactly resumable and writes a failed edge.
@@ -614,6 +614,20 @@ compact_boundary line shape (`system` type + subtype, per
 session-malformed.jsonl:6) is now captured by the parser. 6 fixture
 tests + updated golden_path; visual 280/280. Live two-account proof
 PENDING maintainer login (recorded); wizard visuals ride E206.
+
+**Status report (2026-10-16, AJ-E205)**: DONE-EVIDENCED — evidence
+`docs/qa/evidence/AJ-E205/manifest.md`. The pipeline (preflight →
+two-choice freeze → snapshot → atomic stage/verify → caller-hook
+launch → record) lives in juggler-handover with the §7.1 copy table
+verbatim and the S-F1..S-F9 taxonomy; commands record every attempt
+as an E201 edge (Staged before execution, Confirmed + manifest after,
+Failed{stage,reason} in place — history never rewritten). Fault
+injection 8/8 (torn tail, mid-copy crash, launch failure with
+retained stage, source-mutation detection); golden_path pins the app
+recording + copy-never-move. UI: SwitchFlow (freeze dialog, labelled
+stages, source-safe banner) + gallery 28-switch (16) + axe 0; visual
+298/298. Live mid-switch-kill dogfood PENDING maintainer login
+(recorded).
 
 ---
 
