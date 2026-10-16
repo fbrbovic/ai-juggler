@@ -22,8 +22,10 @@ vi.mock("./TerminalView", () => ({
   ),
 }));
 
-const launchMock = vi.fn(async () => ({ session_id: "sess-new", pid: 1 }));
-const terminalKill = vi.fn(async (_id: string) => {});
+const { launchMock, terminalKill } = vi.hoisted(() => ({
+  launchMock: vi.fn(async () => ({ session_id: "sess-new", pid: 1 })),
+  terminalKill: vi.fn(async (_id: string) => {}),
+}));
 vi.mock("../lib/bridge", async (importOriginal) => {
   const original = await importOriginal<typeof import("../lib/bridge")>();
   return { ...original, terminalKill, launchSession: launchMock };

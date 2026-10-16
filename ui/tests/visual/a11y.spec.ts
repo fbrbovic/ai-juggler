@@ -617,3 +617,80 @@ for (const theme of ["dark", "light"] as const) {
     expect(serious).toHaveLength(0);
   });
 }
+
+
+// AJ-E611: axe-core 0 critical/serious on the ranking + notification
+// surfaces — the NewSession ranked list (labelled listbox, expander)
+// and the notification region (polite live-region, queue rows with an
+// explicit Resume click) in BOTH themes.
+for (const theme of ["dark", "light"] as const) {
+  test(`ranking — ranked list + notifications — axe 0 critical/serious — ${theme}`, async ({ page }) => {
+    await page.addInitScript(
+      ({ fixture, t0, theme: t, ranked, events, rows }) => {
+        const w = window as unknown as Record<string, unknown>;
+        w.__AIJ_FIXTURE__ = fixture;
+        w.__AIJ_RANKING__ = ranked;
+        w.__AIJ_ALERTS__ = events;
+        w.__AIJ_RESET_QUEUE__ = rows;
+        localStorage.setItem("aij.theme", t);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+        Date.now = () => t0;
+      },
+      {
+        fixture: allStatuses,
+        t0: T0,
+        theme,
+        ranked: [
+          {
+            account: "claude-work",
+            score: 0.87,
+            top_factors: ["82% headroom (Measured)", "usual account for this repo"],
+            factors: [["headroom 82%", 0.37], ["affinity", 0.2], ["fidelity", 0.075], ["cost fit", 0.1], ["calm", 0.1]],
+            headroom_unknown: false,
+            confidence: "Measured",
+            tte_min: 210,
+            suggested: true,
+          },
+          {
+            account: "claude-lab",
+            filtered_reason: "logged out — sign in from the Ready home",
+            top_factors: [],
+            factors: [],
+            headroom_unknown: true,
+            confidence: "Estimate",
+            suggested: false,
+          },
+        ],
+        events: [
+          { kind: "actionable", account: "claude-work", text: "claude-work at 92% used (Measured), five-hour window — hand over or queue at reset", at_ms: T0 - 60_000 },
+          { kind: "digest", account: "claude-personal", text: "Renews in 6 days — check your plan", at_ms: T0 - 3_600_000 },
+        ],
+        rows: [
+          { id: "rq-1", session: "sess-1", account: "claude-work", resume_at_ms: T0 + 45 * 60_000, state: "queued" },
+          { id: "rq-2", session: "sess-2", account: "claude-lab", resume_at_ms: T0 - 60_000, state: "ready" },
+        ],
+      },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+    // The notification region renders in the work view (polite
+    // live-region semantics assertable before the modal opens).
+    await expect(page.getByTestId("alert-actionable")).toBeVisible();
+    await expect(page.getByTestId("queue-ready")).toBeVisible();
+    await page.getByRole("button", { name: "New", exact: true }).click();
+    await expect(page.getByTestId("ranked-rows")).toBeVisible();
+    const serious = await scanSeriousWithConfirm(page);
+    if (serious.length > 0) {
+      const summary = serious
+        .map(
+          (v) =>
+            `${v.id} (${v.impact}): ${v.nodes.map((n) => n.target.join(" ")).slice(0, 3).join(", ")}`,
+        )
+        .join("\n");
+      throw new Error(`axe violations on the ranking surfaces (${theme}):\n${summary}`);
+    }
+    expect(serious).toHaveLength(0);
+  });
+}

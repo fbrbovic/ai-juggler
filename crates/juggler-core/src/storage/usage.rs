@@ -143,20 +143,25 @@ impl UsageRepo<'_> {
             .map_err(CoreError::Storage)
     }
 
-    /// Every sample for one account (both windows, all history — the
-    /// engine interpolates from the Measured tail).
+    /// Every sample for one account and window (the §Q8 store keys
+    /// `(account, window, ts)` — a five-hour sample must never pollute
+    /// the weekly reading).
     ///
     /// # Errors
     ///
     /// Returns [`CoreError::Storage`] on SQLite failures.
-    pub fn samples_for_account(&self, account: &str) -> Result<Vec<QuotaSample>, CoreError> {
+    pub fn samples_for_account(
+        &self,
+        account: &str,
+        kind: WindowKind,
+    ) -> Result<Vec<QuotaSample>, CoreError> {
         let mut stmt = self.conn.prepare(
             "SELECT ts, used_pct, resets_at, confidence
              FROM quota_samples
-             WHERE account = ?1
+             WHERE account = ?1 AND window = ?2
              ORDER BY ts",
         )?;
-        let rows = stmt.query_map(params![account], |row| {
+        let rows = stmt.query_map(params![account, kind.as_str()], |row| {
             Ok(QuotaSample {
                 ts: row.get(0)?,
                 used_pct: row.get(1)?,

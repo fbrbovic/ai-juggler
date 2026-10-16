@@ -607,8 +607,10 @@ pub struct AccountQuota {
 pub struct AccountEvaluation<'a> {
     /// The account's event tail (a 7 d fetch serves both pools).
     pub events: &'a [UsageEvent],
-    /// The account's vendor sample history.
-    pub samples: &'a [QuotaSample],
+    /// The 5 h window's vendor samples (window-filtered at the store).
+    pub samples_five_hour: &'a [QuotaSample],
+    /// The weekly window's vendor samples.
+    pub samples_weekly: &'a [QuotaSample],
     /// Account id (storage string form).
     pub account: &'a str,
     /// User-confirmed 5 h cap (a percentage exists only when this does).
@@ -632,7 +634,7 @@ pub fn evaluate_account(input: AccountEvaluation<'_>) -> AccountQuota {
     AccountQuota {
         five_hour: evaluate_window(
             input.events,
-            input.samples,
+            input.samples_five_hour,
             input.account,
             WindowKind::FiveHour,
             input.cap_five_hour,
@@ -640,7 +642,7 @@ pub fn evaluate_account(input: AccountEvaluation<'_>) -> AccountQuota {
         ),
         weekly: evaluate_window(
             input.events,
-            input.samples,
+            input.samples_weekly,
             input.account,
             WindowKind::Weekly {
                 anchor_ms: input.weekly_anchor_ms,

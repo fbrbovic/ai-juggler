@@ -130,7 +130,10 @@ fn one_pass_ingests_all_sources_and_repeats_insert_nothing() {
     assert_eq!(events.len(), 2);
     let samples = {
         let storage = state.storage.lock().unwrap();
-        storage.usage().samples_for_account("acc-pipe").unwrap()
+        storage
+            .usage()
+            .samples_for_account("acc-pipe", juggler_core::quota::WindowKind::FiveHour)
+            .unwrap()
     };
     assert_eq!(samples.len(), 1);
     assert!((samples[0].used_pct - 33.0).abs() < 1e-9);

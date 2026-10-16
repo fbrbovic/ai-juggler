@@ -500,7 +500,7 @@ deep/09-§Q7 reading — recorded here and in the PR.
 repo + V19, 4 commands, `CostMatrix.tsx` + App mount + bridge seams,
 `tests/cost_ledger.rs` (12) + `ccusage-oracle.py`, gallery 25-costs.
 
-### AJ-E610 Quota & expiry display: confidence labels, two-clock indicators, manual renewal entry (D-12) | Status: TODO | Priority P0 | Effort L | Depends: AJ-E606, AJ-E607, AJ-E608, AJ-E609, AJ-E602, AJ-E603, AJ-E604, AJ-E605
+### AJ-E610 Quota & expiry display: confidence labels, two-clock indicators, manual renewal entry (D-12) | Status: DONE-EVIDENCED | Priority P0 | Effort L | Depends: AJ-E606, AJ-E607, AJ-E608, AJ-E609, AJ-E602, AJ-E603, AJ-E604, AJ-E605
 **Goal**: Render the two clocks honestly everywhere quota appears — rail/account indicators
 (I-05/I-06), Right Inspector Usage tab (D-06), NewSession rows, and tray — with confidence badges,
 typed empty/stale states, and the D-12 user-entered renewal date with approaching-expiry warning.
@@ -563,7 +563,19 @@ screen file names at pickup; the copy strings above are settled even if files mo
 approaching-expiry threshold belongs to the subscription clock only; never fire renewal warnings
 from window-reset data, and never fire window alerts from the renewal date (AJ-E611 consumes each separately).
 
-### AJ-E611 Smart destination ranking inputs & quota alerts / reset-queue integration | Status: TODO | Priority P1 | Effort M | Depends: AJ-E608, AJ-E609, AJ-E610
+
+**Status report (2026-10-16)**: DONE-EVIDENCED — evidence
+`docs/qa/evidence/AJ-E610/manifest.md`; gate `docs/qa/gate-M3.md`
+§AJ-E610. Backend 5/5 + UI matrix 16/16 + visual 262/262 (16 new
+26-quota captures). Tray recorded N/A (no tray surface exists yet);
+live dogfoods PENDING the authenticated session (gate-E5 blocker).
+
+**Implementation-mapping**: quota_display(+_all)/account_set_fee
+commands, `QuotaRings.tsx` (+test), RightInspector Usage-tab/account
+card/FeeEditor, NewSession QuotaChip, `tests/quota_display.rs`,
+gallery 26-quota.
+
+### AJ-E611 Smart destination ranking inputs & quota alerts / reset-queue integration | Status: DONE-EVIDENCED | Priority P1 | Effort M | Depends: AJ-E608, AJ-E609, AJ-E610
 **Goal**: Wire AJ-E606–E609 outputs into (a) the explainable destination ranking used at
 NewSession/handover/reset-return and (b) the anti-fatigue alert + reset-queue policy, so quota
 becomes the ranking/alert input D-01 intends — suggest-only, never auto-switching.
@@ -638,6 +650,30 @@ affinity can conspire to recommend the wrong-billing account; the affinity expla
 `docs/review/decision-log.md` only via maintainer decision — agents do not edit settled decisions.
 
 
+**Status report (2026-10-16)**: DONE-EVIDENCED — evidence
+`docs/qa/evidence/AJ-E611/manifest.md`; gate `docs/qa/gate-M3.md`
+§AJ-E611. Core 11/11 (weights-in-one-function, greyed filters,
+Estimated ×0.85 tie-break, exact §Q5 fixture-day sequence, 256-case
+at-most-once proptest, digest mute/quiet/cadence, purity guardrail);
+app guardrails 4/4 (no-spawn, digest-once-not-FSM, suggest-only
+storage diff, queue stale/no-launch). The guardrail suite exposed and
+fixed a REAL E606 bug (samples_for_account ignored the window column
+— a five-hour sample polluted the weekly reading). Visual 280/280
+incl. 16 new 27-ranking captures + 2 axe passes; two real a11y
+defects fixed (nested-interactive listbox; modal text-faint contrast
+— token cannot reach 4.5:1 on dark surfaces; rail's faint uses are
+flagged for a maintainer token decision). Canonical-home
+reconciliation: pass2/02 §7 adopts §Q6 wholesale — identical
+weights, nothing to flag; §7's three extension terms (switch cost,
+return likelihood, cumulative hop cost) are switch-epic scope
+(replay packs/hop graphs), documented as stubs in ranking.rs. Live
+quota-wall dogfood PENDING the authenticated session (recorded).
+This closes the E6 epic: E601–E611 all DONE-EVIDENCED.
 
-
-
+**Implementation-mapping**: `ranking.rs` + `alerts.rs` (new core),
+window-scoped `samples_for_account` + reset-queue in usage.rs,
+per-window `AccountEvaluation`, 4 app commands (ranking/alerts/queue
+— no resume command by design), `RankedRows.tsx` +
+`NotificationRegion.tsx` (new), NewSession mount, tests
+`ranking_alerts.rs` (11) + `ranking_alerts_guardrails.rs` (4),
+gallery 27-ranking + 2 axe passes.

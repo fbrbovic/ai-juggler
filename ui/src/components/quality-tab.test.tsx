@@ -1,7 +1,6 @@
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RightInspector } from "./RightInspector";
-import type { QualitySignalsInfo } from "../lib/bridge";
 import type { AccountInfo, InstanceInfo, LaunchRecipeInfo, ProjectInfo } from "../lib/bridge";
 
 /**
@@ -10,7 +9,47 @@ import type { AccountInfo, InstanceInfo, LaunchRecipeInfo, ProjectInfo } from ".
  * the View-as-table text alternative.
  */
 
-const qualityMock = vi.fn(async (id: string): Promise<QualitySignalsInfo | null> => qualityFixtures[id] ?? null);
+const NOW = 1_728_800_000_000;
+
+// Hoisted: vi.mock factories run before module scope initializes, so
+// the fixtures the factory closes over must live inside vi.hoisted.
+const { qualityMock } = vi.hoisted(() => {
+  const NOW = 1_728_800_000_000;
+  const qualityFixtures: Record<string, import("../lib/bridge").QualitySignalsInfo> = {
+    full: {
+      tokens_bars: [420, 510, 380, 600, 540],
+      avg_tokens_per_min: 490,
+      error_label: "2 errors / 41 turns",
+      errors_not_measurable: false,
+      context_used: null,
+      context_window: null,
+      cumulative: { input: 12_345, output: 6_789, cache_read: 0, cache_write: 0, reasoning: 0 },
+      session_cost_usd: 0.69,
+      priced_model: "opus",
+      quota_forecast: "not burning",
+      stuck: { rule: "stuck_no_output", inputs: ["no output 6m", "cpu 0.3%"], since_ms: NOW - 6 * 60_000 },
+    },
+    idle: {
+      tokens_bars: [0, 0, 0, 0, 0],
+      avg_tokens_per_min: 0,
+      error_label: "Not measurable (interactive)",
+      errors_not_measurable: true,
+      context_used: null,
+      context_window: null,
+      cumulative: { input: 0, output: 0, cache_read: 0, cache_write: 0, reasoning: 0 },
+      session_cost_usd: null,
+      priced_model: null,
+      quota_forecast: "not burning",
+      stuck: null,
+    },
+  };
+  return {
+    qualityMock: vi.fn(
+      async (id: string): Promise<import("../lib/bridge").QualitySignalsInfo | null> =>
+        qualityFixtures[id] ?? null,
+    ),
+  };
+});
 vi.mock("../lib/bridge", async (importOriginal) => {
   const original = await importOriginal<typeof import("../lib/bridge")>();
   return { ...original, instanceQuality: qualityMock };
@@ -19,36 +58,7 @@ vi.mock("./TerminalView", () => ({
   TerminalView: ({ id }: { id: string; title: string }) => <div data-terminal-id={id} />,
 }));
 
-const NOW = 1_728_800_000_000;
 
-const qualityFixtures: Record<string, QualitySignalsInfo> = {
-  full: {
-    tokens_bars: [420, 510, 380, 600, 540],
-    avg_tokens_per_min: 490,
-    error_label: "2 errors / 41 turns",
-    errors_not_measurable: false,
-    context_used: null,
-    context_window: null,
-    cumulative: { input: 12_345, output: 6_789, cache_read: 0, cache_write: 0, reasoning: 0 },
-    session_cost_usd: 0.69,
-    priced_model: "opus",
-    quota_forecast: "not burning",
-    stuck: { rule: "stuck_no_output", inputs: ["no output 6m", "cpu 0.3%"], since_ms: NOW - 6 * 60_000 },
-  },
-  idle: {
-    tokens_bars: [0, 0, 0, 0, 0],
-    avg_tokens_per_min: 0,
-    error_label: "Not measurable (interactive)",
-    errors_not_measurable: true,
-    context_used: null,
-    context_window: null,
-    cumulative: { input: 0, output: 0, cache_read: 0, cache_write: 0, reasoning: 0 },
-    session_cost_usd: null,
-    priced_model: null,
-    quota_forecast: "not burning",
-    stuck: null,
-  },
-};
 
 function instance(id: string, overrides: Partial<InstanceInfo> = {}): InstanceInfo {
   return {

@@ -210,3 +210,110 @@ survive. Two full-suite runs green after the fix.
 ingested yet — it rides the statusline capture's live verification
 (the AJ-E602 candidate, pending the authenticated session). Until
 then USD is uniformly `Estimate`, which is the stricter label.
+
+## AJ-E610 — two-clock display (2026-10-16)
+
+### Test output
+
+- `cargo test -p juggler-app --test quota_display` — 5/5: typed no-data
+  (unknown/learning, no percentage, never 0%), Tracking with
+  percentage+badge, Codex-Pro 5 h omission WITH reason (weekly kept),
+  Gemini unavailable-with-reason, D-12 renewal states with the
+  user-tunable 1–30 day threshold.
+- `vitest src/components/QuotaRings.test.tsx` — 16/16: the full state
+  matrix on real renders (measured badge-adjacency + aria text
+  equivalent, stale demotion "last measured 22m ago" + opacity,
+  blocked reset CTA, omitted-ring reason, Gemini unavailability,
+  two-clock separation — the renewal line carries no %, rings no
+  "Renew"), forecast pill states (Estimated renders the range),
+  QuotaChip typed copies, the badge-adjacency grep gate (no
+  `percent={0}`), and the D-12 no-inference test.
+- Visual: gallery `26-quota` — the Usage tab two-clock card ×
+  measured/stale/no-data/blocked × 1440×900 + 1280×800 × light+dark
+  (16 captures), copy-conformance asserted before each shot; the
+  pre-existing `08-inspector-aggregate/account-overview` capture now
+  seeds the engine seam and asserts the badge. Full suite 262/262.
+- Grayscale readability (WCAG 1.4.1): every number + badge is text —
+  the ring's stroke is never the sole carrier; the typed-state and
+  badge tests pin this per state.
+- Rail note: the rail's per-session quota line (I-05) predates this
+  task; the ACCOUNT-level surfaces (I-06) live on the account card,
+  the Usage tab, and NewSession rows. No tray exists in the app yet
+  (deep/10 §19 tray is a later surface) — recorded, not silently
+  omitted.
+- Pending live evidence (maintainer login, same blocker as E607/E609):
+  the ±5 % `/usage` dogfood and the manual renewal-entry restart
+  persistence check ride the next authenticated session. The state
+  machine + persistence paths are covered by the fixture suites.
+
+## AJ-E611 — ranking inputs, quota alerts, reset queue (2026-10-16)
+
+### Test output
+
+- `cargo test -p juggler-core --test ranking_alerts` — 11/11: weights
+  sum to 1 with the §Q6 constants in ONE function, hard filters
+  greyed-with-reason (never dropped), Estimated-headroom ×0.85 with
+  Measured winning exact ties, unknown headroom ranks by remaining
+  inputs AND says "headroom unknown — ranked without quota",
+  affinity words carry the wrong-billing guard (fixture where project
+  history favours account B asserts B's affinity appears in B's row,
+  never A's), the fixture-day §Q5 sequence exactly (30 healthy
+  minutes silent → TTE<45 ONE TrayAmber → TTE<15/≥90% ONE Actionable
+  → repeats silent → ONE ExhaustedNotification → repeats silent →
+  reset re-arms + ONE ResetReached), the 256-case proptest (random
+  trigger sequences never emit two notifications for one crossing,
+  per cycle: ≤1 actionable, ≤1 exhaustion, ≤1 reset), snooze holds
+  30 min, >2× forecast error silent-logs, digest mute/quiet-hours/
+  cadence (22:00–07:00 defers without dropping), and the purity
+  guardrail (ranking/alerts core has no launch capability — no such
+  API exists to call).
+- `cargo test -p juggler-app --test ranking_alerts_guardrails` — 4/4:
+  alert ticks emit ≤1 actionable per crossing across ticks and NEVER
+  spawn (sessions digest byte-identical); the renewal-approaching
+  digest joins ONCE per hour (quiet hour defers without dropping) and
+  NEVER triggers the window FSM; ranking is suggest-only (sessions
+  storage byte-identical through ranking_rows); the reset queue
+  notifies once, marks broken lineage `stale`, and never launches.
+- The E611 guardrail suite exposed and fixed a REAL E606 bug:
+  `samples_for_account` ignored the window column, so a five-hour
+  sample polluted the weekly reading (two actionables from one
+  crossing). Fixed at the source (window-scoped fetch +
+  per-window `AccountEvaluation` fields); the guardrail now pins the
+  fixed behaviour.
+- `just verify` workspace-green; UI build green; full visual suite
+  280/280 (16 new `27-ranking` captures + 2 new axe passes).
+- Visual: `27-ranking` — NewSession ranked list (Suggested badge,
+  ≥2 factors without hover, TTE, greyed filtered row with reason),
+  "Why this order?" expanded (all five inputs), the actionable 90%
+  notification + the digest's renewal line visually distinct
+  (dashed/quiet, prefixed "Digest ·"), queue rows (queued countdown,
+  ready + explicit Resume focused) × 1440×900 + 1280×800 × light+dark
+  — copy conformance asserted before every capture.
+- A11y: the new axe pass on the ranking surfaces surfaced two real
+  issues, both fixed: (a) `role="option"` wrapping a `<button>`
+  (nested-interactive) — now a labelled LIST of buttons with ↑/↓
+  roving focus; (b) pre-existing `text-faint` labels in the New
+  Session modal fail 1.4.3 (the token cannot reach 4.5:1 on any dark
+  surface) — the modal surfaces moved to `text-muted`, and the greyed
+  filtered row greys via muted text instead of `opacity-50` (which
+  halved the reason text's contrast). Recorded: `text-faint`
+  elsewhere (rail) is a pre-existing pattern outside this task's
+  surfaces — flagged for a design-token decision, not silently
+  bumped.
+- Suggest-only architecture (Req.7): NO launch/switch/resume code
+  path exists in ranking/alerts/queue — the Resume click opens the
+  NewSession picker; the wrong-provider hard filter is stubbed false
+  (the request-restriction surface lands with the switch epic) and
+  fidelity inputs neutral 0.5 (the switch-fidelity matrix lands with
+  its epic) — both documented in ranking.rs.
+- AJ-E806 record: one non-reproducing load flake —
+  `juggler-supervisor` reconciler failed once under the FULL parallel
+  `just verify` (2/3), passed on immediate re-run (full verify exit 0,
+  62 suites ok) and in isolation (3/3); consistent with the recorded
+  load-flake pattern (soak test timing under parallel load). Not
+  quarantined — it did not reproduce; noted here for the flake ledger.
+- Pending live evidence (maintainer login, same blocker as
+  E607/E609/E610): one real quota-wall event end-to-end (alert →
+  click → handover or queue → resume-after-reset, resume latency
+  <15 min). The fixture-day sequence + guardrails cover the state
+  machine meanwhile.

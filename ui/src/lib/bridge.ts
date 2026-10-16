@@ -862,6 +862,157 @@ export interface CostRollupsData {
   scope: string;
 }
 
+/** AJ-E611: one ranked (or filtered) account row. */
+export interface RankedRowData {
+  account: string;
+  score?: number;
+  filtered_reason?: string;
+  top_factors: string[];
+  factors: [string, number][];
+  headroom_unknown: boolean;
+  confidence: string;
+  tte_min?: number;
+  suggested: boolean;
+}
+
+/** AJ-E611: the explainable ranking — suggest-only, the user clicks. */
+export async function rankingRows(project?: string): Promise<RankedRowData[]> {
+  if (!hasBackend) {
+    return (window as unknown as { __AIJ_RANKING__?: RankedRowData[] })
+      .__AIJ_RANKING__ ?? [];
+  }
+  return invoke<RankedRowData[]>("ranking_rows", { project });
+}
+
+/** AJ-E611: one emitted alert (the notification region's payload).
+ * `digest` lines are the hourly batch — visually quieter than window
+ * alerts (a renewal item never reads as "switch now"). */
+export interface AlertEventData {
+  kind: "tray-amber" | "actionable" | "exhausted" | "reset-reached" | "digest";
+  account: string;
+  text: string;
+  at_ms: number;
+}
+
+/** AJ-E611: one alert evaluation pass (at-most-once by the machines).
+ * The webview's wall-clock local hour rides along — the quiet-hours
+ * gate for the digest flush (the backend carries no tz database). */
+export async function alertsTick(): Promise<AlertEventData[]> {
+  if (!hasBackend) {
+    return (window as unknown as { __AIJ_ALERTS__?: AlertEventData[] })
+      .__AIJ_ALERTS__ ?? [];
+  }
+  return invoke<AlertEventData[]>("alerts_tick", { localHour: new Date().getHours() });
+}
+
+/** AJ-E611: one reset-queue row. */
+export interface ResetQueueRow {
+  id: string;
+  session: string;
+  account: string;
+  resume_at_ms: number;
+  state: string;
+}
+
+/** AJ-E611: the queue rows (countdown / ready / stale explained). */
+export async function resetQueueList(): Promise<ResetQueueRow[]> {
+  if (!hasBackend) {
+    return (window as unknown as { __AIJ_RESET_QUEUE__?: ResetQueueRow[] })
+      .__AIJ_RESET_QUEUE__ ?? [];
+  }
+  return invoke<ResetQueueRow[]>("reset_queue_list");
+}
+
+/** AJ-E611: queue a resume at the reset (passive timer; the resume
+ * itself is always an explicit click). */
+export async function resetQueueQueue(
+  session: string,
+  account: string,
+  resumeAtMs: number,
+): Promise<void> {
+  if (!hasBackend) return;
+  await invoke("reset_queue_queue", { session, account, resumeAtMs });
+}
+
+/** AJ-E611: dismiss a queued resume. */
+export async function resetQueueDismiss(id: string): Promise<void> {
+  if (!hasBackend) return;
+  await invoke("reset_queue_dismiss", { id });
+}
+
+/** AJ-E610: one window clock's typed rendered state. */
+export interface WindowDisplay {
+  state: "unknown" | "learning" | "tracking" | "stale" | "exhausted";
+  percentage?: number;
+  badge?: string;
+  stale_note_ms?: number;
+  resets_at_ms?: number;
+  burned_tokens: number;
+  burned_credits?: number;
+}
+
+/** AJ-E610: the subscription clock's typed state (calendar line, D-12). */
+export interface RenewalDisplay {
+  state: "none" | "set" | "approaching" | "overdue";
+  label: string;
+  entered_by_user: boolean;
+}
+
+/** AJ-E610: the forecast pill data. */
+export interface ForecastDisplay {
+  state: "learning" | "wont-exhaust" | "exhausts" | "no-headroom";
+  tte_min?: number;
+  range_min?: number;
+  range_max?: number;
+  badge: string;
+}
+
+/** AJ-E610: the two-clock display for one account. */
+export interface QuotaDisplayData {
+  account: string;
+  five_hour?: WindowDisplay;
+  five_hour_omitted_reason?: string;
+  weekly?: WindowDisplay;
+  weekly_omitted_reason?: string;
+  renewal: RenewalDisplay;
+  forecast: ForecastDisplay;
+  unavailable_reason?: string;
+}
+
+/** AJ-E610: one account's two clocks (engine-evaluated). */
+export async function quotaDisplay(account: string): Promise<QuotaDisplayData> {
+  if (!hasBackend) {
+    const all = await quotaDisplayAll();
+    return (
+      all.find((entry) => entry.account === account) ?? {
+        account,
+        renewal: { state: "none", label: "Renewal: unknown — add date", entered_by_user: false },
+        forecast: { state: "learning", badge: "estimated" },
+      }
+    );
+  }
+  return invoke<QuotaDisplayData>("quota_display", { account });
+}
+
+/** AJ-E610: every account's two clocks (rail/row source; one query). */
+export async function quotaDisplayAll(): Promise<QuotaDisplayData[]> {
+  if (!hasBackend) {
+    return (window as unknown as { __AIJ_QUOTA_DISPLAY__?: QuotaDisplayData[] })
+      .__AIJ_QUOTA_DISPLAY__ ?? [];
+  }
+  return invoke<QuotaDisplayData[]>("quota_display_all");
+}
+
+/** AJ-E610: set/clear the user-entered flat fee (dual view ratio). */
+export async function accountSetFee(account: string, feeUsd: number | null): Promise<void> {
+  if (!hasBackend) {
+    const w = window as unknown as { __AIJ_SET_FEE__?: (a: string, f: number | null) => void };
+    w.__AIJ_SET_FEE__?.(account, feeUsd);
+    return;
+  }
+  await invoke("account_set_fee", { account, feeUsd });
+}
+
 /** AJ-E609: the session cost matrix + dual subscription view. */
 export async function costRollups(account?: string): Promise<CostRollupsData> {
   if (!hasBackend) {
