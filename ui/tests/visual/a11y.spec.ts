@@ -428,3 +428,91 @@ for (const theme of ["dark", "light"] as const) {
     expect(serious).toHaveLength(0);
   });
 }
+
+
+// AJ-E511: axe-core 0 critical/serious on the fleet machine surfaces
+// (the machine column + the widened All-machines view with its
+// display-only foreign row).
+for (const theme of ["dark", "light"] as const) {
+  test(`fleet — machine column + filter — axe 0 critical/serious — ${theme}`, async ({ page }) => {
+    await page.addInitScript(
+      ({ fixture, t0, theme: t, cleanup }) => {
+        const w = window as unknown as Record<string, unknown>;
+        w.__AIJ_FIXTURE__ = fixture;
+        w.__AIJ_CLEANUP__ = cleanup;
+        localStorage.setItem("aij.theme", t);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+        Date.now = () => t0;
+      },
+      {
+        fixture: allStatuses,
+        t0: T0,
+        theme,
+        cleanup: {
+          groups: [
+            {
+              session: "s-local", provider: "claude-code", account: "Work Max",
+              project: "web", machine: "machine-local", healthy: false,
+              rows: [
+                {
+                  machine_id: "machine-local", pid: 8123, pgid: 8100, role: "helper",
+                  state: "orphaned", state_label: "Still running after its Instance closed",
+                  role_guess: "python3 (guess)", exe_path: "/usr/bin/python3",
+                  cmdline: "python3 -m http.server 5173", age_ms: 9_000_000,
+                  rss_bytes: 48 * 1024 * 1024, cpu_pct: 1.4, ports: "5173",
+                  hog: false, hog_rules: [],
+                  evidence: {
+                    root_pid: 8100, parent_pid: 8100, pgid: 8100, escaped_group: false,
+                    verification: { verdict: "verified", detail: "match" },
+                    first_seen: T0, last_seen: T0 + 90_000,
+                  },
+                },
+                {
+                  machine_id: "machine-studio", pid: 9101, pgid: 9100, role: "helper",
+                  state: "orphaned", state_label: "Still running after its Instance closed",
+                  role_guess: "node (guess)", exe_path: "/usr/local/bin/node",
+                  cmdline: "node vite dev", age_ms: 4_000_000,
+                  rss_bytes: 220 * 1024 * 1024, cpu_pct: 0.4, ports: "5174",
+                  hog: false, hog_rules: [],
+                  evidence: {
+                    root_pid: 9100, parent_pid: 9100, pgid: 9100, escaped_group: false,
+                    verification: { verdict: "verified", detail: "match (remote record)" },
+                    first_seen: T0, last_seen: T0 + 90_000,
+                  },
+                },
+              ],
+            },
+          ],
+          local_machine: "machine-local",
+          clean_instances: 2,
+          ledger_degraded: false,
+        },
+      },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Cleanup" }).click();
+    await page
+      .getByRole("combobox", { name: "Machine filter" })
+      .selectOption("all");
+    await expect(page.getByTestId("cleanup-machine-9101")).toBeVisible();
+    const results = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+      .analyze();
+    const serious = results.violations.filter((v) =>
+      ["serious", "critical"].includes(v.impact ?? ""),
+    );
+    if (serious.length > 0) {
+      const summary = serious
+        .map(
+          (v) =>
+            `${v.id} (${v.impact}): ${v.nodes.map((n) => n.target.join(" ")).slice(0, 3).join(", ")}`,
+        )
+        .join("\n");
+      throw new Error(`axe violations on the fleet surfaces (${theme}):\n${summary}`);
+    }
+    expect(serious).toHaveLength(0);
+  });
+}

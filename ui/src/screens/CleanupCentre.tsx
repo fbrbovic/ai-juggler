@@ -49,6 +49,9 @@ export interface CleanupHistoryData {
 
 export interface CleanupInventoryData {
   groups: CleanupGroupInfo[];
+  /** AJ-E511: the executing node's machine id — rows whose
+   * machine_id equals it are This Mac; others are display-only. */
+  local_machine: string;
   clean_instances: number;
   ledger_degraded: boolean;
   history: CleanupHistoryData | null;
@@ -64,7 +67,10 @@ export const CLEANUP_FILTERS = [
 export type CleanupFilterId = (typeof CLEANUP_FILTERS)[number]["id"];
 
 export type CleanupBridge = {
-  load: (filter: string) => Promise<CleanupInventoryData>;
+  load: (
+    filter: string,
+    machineScope: "this" | "all",
+  ) => Promise<CleanupInventoryData>;
 };
 
 /** AJ-E512: the passive alerts source (hog alerts + idle nudges) —
@@ -98,12 +104,16 @@ export const defaultCleanupStatusBridge: CleanupStatusBridge = {
 
 // Dynamic import (the vi.mock TDZ rule).
 export const defaultCleanupBridge: CleanupBridge = {
-  load: (filter) =>
-    import("../lib/bridge").then((bridge) => bridge.cleanupInventory(filter)),
+  load: (filter, machineScope) =>
+    import("../lib/bridge").then((bridge) =>
+      bridge.cleanupInventory(filter, machineScope),
+    ),
 };
 
 function GroupBlock(props: {
   group: CleanupGroupInfo;
+  /** AJ-E511: this node's machine id — foreign rows are display-only. */
+  localMachine?: string;
   onKill?: (row: CleanupRowInfo, session: string, trigger: HTMLElement) => void;
 }) {
   const group = props.group;
@@ -145,8 +155,17 @@ function GroupBlock(props: {
             <ProcessRow
               key={row.pid}
               row={row}
+              localMachine={props.localMachine}
               onKill={
-                props.onKill !== undefined
+                // AJ-E511: foreign-machine rows are display-only —
+                // never even an affordance. Rows WITHOUT a machine id
+                // are legacy-local: the backend stamps every row now.
+                props.onKill !== undefined &&
+                !(
+                  row.machine_id !== undefined &&
+                  props.localMachine !== undefined &&
+                  row.machine_id !== props.localMachine
+                )
                   ? (row, trigger) => props.onKill?.(row, group.session, trigger)
                   : undefined
               }
@@ -169,6 +188,9 @@ export function CleanupCentre(props: {
   const alertsBridge = props.alertsBridge ?? defaultCleanupAlertsBridge;
   const statusBridge = props.statusBridge ?? defaultCleanupStatusBridge;
   const [filter, setFilter] = useState<CleanupFilterId>("needs-attention");
+  // AJ-E511: the machine dimension — "This machine" by default so
+  // single-machine users see no fleet complexity.
+  const [machineScope, setMachineScope] = useState<"this" | "all">("this");
   const [data, setData] = useState<CleanupInventoryData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [killTarget, setKillTarget] = useState<{
@@ -211,7 +233,7 @@ export function CleanupCentre(props: {
   useEffect(() => {
     let alive = true;
     bridge
-      .load(filter)
+      .load(filter, machineScope)
       .then((result) => {
         if (alive) {
           setData(result);
@@ -224,7 +246,7 @@ export function CleanupCentre(props: {
     return () => {
       alive = false;
     };
-  }, [filter, bridge, reloadKey]);
+  }, [filter, machineScope, bridge, reloadKey]);
 
   // AJ-E512 Req.3: the passive alerts (hog alerts + idle nudges) —
   // `role=status` cards, never dialogs; a hog alert's only action is
@@ -295,6 +317,21 @@ export function CleanupCentre(props: {
             </button>
           ))}
         </div>
+        <label className="ml-2 flex items-center gap-1 text-[10.5px] text-muted">
+          Machine
+          <select
+            aria-label="Machine filter"
+            value={machineScope}
+            onChange={(event) =>
+              setMachineScope(event.target.value === "all" ? "all" : "this")
+            }
+            className="rounded-md border border-hairline bg-surface px-1.5 py-1 text-[10.5px] text-ink outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+            data-testid="cleanup-machine-filter"
+          >
+            <option value="this">This machine</option>
+            <option value="all">All machines</option>
+          </select>
+        </label>
       </div>
 
       {/* Filter changes announced politely (4.1.3). */}
@@ -448,7 +485,8 @@ export function CleanupCentre(props: {
         <div className="flex flex-col gap-2">
           {visibleGroups.map((group) => (
             <GroupBlock
-              key={group.session}
+              key={`${group.session}-${group.machine}`}
+              localMachine={data?.local_machine}
               group={group}
               onKill={(row, session, trigger) =>
                 setKillTarget({

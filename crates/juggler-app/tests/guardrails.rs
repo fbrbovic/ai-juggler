@@ -1013,3 +1013,157 @@ fn idle_nudge_fires_exactly_once_per_orphan() {
         kill9(pid);
     }
 }
+
+/// AJ-E511 Req.2 end-to-end: a FOREIGN-machine orphan row (a
+/// future-synced record) is refused by the typed WrongMachine path —
+/// its own copy, zero signals, no audit row — and the all-machines
+/// inventory lists it display-only while the local tree stays fully
+/// actionable.
+#[test]
+fn foreign_machine_row_is_refused_with_zero_signals_and_listed_display_only() {
+    let _serial = serialize();
+    let dir = tempfile::tempdir().unwrap();
+    let state = app_state(dir.path());
+    seed_account(&state, dir.path(), "acc-guard", true, false);
+    let kit = FixtureSet::new(dir.path());
+
+    let a = seed_instance(&state, dir.path(), "sess-fleet", "acc-guard");
+    let spawned_a = state
+        .supervisor
+        .spawn(
+            &a,
+            &sh_spec(&format!("{}\nwait", kit.root_script()), dir.path()),
+            &ctx(&state),
+        )
+        .unwrap();
+    let pids = tick_until_helpers(
+        &state,
+        &a,
+        &["--port", "mcp-server", "--ignore-term", "touch", "--setsid"],
+    );
+    let vite_pid = pids[0];
+    assert!(kit.wait_ready());
+
+    // The foreign record: a LIVE local process carrying a FOREIGN
+    // machine id — the future-sync shape (this node never owns it).
+    let foreign_dir = dir.path().join("foreign");
+    std::fs::create_dir_all(&foreign_dir).unwrap();
+    let foreign_pid = fixtures::spawn_detached(
+        &fixtures::write_helper(&foreign_dir),
+        &[],
+        &foreign_dir.join("f.traps"),
+        &foreign_dir.join("f.ready"),
+    );
+    let foreign_row = juggler_core::storage::LedgerRow {
+        pid: Some(foreign_pid),
+        pgid: None,
+        started_at: Some(1),
+        exe_path: "/bin/python3".into(),
+        cmdline_hash: "foreign".into(),
+        cmdline_trunc: "python3 trap_helper.py (foreign machine)".into(),
+        boot_id: state.ledger.boot_id().to_string(),
+        session_id: a.as_str().to_string(),
+        instance_id: None,
+        provider: "claude-code".into(),
+        account_id: Some("acc-guard".into()),
+        project_id: Some("proj-guard".into()),
+        machine_id: "machine-other".into(),
+        root_pid: Some(spawned_a.pid),
+        parent_pid: Some(spawned_a.pid),
+        depth: 1,
+        role: "helper".into(),
+        state: "orphaned".into(),
+        listens_on: None,
+        cwd: dir.path().to_string_lossy().to_string(),
+        peak_rss: None,
+        peak_cpu: None,
+        exit_kind: None,
+        reaped_by_us: None,
+        escaped_group: false,
+        down_period: false,
+        first_seen: now_ms(),
+        last_seen: now_ms(),
+    };
+    state.ledger.upsert_helpers(&a, &[foreign_row]).unwrap();
+
+    // The sheet: refused with the TYPED copy, no members listed.
+    let verify = commands::kill_verify_inner(&state, a.as_str(), foreign_pid).unwrap();
+    assert!(!verify.verified);
+    assert_eq!(
+        verify.refusal.as_deref(),
+        Some(commands::KILL_WRONG_MACHINE_COPY)
+    );
+    assert_eq!(verify.machine_id, "machine-other");
+    assert!(
+        verify.members.is_empty(),
+        "no member listing for a foreign row"
+    );
+
+    // The ladder: refused, ZERO signals, NO audit row.
+    let audit_before = state.audit.history(0).unwrap().len();
+    let outcome = commands::kill_execute_audited(
+        &state,
+        state.audit.as_ref(),
+        a.as_str(),
+        foreign_pid,
+        "pid",
+        &cancel_flag(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        outcome.refusal.as_deref(),
+        Some(commands::KILL_WRONG_MACHINE_COPY)
+    );
+    assert_eq!(outcome.members[0].outcome, "refused");
+    let foreign_traps = std::fs::read_to_string(foreign_dir.join("f.traps")).unwrap_or_default();
+    assert!(
+        foreign_traps.trim().is_empty(),
+        "foreign row signalled: {foreign_traps}"
+    );
+    assert!(fixtures::alive(foreign_pid));
+    assert_eq!(state.audit.history(0).unwrap().len(), audit_before);
+
+    // The sweep never sees it (candidates are machine-scoped) — run
+    // it against the live tree; nothing is eligible, and the foreign
+    // row must survive regardless.
+    commands::auto_cleanup_sweep(&state, now_ms() + 61_000);
+    assert!(
+        fixtures::alive(foreign_pid),
+        "the sweep never signals a foreign-machine row"
+    );
+
+    // The all-machines inventory lists it (display-only in the UI)
+    // beside the local tree, and names THIS node.
+    let local = commands::cleanup_inventory_inner(&state, "all-managed", false);
+    assert!(
+        local.groups.iter().all(|group| group
+            .rows
+            .iter()
+            .all(|row| { row.machine_id == local.local_machine })),
+        "the default scope lists only this machine"
+    );
+    let all = commands::cleanup_inventory_inner(&state, "all-managed", true);
+    assert_ne!(all.local_machine, "machine-other");
+    assert!(
+        all.groups
+            .iter()
+            .flat_map(|group| group.rows.iter())
+            .any(|row| row.pid == foreign_pid && row.machine_id == "machine-other"),
+        "the all-machines scope lists the foreign row"
+    );
+
+    // The LOCAL tree is unaffected: still fully actionable.
+    let local_verify = commands::kill_verify_inner(&state, a.as_str(), vite_pid).unwrap();
+    assert!(local_verify.verified, "local rows verify normally");
+
+    println!(
+        "[fleet] foreign {foreign_pid} refused + zero signals + listed display-only; local tree actionable"
+    );
+
+    let _ = state.supervisor.stop(&a, Duration::from_secs(3));
+    for pid in pids {
+        kill9(pid);
+    }
+    kill9(foreign_pid);
+}

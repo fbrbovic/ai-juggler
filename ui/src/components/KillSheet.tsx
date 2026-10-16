@@ -35,6 +35,9 @@ export interface KillMemberInfo {
 }
 
 export interface KillVerifyData {
+  /** AJ-E511: the machine that owns the target (`This Mac`
+   * locally — every kill payload names its machine). */
+  machine_id?: string;
   pid: number;
   session: string;
   verified: boolean;
@@ -325,6 +328,7 @@ export function KillSheet(props: {
             <h2 className="text-sm font-semibold">{title}</h2>
             <p className="mt-0.5 font-mono text-[10.5px] text-muted">
               Instance {props.session}
+              {verify?.machine_id ? ` · ${verify.machine_id}` : ""}
               {verify !== null && verify.account_id !== null
                 ? ` · ${verify.account_id}`
                 : ""}

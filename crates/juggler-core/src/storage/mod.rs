@@ -236,8 +236,15 @@ INSERT INTO cleanup_settings (account_id, tier1_opt_in, tier2_opt_in)
 /// orphans, and survives any number of further restarts.
 const V16: &str = "ALTER TABLE process_ledger ADD COLUMN down_period INTEGER NOT NULL DEFAULT 0;";
 
+/// v17 (AJ-E511): the fleet composite key — `session_id+machine_id`
+/// is the join key for every cross-machine query (the same session
+/// may exist on two machines); the index keeps the machine-scoped
+/// inventory inside its ≤5 ms budget.
+const V17: &str = "CREATE INDEX IF NOT EXISTS process_ledger_session_machine
+    ON process_ledger(session_id, machine_id);";
+
 const MIGRATIONS: &[&str] = &[
-    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16,
+    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17,
 ];
 
 /// An opened AI Juggler database with typed repositories.

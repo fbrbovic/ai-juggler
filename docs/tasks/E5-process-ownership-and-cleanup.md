@@ -511,7 +511,7 @@ Trap: AJ-E507/E508 depend on this contract even though they are listed around it
 - UI: `InstanceInfo.adopted` → `↻ re-adopted` chip + `Running — re-adopted after restart` label; `RecoverySummaryDialog` (focus-on-open, Esc/Got-it dismiss, focus returns to the board, exact text — same string asserted in the Rust drill); Processes tab leads with the detached-terminal notice; Cleanup Centre `Re-adopted` filter + left-behind label; adopted rows killable through the E507 sheet only.
 - Tests/evidence: `tests/recovery.rs` crash drill (2/1/1 exact incl. forged-identity row, stop kills the verified tree, B stays adopted, forged row untouched, audit row, suspension, dismiss-once) in `docs/qa/evidence/AJ-E510/recovery-drill.txt`; UI 190/190; `22-recovery` gallery (6 captures) + axe gates; one contrast fix (dialog h2 `text-ink`).
 
-### AJ-E511 Fleet-shaped ownership: machine identity on every process record | Status: TODO | Priority P1 | Effort M | Depends: AJ-E501
+### AJ-E511 Fleet-shaped ownership: machine identity on every process record | Status: DONE-EVIDENCED (evidence: docs/qa/evidence/AJ-E511/manifest.md) | Priority P1 | Effort M | Depends: AJ-E501
 
 **Goal**: Make every ownership, audit, and cleanup decision machine-scoped from day one (D-13), so fleet control later never has to guess which machine a PID belongs to.
 
@@ -538,6 +538,16 @@ Trap: AJ-E507/E508 depend on this contract even though they are listed around it
 **Research basis**: decision-log D-13:126-137; SPEC §11 `docs/SPEC.md:362-393`; deep/08 §2.3 machine column critique (`model.rs:398` bare TEXT, no FK).
 
 **Handover note**: Trap: PID/PGID are only unique per machine+boot — any future sync that merges rows without `machine_id+boot_id` re-creates the false-kill bug at fleet scale. Trap: do not build transport here; shaping the data is the whole task.
+
+*Implementation mapping (recorded in this task's PR per the claiming protocol)*:
+- Storage: v17 index `process_ledger(session_id, machine_id)`; repo `rows_for_session_on_machine` + `live_session_machines` (the composite-key reads); both on the `LedgerStore` trait.
+- Identity: the persisted `local_machine_id` (state.rs) now feeds every session creation (the three hard-coded `"this-mac"` launch/handover sites migrated; the remaining literal is a TEST fixture).
+- Kill paths: `SupervisorError::WrongMachine { recorded, local }` (typed) + `KILL_WRONG_MACHINE_COPY`; guardrail-0 in `kill_execute_as` (before identity — a foreign row must not read as PID-reuse) and the typed early-refusal in `kill_verify_inner`; `verify_kill_target` machine-gates; the sweep stays machine-scoped at candidate read.
+- The composite leak the new test CAUGHT: `local_ledger_rows` read full session rows — a foreign row of a shared session leaked into the local scope; now composite-keyed (exactly the trap the handover note warns about).
+- Inventory: `CleanupRow.machine_id` + `CleanupInventoryInfo.local_machine`; groups keyed `(session, machine)`; `cleanup_inventory(filter, machine_scope)` — "This machine" default, "all" widens via the composite walk.
+- UI: quiet Machine cell (`This Mac` / the machine id), labelled `Machine filter` combobox (default This machine), foreign rows display-only (no kill affordance in the DOM); the kill sheet names the target's machine; the `__AIJ_CLEANUP__` seam mirrors the backend scope.
+- ADR-0013: the five open-questions areas (identity, sync/transport, remote ownership, offline, security) recorded as beta-exit criteria — no transport built.
+- Tests: `tests/fleet_identity.rs` 3/3 (composite-key disjoint rows on two machines, machine-scoped candidates, typed refusal naming both machines) + the guardrails foreign end-to-end (refused, zero signals, no audit row, sweep-invisible, listed display-only, local tree unaffected).
 
 ### AJ-E512 False-kill collateral fixtures, hog alerts, and gate evidence | Status: DONE-EVIDENCED (evidence: docs/qa/evidence/AJ-E512/manifest.md) | Priority P0 | Effort M | Depends: AJ-E507, AJ-E508, AJ-E510
 

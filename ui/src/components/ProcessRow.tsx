@@ -31,6 +31,9 @@ export interface EvidenceChainInfo {
 }
 
 export interface CleanupRowInfo {
+  /** AJ-E511: the machine that owns this row; equals the inventory's
+   * `local_machine` on this node, anything else is display-only. */
+  machine_id?: string;
   pid: number;
   pgid: number | null;
   role: string;
@@ -93,6 +96,9 @@ export function killableRow(row: CleanupRowInfo): boolean {
 
 export function ProcessRow(props: {
   row: CleanupRowInfo;
+  /** This node's machine id (AJ-E511): equals the row's machine →
+   * `This Mac` (the user label, Nielsen H2), else the foreign id. */
+  localMachine?: string;
   /** Opens the AJ-E507 sheet; the row's element rides along for
    * focus-return (WCAG 2.4.3). Absent = read-only surface. */
   onKill?: (row: CleanupRowInfo, trigger: HTMLElement) => void;
@@ -125,6 +131,15 @@ export function ProcessRow(props: {
             data-testid={`cleanup-state-${row.pid}`}
           >
             <span aria-hidden="true">{stateIcon(row.state)}</span>
+        {props.localMachine !== undefined && row.machine_id !== undefined && (
+          <span
+            className="shrink-0 font-mono text-[9.5px] text-faint"
+            title={`Machine: ${row.machine_id}`}
+            data-testid={`cleanup-machine-${row.pid}`}
+          >
+            {row.machine_id === props.localMachine ? "This Mac" : row.machine_id}
+          </span>
+        )}
             {row.state_label}
           </span>
           {row.hog && (

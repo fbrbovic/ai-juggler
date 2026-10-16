@@ -957,7 +957,6 @@ pub fn launch_profile(
     cwd: Option<String>,
 ) -> AppResult<LaunchResult> {
     use juggler_adapter::LaunchMode;
-    use juggler_core::model::MachineId;
 
     let (profile, account) = find_profile_with_account_arc(state, profile_id)?;
     if profile.settings_overlay.model.is_some()
@@ -1000,13 +999,16 @@ pub fn launch_profile(
         &ledger_ctx(state, &account, Some(project_id.clone())),
     )?;
     {
+        // The machine identity locks storage itself — resolve it
+        // BEFORE the insert-scope lock (non-reentrant mutex).
+        let machine = local_machine_id(state);
         let storage = lock_storage_arc(state)?;
         let project = storage.projects().touch(&canonical_cwd, None)?;
         storage.sessions().insert(&SessionRecord {
             id: session_id.clone(),
             conversation: None,
             profile: profile.id,
-            machine: MachineId::new("this-mac"),
+            machine: machine.clone(),
             kind: juggler_core::model::InstanceKind::Terminal,
             project: Some(project.id.clone()),
             cwd: spec.cwd.clone(),
@@ -1054,8 +1056,6 @@ pub fn desktop_launch(
 /// desktop app, the account lacks launch settings (the owning recipe is
 /// the storage anchor), or the process cannot start.
 pub fn desktop_launch_arc(state: &Arc<AppState>, account_id: &str) -> AppResult<DesktopLaunchInfo> {
-    use juggler_core::model::MachineId;
-
     let (account, recipe_id) = {
         let storage = lock_storage_arc(state)?;
         let account = storage
@@ -1103,13 +1103,16 @@ pub fn desktop_launch_arc(state: &Arc<AppState>, account_id: &str) -> AppResult<
         &ledger_ctx(state, &account, Some(project_id)),
     )?;
     {
+        // The machine identity locks storage itself — resolve it
+        // BEFORE the insert-scope lock (non-reentrant mutex).
+        let machine = local_machine_id(state);
         let storage = lock_storage_arc(state)?;
         let project = storage.projects().touch(&launch.cwd, None)?;
         storage.sessions().insert(&SessionRecord {
             id: session_id.clone(),
             conversation: None,
             profile: recipe_id,
-            machine: MachineId::new("this-mac"),
+            machine: machine.clone(),
             kind: juggler_core::model::InstanceKind::Desktop,
             project: Some(project.id.clone()),
             cwd: launch.cwd.clone(),
@@ -2759,6 +2762,9 @@ pub fn session_handover_impl(
     )?;
 
     {
+        // The machine identity locks storage itself — resolve it
+        // BEFORE the insert-scope lock (non-reentrant mutex).
+        let machine = local_machine_id(state);
         let storage = lock_storage_arc(state)?;
         // Source lineage: handed over.
         let mut handed = source.clone();
@@ -2769,7 +2775,7 @@ pub fn session_handover_impl(
             id: new_session.clone(),
             conversation: Some(juggler_core::model::ConversationId::new(native_id)),
             profile: profile_b.id,
-            machine: MachineId::new("this-mac"),
+            machine: machine.clone(),
             kind: juggler_core::model::InstanceKind::Terminal,
             project: source.project,
             cwd: source.cwd.clone(),
@@ -3267,6 +3273,24 @@ fn os_listeners() -> Result<Vec<juggler_supervisor::Listener>, String> {
 
 /// Every ledger row of the local machine's sessions (all states —
 /// dead roots matter for classification).
+/// EVERY ledger row, all machines (AJ-E511: the "All machines"
+/// inventory scope — foreign rows are display-only in the UI). Walks
+/// the composite keys, then reads each key — the same session on two
+/// machines stays two groups.
+fn all_ledger_rows(state: &Arc<AppState>) -> Vec<juggler_core::storage::LedgerRow> {
+    use juggler_supervisor::tree::LedgerStore as _;
+    let mut rows = Vec::new();
+    for (session, machine) in state.ledger.live_session_machines().unwrap_or_default() {
+        if let Ok(mut key_rows) = state
+            .ledger
+            .rows_for_session_on_machine(&SessionId::new(session), &MachineId::new(machine))
+        {
+            rows.append(&mut key_rows);
+        }
+    }
+    rows
+}
+
 fn local_ledger_rows(state: &Arc<AppState>) -> Vec<juggler_core::storage::LedgerRow> {
     use juggler_supervisor::tree::LedgerStore as _;
     let machine = local_machine_id(state);
@@ -3278,7 +3302,13 @@ fn local_ledger_rows(state: &Arc<AppState>) -> Vec<juggler_core::storage::Ledger
         }
     }
     for session in sessions {
-        if let Ok(mut session_rows) = state.ledger.session_rows(&SessionId::new(session)) {
+        // COMPOSITE key (AJ-E511): a session may exist on two
+        // machines — session-only reads would leak foreign rows into
+        // this node's scope (the fleet-scale false-kill trap).
+        if let Ok(mut session_rows) = state
+            .ledger
+            .rows_for_session_on_machine(&SessionId::new(session), &machine)
+        {
             rows.append(&mut session_rows);
         }
     }
@@ -3320,6 +3350,10 @@ pub struct EvidenceChain {
 /// exist on this DTO by construction (Req.7).
 #[derive(Clone, Debug, serde::Serialize, PartialEq)]
 pub struct CleanupRow {
+    /// The machine that owns this row (AJ-E511) — `local_machine`
+    /// on the inventory names this node; foreign rows render
+    /// display-only (no kill affordance).
+    pub machine_id: String,
     /// OS process id.
     pub pid: u32,
     /// Process-group id.
@@ -3391,6 +3425,10 @@ pub struct CleanupHistoryInfo {
 pub struct CleanupInventoryInfo {
     /// Groups matching the filter.
     pub groups: Vec<CleanupGroup>,
+    /// The executing node's machine id (AJ-E511): rows whose
+    /// `machine_id` equals this are `This Mac`; anything else is a
+    /// future-synced foreign row — display-only.
+    pub local_machine: String,
     /// Instances fully clean (the empty-state copy's N).
     pub clean_instances: usize,
     /// True when the ledger is degraded (AJ-E501 banner + read-only).
@@ -3424,14 +3462,23 @@ pub fn cleanup_state_label(state: &str) -> &'static str {
 pub fn cleanup_inventory(
     state: tauri::State<'_, Arc<AppState>>,
     filter: String,
+    machine_scope: Option<String>,
 ) -> AppResult<CleanupInventoryInfo> {
-    Ok(cleanup_inventory_inner(&state, &filter))
+    Ok(cleanup_inventory_inner(
+        &state,
+        &filter,
+        machine_scope.as_deref() == Some("all"),
+    ))
 }
 
 /// `cleanup_inventory` sans-Tauri (tests + dogfood evidence).
 #[allow(clippy::similar_names)] // row/root_row read naturally here
 #[allow(clippy::too_many_lines)] // one pass per filter; splitting hides the grouping rules
-pub fn cleanup_inventory_inner(state: &Arc<AppState>, filter: &str) -> CleanupInventoryInfo {
+pub fn cleanup_inventory_inner(
+    state: &Arc<AppState>,
+    filter: &str,
+    all_machines: bool,
+) -> CleanupInventoryInfo {
     let now = now_millis();
     let degraded = state.supervisor.ledger_degraded();
     // History (7 days) reads the AUDIT LOG (AJ-E509 Req.4) — the
@@ -3444,6 +3491,7 @@ pub fn cleanup_inventory_inner(state: &Arc<AppState>, filter: &str) -> CleanupIn
             .then(|| "No cleanups yet — automatic cleanup is off by default.".to_string());
         return CleanupInventoryInfo {
             groups: Vec::new(),
+            local_machine: local_machine_id(state).as_str().to_string(),
             clean_instances: 0,
             ledger_degraded: degraded,
             history: Some(CleanupHistoryInfo { rows, empty_note }),
@@ -3482,19 +3530,29 @@ pub fn cleanup_inventory_inner(state: &Arc<AppState>, filter: &str) -> CleanupIn
 
     let mut groups: Vec<CleanupGroup> = Vec::new();
     let mut clean = 0_usize;
-    // Group all local rows per session (all states — history needs them).
-    let mut by_session: std::collections::HashMap<String, Vec<juggler_core::storage::LedgerRow>> =
-        std::collections::HashMap::new();
-    for row in local_ledger_rows(state) {
-        by_session
-            .entry(row.session_id.clone())
+    // Group rows per (session, machine) — the D-13 composite key: the
+    // same session may exist on two machines and MUST render as two
+    // groups (attribution stays joinable, never merged). The default
+    // scope reads THIS machine only; "all" adds future-synced
+    // foreign rows (display-only in the UI).
+    let mut by_key: std::collections::HashMap<
+        (String, String),
+        Vec<juggler_core::storage::LedgerRow>,
+    > = std::collections::HashMap::new();
+    for row in if all_machines {
+        all_ledger_rows(state)
+    } else {
+        local_ledger_rows(state)
+    } {
+        by_key
+            .entry((row.session_id.clone(), row.machine_id.clone()))
             .or_default()
             .push(row);
     }
-    let mut session_order: Vec<String> = by_session.keys().cloned().collect();
+    let mut session_order: Vec<(String, String)> = by_key.keys().cloned().collect();
     session_order.sort();
-    for session in session_order {
-        let rows_raw = &by_session[&session];
+    for (session, row_machine) in session_order {
+        let rows_raw = &by_key[&(session.clone(), row_machine.clone())];
         let provider = rows_raw
             .first()
             .map(|row| row.provider.clone())
@@ -3596,6 +3654,7 @@ pub fn cleanup_inventory_inner(state: &Arc<AppState>, filter: &str) -> CleanupIn
                 cleanup_state_label(effective_state).to_string()
             };
             rows.push(CleanupRow {
+                machine_id: row.machine_id.clone(),
                 pid,
                 pgid: row.pgid,
                 role: row.role.clone(),
@@ -3653,6 +3712,7 @@ pub fn cleanup_inventory_inner(state: &Arc<AppState>, filter: &str) -> CleanupIn
     }
     CleanupInventoryInfo {
         groups,
+        local_machine: local_machine_id(state).as_str().to_string(),
         clean_instances: clean,
         ledger_degraded: degraded,
         history: None,
@@ -4122,6 +4182,11 @@ pub const KILL_GRACE_SECS: u64 = 5;
 /// (Req.2 — the sheet renders it with the kill button REMOVED).
 pub const KILL_REFUSAL_COPY: &str =
     "This PID now belongs to a different program — Juggler will not touch it.";
+/// The AJ-E511 foreign-machine refusal (Req.2): typed
+/// [`juggler_supervisor::SupervisorError::WrongMachine`] under the
+/// hood — this is its sheet-facing copy.
+pub const KILL_WRONG_MACHINE_COPY: &str =
+    "This process record belongs to another machine — Juggler will not touch it.";
 
 /// The exact unsaved-state warning copy (Req.5).
 fn unsaved_state_copy(role: &str) -> String {
@@ -4207,6 +4272,9 @@ pub struct KillMemberInfo {
 /// the re-read-now facts + the PGID collateral list.
 #[derive(Clone, Debug, serde::Serialize, PartialEq)]
 pub struct KillVerifyInfo {
+    /// The machine that owns the target (AJ-E511: every kill-sheet
+    /// payload names its machine — `This Mac` locally).
+    pub machine_id: String,
     /// OS process id.
     pub pid: u32,
     /// Owning Instance.
@@ -4277,6 +4345,14 @@ fn verify_kill_target(
     let Some(pid) = row.pid else {
         return false;
     };
+    // AJ-E511 Req.2 — the machine gate BEFORE any kernel probe: a
+    // foreign-machine row is refused by the TYPED WrongMachine path
+    // (kill_verify_inner / kill_execute_as); the sweep already skips
+    // foreign rows at candidate read (audit-note-only, never a
+    // signal).
+    if row.machine_id != local_machine_id(state).as_str() {
+        return false;
+    }
     if row.role == "root"
         && let Some(identity) = state.supervisor.root_identity(session)
     {
@@ -4319,6 +4395,31 @@ pub fn kill_verify_inner(
             entity: "ledger row",
             id: format!("{session_id}/{pid}"),
         })?;
+    // AJ-E511 Req.2 — the typed machine gate first: a foreign row
+    // gets its OWN refusal copy (not the identity one) and never
+    // reaches a kernel probe or a member listing.
+    if row.machine_id != local_machine_id(state).as_str() {
+        return Ok(KillVerifyInfo {
+            machine_id: row.machine_id.clone(),
+            pid,
+            session: session_id.to_string(),
+            verified: false,
+            refusal: Some(KILL_WRONG_MACHINE_COPY.to_string()),
+            exe_path: row.exe_path.clone(),
+            cmdline: truncate_cmdline(&row.cmdline_trunc),
+            cwd: row.cwd.clone(),
+            ports: Vec::new(),
+            pgid: None,
+            escaped_group: row.escaped_group,
+            members: Vec::new(),
+            tree_pids: Vec::new(),
+            platform: juggler_supervisor::ladder_platform().to_string(),
+            grace_secs: KILL_GRACE_SECS,
+            provider: row.provider.clone(),
+            account_id: row.account_id.clone(),
+            project_id: row.project_id.clone(),
+        });
+    }
     // Click-time verification: identity against the kernel NOW —
     // the shared rule (`verify_kill_target`). Unverifiable rows
     // (state `unverifiable`, a missing start-time, a probe error)
@@ -4354,6 +4455,7 @@ pub fn kill_verify_inner(
         (Vec::new(), Vec::new())
     };
     Ok(KillVerifyInfo {
+        machine_id: row.machine_id.clone(),
         pid,
         session: session_id.to_string(),
         verified,
@@ -4587,6 +4689,23 @@ pub fn kill_execute_as(
             entity: "ledger row",
             id: format!("{session_id}/{pid}"),
         })?;
+    // Guardrail 0 — the machine gate (AJ-E511 Req.2): a foreign row
+    // gets the TYPED WrongMachine refusal with zero signals, before
+    // any identity probe (which would misleadingly read as a
+    // PID-reuse refusal).
+    if row.machine_id != local_machine_id(state).as_str() {
+        return Ok(KillExecuteInfo {
+            refusal: Some(KILL_WRONG_MACHINE_COPY.to_string()),
+            members: vec![KillMemberOutcome {
+                pid,
+                outcome: "refused".into(),
+            }],
+            cancelled: false,
+            all_succeeded: false,
+            still_holding: Vec::new(),
+            reoffer_pid: None,
+        });
+    }
     // Guardrail 1 — SAME-TICK re-verification (E503 against the
     // kernel NOW, not the sheet's earlier verdict; the SAME shared
     // rule the sheet used): a mismatched or unverifiable anchor gets

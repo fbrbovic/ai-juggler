@@ -10,6 +10,7 @@ import { ProcessRow, type CleanupRowInfo } from "./ProcessRow";
 
 function row(overrides: Partial<CleanupRowInfo> = {}): CleanupRowInfo {
   return {
+    machine_id: "machine-local",
     pid: 8123,
     pgid: 8100,
     role: "helper",
@@ -80,6 +81,7 @@ function data(overrides: Partial<CleanupInventoryData> = {}): CleanupInventoryDa
       },
     ],
     clean_instances: 2,
+    local_machine: "machine-local",
     ledger_degraded: false,
     history: null,
     ...overrides,
@@ -182,7 +184,13 @@ describe("CleanupCentre (AJ-E506)", () => {
   it("renders the copy-exact empty success and the degraded banner", async () => {
     const empty: CleanupBridge = {
       load: () =>
-        Promise.resolve({ groups: [], clean_instances: 3, ledger_degraded: false, history: null }),
+        Promise.resolve({
+          local_machine: "machine-local",
+          groups: [],
+          clean_instances: 3,
+          ledger_degraded: false,
+          history: null,
+        }),
     };
     const view = render(<CleanupCentre bridge={empty} />);
     await waitFor(() => expect(view.getByTestId("cleanup-empty")).toBeTruthy());
@@ -193,7 +201,8 @@ describe("CleanupCentre (AJ-E506)", () => {
 
     const degraded: CleanupBridge = {
       load: () =>
-        Promise.resolve({
+      Promise.resolve({
+          local_machine: "machine-local",
           groups: [],
           clean_instances: 0,
           ledger_degraded: true,
@@ -300,6 +309,7 @@ describe("Cleanup history (AJ-E509)", () => {
   const historyBridge = (rows: unknown[], emptyNote: string | null): CleanupBridge => ({
     load: (filter) =>
       Promise.resolve({
+        local_machine: "machine-local",
         groups: [],
         clean_instances: 0,
         ledger_degraded: false,
@@ -659,6 +669,112 @@ describe("AJ-E512 passive alerts (hog + idle nudge)", () => {
     );
     await waitFor(() => expect(view.getByTestId("cleanup-group-sess-orphan")).toBeTruthy());
     expect(view.queryByTestId("cleanup-alerts")).toBeNull();
+    view.unmount();
+  });
+});
+
+describe("AJ-E511 fleet machine dimension", () => {
+  const killBridge = {
+    verify: async (session: string, pid: number) => ({
+      machine_id: "machine-local",
+      pid,
+      session,
+      verified: true,
+      refusal: null,
+      exe_path: "/usr/bin/python3",
+      cmdline: "python3 -m http.server 5173",
+      cwd: "/srv",
+      ports: [5173],
+      pgid: 8100,
+      escaped_group: false,
+      members: [
+        {
+          pid, pgid: 8100, exe: "python3", cmdline: "python3 -m http.server 5173",
+          role_guess: "DevServer", unsaved_state_warning: null, from_ledger: true,
+        },
+      ],
+      tree_pids: [8100, pid],
+      platform: "TERM → grace → KILL",
+      grace_secs: 5,
+      provider: "claude-code",
+      account_id: "Work Max",
+      project_id: "web",
+    }) as never,
+    execute: async () =>
+      ({ refusal: null, members: [], cancelled: false, all_succeeded: true, still_holding: [], reoffer_pid: null }) as never,
+    cancel: async () => undefined,
+    liveness: async (pids: number[]) => pids.map(() => false),
+  };
+
+  it("renders This Mac on local rows and the machine id on foreign rows", async () => {
+    const foreign = data({
+      groups: [
+        {
+          session: "sess-fleet",
+          provider: "claude-code",
+          account: "Work Max",
+          project: "web",
+          machine: "machine-other",
+          healthy: false,
+          rows: [row({ pid: 9001, machine_id: "machine-other" })],
+        },
+      ],
+    });
+    const view = render(<CleanupCentre bridge={{ load: async () => data() }} />);
+    await waitFor(() => expect(view.getByTestId("cleanup-machine-8123")).toBeTruthy());
+    expect(view.getByTestId("cleanup-machine-8123").textContent).toBe("This Mac");
+    view.unmount();
+
+    const view2 = render(<CleanupCentre bridge={{ load: async () => foreign }} />);
+    await waitFor(() => expect(view2.getByTestId("cleanup-machine-9001")).toBeTruthy());
+    expect(view2.getByTestId("cleanup-machine-9001").textContent).toBe("machine-other");
+    view2.unmount();
+  });
+
+  it("foreign rows are display-only — no Terminate affordance; local rows keep theirs", async () => {
+    const mixed = data({
+      groups: [
+        {
+          session: "sess-fleet",
+          provider: "claude-code",
+          account: "Work Max",
+          project: "web",
+          machine: "machine-local",
+          healthy: false,
+          rows: [
+            row({ pid: 8123 }),
+            row({ pid: 9001, machine_id: "machine-other" }),
+          ],
+        },
+      ],
+    });
+    const view = render(
+      <CleanupCentre bridge={{ load: async () => mixed }} killBridge={killBridge} />,
+    );
+    await waitFor(() => expect(view.getByTestId("cleanup-row-9001")).toBeTruthy());
+    expect(view.getByTestId("cleanup-kill-8123")).toBeTruthy();
+    expect(view.queryByTestId("cleanup-kill-9001")).toBeNull();
+    view.unmount();
+  });
+
+  it("the machine filter is a labelled combobox, defaults to This machine, and widens the load", async () => {
+    const calls: Array<[string, "this" | "all"]> = [];
+    const view = render(
+      <CleanupCentre
+        bridge={{
+          load: async (filter, machineScope) => {
+            calls.push([filter, machineScope]);
+            return data();
+          },
+        }}
+      />,
+    );
+    await waitFor(() => expect(view.getByTestId("cleanup-group-sess-orphan")).toBeTruthy());
+    expect(calls[0][1]).toBe("this");
+    const select = view.getByRole("combobox", { name: "Machine filter" });
+    expect((select as HTMLSelectElement).value).toBe("this");
+    fireEvent.change(select, { target: { value: "all" } });
+    await waitFor(() => expect(calls.at(-1)).toEqual(["needs-attention", "all"]));
     view.unmount();
   });
 });

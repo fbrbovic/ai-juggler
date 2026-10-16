@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -1976,3 +1976,89 @@ test("alerts — keyboard-only pass: review hog, stage sheet, Esc returns focus"
   await expect(stage).toBeFocused();
   await page.screenshot({ path: resolve(GALLERY, "23-alerts/keyboard-pass-1440x900-dark.png") });
 });
+
+
+// ---------------------------------------------------------------------------
+// AJ-E511 — the fleet machine dimension: the quiet Machine column
+// (This Mac locally, the machine id on foreign rows), the labelled
+// machine filter (default This machine), and the display-only
+// foreign-row state (no kill control in the DOM).
+// ---------------------------------------------------------------------------
+
+const FLEET_CLEANUP = {
+  groups: [
+    {
+      session: "s-local",
+      provider: "claude-code",
+      account: "Work Max",
+      project: "web",
+      machine: "machine-local",
+      healthy: false,
+      rows: [
+        {
+          machine_id: "machine-local",
+          pid: 8123, pgid: 8100, role: "helper", state: "orphaned",
+          state_label: "Still running after its Instance closed",
+          role_guess: "python3 (guess)", exe_path: "/usr/bin/python3",
+          cmdline: "python3 -m http.server 5173", age_ms: 9_000_000,
+          rss_bytes: 48 * 1024 * 1024, cpu_pct: 1.4, ports: "5173",
+          hog: false, hog_rules: [],
+          evidence: {
+            root_pid: 8100, parent_pid: 8100, pgid: 8100, escaped_group: false,
+            verification: { verdict: "verified", detail: "match" },
+            first_seen: T0, last_seen: T0 + 90_000,
+          },
+        },
+      ],
+    },
+    {
+      session: "s-local",
+      provider: "claude-code",
+      account: "Work Max",
+      project: "web",
+      machine: "machine-studio",
+      healthy: false,
+      rows: [
+        {
+          machine_id: "machine-studio",
+          pid: 9101, pgid: 9100, role: "helper", state: "orphaned",
+          state_label: "Still running after its Instance closed",
+          role_guess: "node (guess)", exe_path: "/usr/local/bin/node",
+          cmdline: "node vite dev", age_ms: 4_000_000,
+          rss_bytes: 220 * 1024 * 1024, cpu_pct: 0.4, ports: "5174",
+          hog: false, hog_rules: [],
+          evidence: {
+            root_pid: 9100, parent_pid: 9100, pgid: 9100, escaped_group: false,
+            verification: { verdict: "verified", detail: "match (remote record)" },
+            first_seen: T0, last_seen: T0 + 90_000,
+          },
+        },
+      ],
+    },
+  ],
+  local_machine: "machine-local",
+  clean_instances: 2,
+  ledger_degraded: false,
+};
+
+for (const theme of THEMES) {
+  for (const vp of [
+    { name: "1440x900", width: 1440, height: 900 },
+    { name: "1024x700", width: 1024, height: 700 },
+  ]) {
+    test(`fleet — machine column + filter + foreign display-only — ${vp.name} — ${theme}`, async ({ page }) => {
+      await seedRecoveryPage(page, theme, { __AIJ_CLEANUP__: FLEET_CLEANUP });
+      await page.getByRole("button", { name: "Cleanup" }).click();
+      await expect(page.getByTestId("cleanup-centre")).toBeVisible();
+      // The default is This machine — only the local group shows.
+      await expect(page.getByTestId("cleanup-machine-8123")).toHaveText("This Mac");
+      await expect(page.getByTestId("cleanup-row-9101")).toHaveCount(0);
+      // Widen: the foreign row appears, display-only (no kill control).
+      await page.getByRole("combobox", { name: "Machine filter" }).selectOption("all");
+      await expect(page.getByTestId("cleanup-machine-9101")).toHaveText("machine-studio");
+      await expect(page.getByTestId("cleanup-kill-9101")).toHaveCount(0);
+      await expect(page.getByTestId("cleanup-kill-8123")).toBeVisible();
+      await page.screenshot({ path: resolve(GALLERY, `24-fleet/machine-filter-${vp.name}-${theme}.png`) });
+    });
+  }
+}
