@@ -16,6 +16,25 @@ macro_rules! id_newtype {
         #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
         pub struct $name(Arc<str>);
 
+        impl serde::Serialize for $name {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                serializer.serialize_str(&self.0)
+            }
+        }
+
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                let value = <String as serde::Deserialize>::deserialize(deserializer)?;
+                Ok(Self::new(value))
+            }
+        }
+
         impl $name {
             /// Creates the identifier from any string-like value.
             #[must_use]
@@ -435,6 +454,310 @@ pub struct ProjectRecord {
 
 /// ADR-0008 alias: wire strings unchanged; naming only.
 pub type InstanceStatus = SessionStatus;
+
+id_newtype! {
+    /// Identifies a Work item — the user's continuing task on one
+    /// project (AJ-E201; pass2/02 §2.1). Survives every switch.
+    WorkItemId
+}
+id_newtype! {
+    /// Identifies one instance-epoch node in the Switch Graph: one
+    /// Instance running under one Account from launch/resume until it
+    /// stops, freezes, or hands off (AJ-E201).
+    EpochId
+}
+id_newtype! {
+    /// Identifies one executed switch — an edge in the Switch Graph
+    /// (AJ-E201).
+    SwitchEdgeId
+}
+id_newtype! {
+    /// Identifies a portable context pack (AJ-E202; referenced by
+    /// edges so lineage and fidelity evidence always exist).
+    PackId
+}
+
+/// The user's continuing task on one project (pass2/02 §2.1). The
+/// juggling anchor is the `ProjectRecord`; Instances come and go
+/// under the Work item, which survives every switch.
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub struct WorkItem {
+    /// Stable identifier assigned by AI Juggler.
+    pub id: WorkItemId,
+    /// The one project this work belongs to (Invariant S-G2: the
+    /// graph is per-project; cross-project moves are T4 exports,
+    /// never edges).
+    pub project: ProjectId,
+    /// Human-readable task title.
+    pub title: String,
+    /// When the work item was created.
+    pub created_at: Timestamp,
+}
+
+/// One instance-epoch node in the Switch Graph: an Instance running
+/// under one Account from launch/resume until it stops, is frozen, or
+/// hands off. Resuming the same native session after switch-back
+/// creates a NEW epoch whose `resumed_from_epoch` points at the
+/// original and whose `native_id` equals the original's — that
+/// pointer is what makes switch-back a resume, not a copy.
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub struct Epoch {
+    /// Stable identifier assigned by AI Juggler.
+    pub id: EpochId,
+    /// The work item this epoch belongs to.
+    pub work: WorkItemId,
+    /// The AI-Juggler Instance this epoch ran in, once launched
+    /// (`None` while staged — never fabricated).
+    pub session_ref: Option<SessionId>,
+    /// The vendor-native conversation id (Claude session uuid, Codex
+    /// rollout id, `zcode` session id), when discovered.
+    pub native_id: Option<String>,
+    /// The account this epoch ran under.
+    pub account: AccountId,
+    /// The provider this epoch ran under.
+    pub provider: HarnessId,
+    /// The original epoch this one resumes (`None` for first
+    /// launch; set on native-resume after switch-back, Req.5).
+    pub resumed_from_epoch: Option<EpochId>,
+}
+
+impl Epoch {
+    /// Whether this node can be resumed natively (Req.6: every epoch
+    /// with a native session exposes Resume — `HandedOver` is
+    /// resting, not terminal).
+    #[must_use]
+    pub fn can_resume(&self) -> bool {
+        self.native_id.is_some()
+    }
+}
+
+/// How one switch physically moved the work (pass2/02 §3; T-codes
+/// stay engine-internal per deep/09 D2).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub enum SwitchMechanism {
+    /// T1: same-account native resume (`claude --resume` etc.).
+    NativeResume,
+    /// T2: same-provider, different-account transcript transplant.
+    Transplant,
+    /// T3: cross-provider replay from the pack.
+    Replay,
+    /// T4: pack export/priming only.
+    Pack,
+}
+
+impl SwitchMechanism {
+    /// Wire name.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NativeResume => "native-resume",
+            Self::Transplant => "transplant",
+            Self::Replay => "replay",
+            Self::Pack => "pack",
+        }
+    }
+
+    /// Parses a stored wire name; unknown values yield `None`
+    /// (degrade, never panic).
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "native-resume" => Some(Self::NativeResume),
+            "transplant" => Some(Self::Transplant),
+            "replay" => Some(Self::Replay),
+            "pack" => Some(Self::Pack),
+            _ => None,
+        }
+    }
+}
+
+/// Which pipeline stage a switch failed in (pass2/02 §5.1; the
+/// failure taxonomy S-F1..S-F9 maps onto these stages in AJ-E205).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub enum FailureStage {
+    /// Target/mechanism resolution failed (S-F1).
+    Resolve,
+    /// Preflight gate failed (score, quota, drift, git state).
+    Preflight,
+    /// Freeze failed or was aborted.
+    Freeze,
+    /// Snapshot/bundle of the source failed.
+    Snapshot,
+    /// Staging (temp dir write/verify) failed.
+    Stage,
+    /// Manifest verification failed.
+    Verify,
+    /// Target launch failed (staged artifacts retained for retry).
+    Launch,
+    /// Post-launch confirmation failed.
+    Confirm,
+}
+
+impl FailureStage {
+    /// Wire name.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Resolve => "resolve",
+            Self::Preflight => "preflight",
+            Self::Freeze => "freeze",
+            Self::Snapshot => "snapshot",
+            Self::Stage => "stage",
+            Self::Verify => "verify",
+            Self::Launch => "launch",
+            Self::Confirm => "confirm",
+        }
+    }
+
+    /// Parses a stored wire name; unknown values yield `None`.
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "resolve" => Some(Self::Resolve),
+            "preflight" => Some(Self::Preflight),
+            "freeze" => Some(Self::Freeze),
+            "snapshot" => Some(Self::Snapshot),
+            "stage" => Some(Self::Stage),
+            "verify" => Some(Self::Verify),
+            "launch" => Some(Self::Launch),
+            "confirm" => Some(Self::Confirm),
+            _ => None,
+        }
+    }
+}
+
+/// Edge lifecycle (pass2/02 §9: Staged → Verified → Launched →
+/// Confirmed, or Failed{stage,reason}). Exhaustive by construction —
+/// E209 renders it without inventing states.
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub enum EdgeState {
+    /// Artifacts staged + verified, awaiting launch.
+    Staged,
+    /// Manifest verified against staged bytes.
+    Verified,
+    /// Target launched; `to_epoch` is set at this transition.
+    Launched,
+    /// Target confirmed alive and continuing the work.
+    Confirmed,
+    /// The switch failed at `stage`; the source is exactly resumable
+    /// and staged artifacts are retained per AJ-E205.
+    Failed {
+        /// Which pipeline stage failed.
+        stage: FailureStage,
+        /// Plain-language reason (user copy comes from §7.1).
+        reason: String,
+    },
+}
+
+impl EdgeState {
+    /// Wire name (`staged|verified|launched|confirmed|failed`).
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Staged => "staged",
+            Self::Verified => "verified",
+            Self::Launched => "launched",
+            Self::Confirmed => "confirmed",
+            Self::Failed { .. } => "failed",
+        }
+    }
+}
+
+/// Who executed a switch (every edge is user-clicked; the engine
+/// only prepares — ADR-0003/SPEC:26).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub enum EdgeActor {
+    /// An explicit user action.
+    User,
+    /// Engine bookkeeping (e.g. a compensating edge for undo, which
+    /// is itself the result of a user click).
+    Engine,
+}
+
+impl EdgeActor {
+    /// Wire name.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Engine => "engine",
+        }
+    }
+
+    /// Parses a stored wire name; unknown values yield `None`.
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "user" => Some(Self::User),
+            "engine" => Some(Self::Engine),
+            _ => None,
+        }
+    }
+}
+
+/// One executed switch — an edge in the Switch Graph (pass2/02
+/// §2.1). `to_epoch` stays `None` until launch succeeds; edges are
+/// append-only (Invariant S-G1): undo/failure/merge insert
+/// compensating edges, never rewrite history. Merges carry two
+/// parents.
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub struct SwitchEdge {
+    /// Stable identifier assigned by AI Juggler.
+    pub id: SwitchEdgeId,
+    /// The work item this edge belongs to.
+    pub work: WorkItemId,
+    /// The epoch the work moved from.
+    pub from_epoch: EpochId,
+    /// The epoch the work moved to (`None` until launch succeeds).
+    pub to_epoch: Option<EpochId>,
+    /// Account moved from.
+    pub from_account: AccountId,
+    /// Account moved to.
+    pub to_account: AccountId,
+    /// Provider moved from.
+    pub from_provider: HarnessId,
+    /// Provider moved to.
+    pub to_provider: HarnessId,
+    /// How the work physically moved.
+    pub mechanism: SwitchMechanism,
+    /// The pack this edge staged (manifest-only for native-resume —
+    /// lineage and fidelity evidence always exist).
+    pub pack_id: Option<PackId>,
+    /// The fidelity label shown to the user at execution (F0–F4,
+    /// AJ-E203; `None` pre-computation).
+    pub fidelity_shown: Option<String>,
+    /// sha256 over the edge's artifact manifest (AJ-E202).
+    pub manifest_sha256: Option<String>,
+    /// Lifecycle state.
+    pub state: EdgeState,
+    /// Who executed it.
+    pub actor: EdgeActor,
+    /// First parent edge (lineage; the incoming edge most recently
+    /// executed against `from_epoch`).
+    pub parent_edge_a: Option<SwitchEdgeId>,
+    /// Second parent edge — set ONLY on merge edges (two-away-parent
+    /// reconciliation, AJ-E207).
+    pub parent_edge_b: Option<SwitchEdgeId>,
+    /// When the edge was created.
+    pub created_at: Timestamp,
+}
+
+/// One artifact manifest row attached to an edge (AJ-E202): every
+/// file the switch touched (or explicitly dropped), hashed and
+/// dispositioned — the carry-list's evidence base.
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ManifestEntry {
+    /// Path relative to the pack root.
+    pub rel_path: String,
+    /// sha256 hex of the file's bytes.
+    pub sha256: String,
+    /// Size in bytes.
+    pub bytes: u64,
+    /// Artifact kind (`conversation.md`, `rules`, `diffs`, …).
+    pub kind: String,
+    /// Disposition: `copy|translate|regenerate|drop`.
+    pub disposition: String,
+}
 
 /// A supervised Instance as tracked by AI Juggler (`docs/SPEC.md` §3,
 /// ADR-0007/0008). The conversation lives *inside*: see `conversation`.

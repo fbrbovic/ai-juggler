@@ -16,6 +16,7 @@ mod cleanup_settings;
 mod process_ledger;
 mod projects;
 mod settings;
+mod switch_graph;
 mod usage;
 
 use std::path::Path;
@@ -36,6 +37,7 @@ pub use profiles::ProfilesRepo;
 pub use projects::ProjectsRepo;
 pub use sessions::SessionsRepo;
 pub use settings::AppSettingsRepo;
+pub use switch_graph::{SwitchGraphRepo, WorkGraph};
 pub use usage::{UsageRepo, anchor_settings_key, cap_settings_key};
 
 use crate::error::CoreError;
@@ -307,8 +309,66 @@ CREATE TABLE pricing_overrides (
 );
 ";
 
+/// Schema version 20 (AJ-E201; pass2/02 §2.3): the Switch Graph —
+/// Work items, instance-epochs, append-only switch edges (with
+/// two-parent merge lineage), and per-edge artifact manifests.
+/// Existing tables are untouched; rows migrate with zero data loss.
+const V20: &str = "
+CREATE TABLE work_items (
+    id         TEXT PRIMARY KEY,
+    project    TEXT NOT NULL REFERENCES projects(id),
+    title      TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_work_items_project ON work_items(project);
+
+CREATE TABLE epochs (
+    id                TEXT PRIMARY KEY,
+    work_id           TEXT NOT NULL REFERENCES work_items(id),
+    session_ref       TEXT,
+    native_id         TEXT,
+    account           TEXT NOT NULL,
+    provider          TEXT NOT NULL,
+    resumed_from_epoch TEXT
+);
+CREATE INDEX idx_epochs_work ON epochs(work_id);
+
+CREATE TABLE switch_edges (
+    id               TEXT PRIMARY KEY,
+    work_id          TEXT NOT NULL REFERENCES work_items(id),
+    from_epoch       TEXT NOT NULL REFERENCES epochs(id),
+    to_epoch         TEXT REFERENCES epochs(id),
+    from_account     TEXT NOT NULL,
+    to_account       TEXT NOT NULL,
+    from_provider    TEXT NOT NULL,
+    to_provider      TEXT NOT NULL,
+    mechanism        TEXT NOT NULL,
+    pack_id          TEXT,
+    fidelity_shown   TEXT,
+    manifest_sha256  TEXT,
+    state            TEXT NOT NULL,
+    fail_stage       TEXT,
+    fail_reason      TEXT,
+    actor            TEXT NOT NULL,
+    parent_edge_a    TEXT REFERENCES switch_edges(id),
+    parent_edge_b    TEXT REFERENCES switch_edges(id),
+    created_at       INTEGER NOT NULL
+);
+CREATE INDEX idx_switch_edges_work ON switch_edges(work_id);
+
+CREATE TABLE artifact_manifests (
+    edge        TEXT NOT NULL REFERENCES switch_edges(id),
+    rel_path    TEXT NOT NULL,
+    sha256      TEXT NOT NULL,
+    bytes       INTEGER NOT NULL,
+    kind        TEXT NOT NULL,
+    disposition TEXT NOT NULL,
+    PRIMARY KEY (edge, rel_path)
+);
+";
+
 const MIGRATIONS: &[&str] = &[
-    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17, V18, V19,
+    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17, V18, V19, V20,
 ];
 
 /// An opened AI Juggler database with typed repositories.
@@ -419,6 +479,13 @@ impl Storage {
     #[must_use]
     pub fn usage(&self) -> UsageRepo<'_> {
         UsageRepo::new(&self.conn)
+    }
+
+    /// Repository for the Switch Graph (schema v20, AJ-E201):
+    /// Work items, epochs, append-only switch edges, manifests.
+    #[must_use]
+    pub fn switch_graph(&self) -> SwitchGraphRepo<'_> {
+        SwitchGraphRepo::new(&self.conn)
     }
 
     /// Raw connection access for migrations/fixture tooling (tests,
