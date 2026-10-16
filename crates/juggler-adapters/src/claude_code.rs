@@ -290,8 +290,17 @@ impl HarnessAdapter for ClaudeCodeAdapter {
                 ],
                 false,
             ),
-            LaunchMode::Resume { session_id } => {
-                (vec!["--resume".into(), session_id.clone()], true)
+            LaunchMode::Resume {
+                session_id,
+                delta_prompt,
+            } => {
+                // `--resume <id> "<delta>"` — the resumed conversation
+                // receives the delta as its next user turn (E207).
+                let mut args = vec!["--resume".into(), session_id.clone()];
+                if let Some(delta) = delta_prompt {
+                    args.push(delta.clone());
+                }
+                (args, true)
             }
         };
         Ok(LaunchSpec {

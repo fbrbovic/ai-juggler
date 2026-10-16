@@ -454,7 +454,7 @@ widen 1-click to unproven pairs "temporarily": the E203 cap is
 the gate. If `⌘⇧H` conflicts with the shell, flag it, don't
 silently pick another key.
 
-### AJ-E207 Switch-back resume+delta and both-progressed divergence (D-05) | Status: TODO | Priority P0 | Effort L | Depends: AJ-E206
+### AJ-E207 Switch-back resume+delta and both-progressed divergence (D-05) | Status: DONE-EVIDENCED | Priority P0 | Effort L | Depends: AJ-E206
 **Goal**: Returning to the original Account resumes its original
 native session and delivers interim work as one summarised delta
 turn — never a copy-back — with explicit three-way reconciliation
@@ -591,6 +591,36 @@ must cost the same as the first.
 **Handover note**: D-04 means do not block the beta on this gate — block only the *label graduation*. Trap: pass 2 ran no live dogfood and proved no Codex/ZCode binary behaviour (pass2/00 §6); every such claim here starts unproven. If a vendor format changes weekly, add a version-tagged fixture — never loosen an assertion to make CI green.
 
 ---
+
+**Status report (2026-10-16, AJ-E207)**: DONE-EVIDENCED — evidence
+`docs/qa/evidence/AJ-E207/manifest.md`. The return is a RESUME, never a
+copy-back: `LaunchMode::Resume` gained `delta_prompt` (claude:
+`--resume <id> "<delta>"`), the switch-back path has NO transcript-write
+function (file choices run over the fork manifest's non-transcript rows
+only), and the A→B→A fixture pins the original transcript hash
+unchanged + the delta present exactly once in the resume argv.
+Reconciliation (`reconcile.rs`): conversation base = uuids(A) ∩ uuids(B)
+(exact for transplants — B began as A's bytes; replay-born sides degrade
+to all-away), files three-way over the fork manifest (both-changed-and-
+disagree => conflict; deletions count; identical changes don't);
+Keep-original/Take-away/Keep-both choices recorded as `conflict-choice`
+manifest rows on the parent-linked return edge. The delta turn is ONE
+bounded "While you were away" render (<=40 one-liners + pack pointer;
+dedupe first-wins proven with a re-emitted uuid). S-F7 never fabricates
+(nearest surviving epoch verified to exist, else honestly-labelled
+FreshPackF0); S-F8 refuses to guess (unresolved => the work stays
+forked, nothing touched). Suggestions: open excursions whose ORIGINAL
+account has headroom again -> verbatim reset card (suggest-only; returns
+and compensations don't re-suggest). UI: card in the inspector +
+SwitchBackFlow review (delta preview, conflict radio trios,
+freeze-or-fork + both-live copy, labelled stages, focus trap).
+handover 46/46; switch_back_path 2/2 (10/10 stable — one TEST-harness
+stub race fixed by waiting for the setup write); vitest 230/230 (new
+guardrails 6/6); visual 342/342 (gallery 30-switchback 20 + a11y 2,
+axe 0 both themes). Honest notes recorded: production file conflicts
+are empty until non-transcript manifest rows ship (E209/E210) — the
+fixture seeds a todos row via the public append API to prove the full
+path; live quota-reset dogfood PENDING maintainer login (gate-E5).
 
 ## Epic exit criteria (all must hold)
 

@@ -158,9 +158,15 @@ impl HarnessAdapter for FakeHarnessAdapter {
                 args.push(prompt.clone());
                 juggler_adapter::launch::headless_spec(self.bin.clone(), args, env, effective_cwd)
             }
-            LaunchMode::Resume { session_id } => {
+            LaunchMode::Resume {
+                session_id,
+                delta_prompt,
+            } => {
                 args.push("--resume".to_string());
                 args.push(session_id.clone());
+                if let Some(delta) = delta_prompt {
+                    args.push(delta.clone());
+                }
                 juggler_adapter::launch::interactive_spec(
                     self.bin.clone(),
                     args,

@@ -22,7 +22,7 @@ import type {
 import { renewalLabel } from "../lib/renewal";
 import { QuotaBar, formatCountdown, quotaTierTag } from "./primitives";
 import { TwoClocks, WindowRing } from "./QuotaRings";
-import { accountSetFee, quotaDisplay, type QuotaDisplayData } from "../lib/bridge";
+import { accountSetFee, quotaDisplay, type QuotaDisplayData, type SwitchBackSuggestionData } from "../lib/bridge";
 import { formatBytes, stateChip } from "./indicator";
 
 /**
@@ -163,6 +163,8 @@ export function RightInspector({
   onLaunch,
   onStopped,
   onHandover,
+  switchBackSuggestions = [],
+  onSwitchBack = () => {},
   onNew,
   processesBridge = defaultProcessesBridge,
   focusBridge = defaultFocusBridge,
@@ -182,6 +184,11 @@ export function RightInspector({
   onLaunch: (recipe: LaunchRecipeInfo, project: ProjectInfo) => void;
   onStopped: () => void;
   onHandover: (sessionId: string, targetProfileId: string, targetLabel: string) => void;
+  /** AJ-E207: open switch-back suggestions (the reset-trigger
+   *  cards). Optional so bare test mounts stay honest (none). */
+  switchBackSuggestions?: SwitchBackSuggestionData[];
+  /** AJ-E207: opens the switch-back review for the away instance. */
+  onSwitchBack?: (sessionId: string) => void;
   onNew: () => void;
   processesBridge?: ProcessesBridge;
   focusBridge?: FocusBridge;
@@ -353,6 +360,8 @@ export function RightInspector({
               onLaunch={onLaunch}
               onStopped={onStopped}
               onHandover={onHandover}
+              switchBackSuggestions={switchBackSuggestions}
+              onSwitchBack={onSwitchBack}
               onFocusTerminal={() => {
                 chooseTab("overview");
                 window.dispatchEvent(new Event("aij:focus-handover"));
@@ -391,6 +400,8 @@ function InspectorPanel(props: {
   onLaunch: (recipe: LaunchRecipeInfo, project: ProjectInfo) => void;
   onStopped: () => void;
   onHandover: (sessionId: string, targetProfileId: string, targetLabel: string) => void;
+  switchBackSuggestions?: SwitchBackSuggestionData[];
+  onSwitchBack?: (sessionId: string) => void;
   onFocusTerminal: () => void;
   focusBridge: FocusBridge;
   visible: boolean;
@@ -523,6 +534,8 @@ type PanelProps = {
   onLaunch: (recipe: LaunchRecipeInfo, project: ProjectInfo) => void;
   onStopped: () => void;
   onHandover: (sessionId: string, targetProfileId: string, targetLabel: string) => void;
+  switchBackSuggestions?: SwitchBackSuggestionData[];
+  onSwitchBack?: (sessionId: string) => void;
   onFocusTerminal: () => void;
   /** AJ-E413 seam (E410 pattern): the desktop window-focus source
    *  (tests inject a recorder; the app uses the bridge default). */
@@ -804,6 +817,24 @@ function InstanceOverview(props: PanelProps) {
         )}
         {!isDesktop && (
         <div ref={handoverRef} className="flex flex-col gap-2" data-testid="handover-section">
+          {/* AJ-E207 Req.3: the reset-trigger suggestion — suggested,
+              never executed; the user clicks. */}
+          {(props.switchBackSuggestions ?? [])
+            .filter((suggestion) => suggestion.session_id === session.id)
+            .map((suggestion) => (
+              <button
+                key={suggestion.session_id}
+                type="button"
+                onClick={() => props.onSwitchBack?.(suggestion.session_id)}
+                data-testid="switch-back-card"
+                className="rounded-lg border border-accent/40 bg-accent-soft px-2.5 py-2 text-left text-[11px] text-accent-hi transition-colors hover:border-accent/60"
+              >
+                <span className="block" data-testid="switch-back-card-copy">
+                  {suggestion.copy}
+                </span>
+                <span className="text-muted">Resume the original conversation ▸</span>
+              </button>
+            ))}
           <p className="text-[11px] uppercase tracking-wider text-muted">
             Continue on another account
           </p>

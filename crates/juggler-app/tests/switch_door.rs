@@ -75,6 +75,17 @@ fn launch_with_transcript(
     native_id: &str,
 ) -> String {
     let launched = commands::launch_profile(state, profile_id, Some(cwd.to_owned())).unwrap();
+    // The setup launch's stub records its (empty) argv asynchronously —
+    // wait for THAT write to land so it can never race a later resume's
+    // argv record (a late truncate clobbers its first byte).
+    {
+        let setup_args = config_dir_of(state, account_id).join("last-args");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !setup_args.is_file() {
+            assert!(std::time::Instant::now() < deadline, "setup stub never ran");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
     seed_transcript(&config_dir_of(state, account_id), cwd, native_id);
     let transcript = config_dir_of(state, account_id)
         .join("projects")

@@ -31,9 +31,11 @@ import { SessionPanel } from "./screens/WorkPanels";
 import { CostMatrix } from "./components/CostMatrix";
 import { NotificationRegion } from "./components/NotificationRegion";
 import { SwitchFlow, SwitchUndoToast } from "./components/SwitchFlow";
+import { SwitchBackFlow } from "./components/SwitchBackFlow";
 import { RightInspector } from "./components/RightInspector";
 import {
   accountsList,
+  type SwitchBackSuggestionData,
   launchRecipesList,
   onSessionsQuota,
   onSessionsResources,
@@ -43,6 +45,7 @@ import {
   projectsList,
   instancesList,
   sessionHandover,
+  switchBackSuggestions,
   onFolderDropped,
   launchSession,
   appSettingGet,
@@ -152,6 +155,10 @@ export default function App() {
   // AJ-E206: the 10-second undo window after a 1-click switch (the
   // edge is the undo handle). Null = no window open.
   const [undoWindow, setUndoWindow] = useState<{ edgeId: string; targetLabel: string } | null>(null);
+  // AJ-E207: the suggested returns (reset-trigger cards) + the
+  // switch-back review modal. Null = closed; suggest-only.
+  const [switchBackCards, setSwitchBackCards] = useState<SwitchBackSuggestionData[]>([]);
+  const [switchBack, setSwitchBack] = useState<string | null>(null);
   // AJ-E505: the pre-launch port collision (advisor informs, never
   // blocks — Launch always proceeds on "Launch anyway").
   const [portWarning, setPortWarning] = useState<{
@@ -204,16 +211,19 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [projectRows, sessionRows, accountRows, profileRows] = await Promise.all([
-        projectsList(),
-        instancesList(),
-        accountsList(),
-        launchRecipesList(),
-      ]);
+      const [projectRows, sessionRows, accountRows, profileRows, backSuggestions] =
+        await Promise.all([
+          projectsList(),
+          instancesList(),
+          accountsList(),
+          launchRecipesList(),
+          switchBackSuggestions().catch(() => []),
+        ]);
       setProjects(projectRows);
       setSessions(sessionRows);
       setAccounts(accountRows);
       setProfiles(profileRows);
+      setSwitchBackCards(backSuggestions);
       setFreshness((current) => {
         // Keep known sample times; new rows get the load baseline.
         const baseline = baselineFreshness(sessionRows.map((row) => row.id));
@@ -732,6 +742,8 @@ export default function App() {
                 await doLaunch();
               }}
               onStopped={() => void refresh()}
+              switchBackSuggestions={switchBackCards}
+              onSwitchBack={(sessionId) => setSwitchBack(sessionId)}
               onHandover={(sessionId, targetProfileId, targetLabel) => {
                 void sessionHandover; // superseded by the E205 flow
                 setSwitchFlow({ sessionId, targetProfileId, targetLabel });
@@ -814,6 +826,17 @@ export default function App() {
                 targetLabel: switchFlow.targetLabel,
               });
             }
+          }}
+        />
+      )}
+      {switchBack && (
+        <SwitchBackFlow
+          sessionId={switchBack}
+          onClose={() => setSwitchBack(null)}
+          onSwitched={(sessionId) => {
+            setSwitchBack(null);
+            void refresh();
+            selectSession(sessionId);
           }}
         />
       )}

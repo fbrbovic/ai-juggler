@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking", "28-switch", "29-door"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking", "28-switch", "29-door", "30-switchback"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -2685,6 +2685,149 @@ for (const theme of THEMES) {
       await expect(page.getByTestId("switch-carry-dropped")).toContainText("todo list");
       await page.screenshot({
         path: resolve(GALLERY, `29-door/wizard-5step-carried-${vp.name}-${theme}.png`),
+      });
+    });
+  }
+}
+
+/**
+ * AJ-E207 gallery 30 — switch-back (pass2/02 §6.1-6.2): the
+ * reset-trigger suggestion card (verbatim copy, suggest-only), the
+ * review (delta turn preview + per-file conflict radio trio +
+ * freeze-or-fork), the both-live warning, the S-F7 dead-original
+ * state, and the S-F8 forked failure — across 1280×800 + 800×600 ×
+ * light+dark. Copy conformance asserted before each capture; the
+ * copy never says "we switched you".
+ */
+const BACK_CARD = {
+  session_id: "sess-1",
+  original_account: "Work Max",
+  away_account: "Personal",
+  copy: "Work Max has reset. Resume the original conversation there? Work from Personal arrives as one 'while you were away' update.",
+};
+/** One card per Work Max session — whichever row the table sorts
+ * first, its card shows (the filter is by session id). */
+const BACK_CARDS = ["sess-1", "sess-2", "sess-4", "sess-6", "sess-8"].map(
+  (session_id) => ({ ...BACK_CARD, session_id }),
+);
+
+for (const theme of THEMES) {
+  for (const vp of SWITCH_VP) {
+    const openInspector = async (
+      page: import("@playwright/test").Page,
+      seams: Record<string, unknown>,
+    ) => {
+      await page.addInitScript(
+        ({ fixture, cards, t0, theme: themeName }) => {
+          const w = window as unknown as Record<string, unknown>;
+          w.__AIJ_FIXTURE__ = fixture;
+          w.__AIJ_SWITCH_BACK_SUGGESTIONS__ = cards;
+          localStorage.setItem("aij.theme", themeName);
+          localStorage.setItem("aij.onboarding.dismissed", "1");
+          sessionStorage.setItem("aij.ready.skipped", "1");
+          Date.now = () => t0;
+          void w;
+        },
+        { fixture: allStatuses, cards: BACK_CARDS, t0: T0, theme },
+      );
+      // Extra seams the caller may carry (plan/execute fixtures).
+      for (const [key, value] of Object.entries(seams)) {
+        await page.addInitScript(
+          ({ key: k, value: v }) => {
+            (window as unknown as Record<string, unknown>)[k] = v;
+          },
+          { key, value },
+        );
+      }
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await page.getByRole("tab", { name: "Sessions" }).click();
+      await page.getByRole("button", { name: /Work Max/ }).first().click();
+    };
+
+    test(`switch-back — suggestion card (verbatim, suggest-only) — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openInspector(page, {});
+      await expect(page.getByTestId("switch-back-card")).toBeVisible();
+      await expect(page.getByTestId("switch-back-card-copy")).toContainText(
+        "Work Max has reset. Resume the original conversation there?",
+      );
+      await page.screenshot({
+        path: resolve(GALLERY, `30-switchback/card-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`switch-back — review (delta + conflict + freeze-or-fork) — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openInspector(page, {});
+      await page.getByTestId("switch-back-card").click();
+      await expect(page.getByTestId("switch-back-review")).toBeVisible();
+      await expect(page.getByTestId("switch-back-delta")).toContainText("While you were away");
+      await expect(page.getByTestId("switch-back-conflicts")).toContainText("todos.json");
+      await expect(page.getByTestId("switch-back-freeze-or-fork")).toBeVisible();
+      const confirm = page.getByTestId("switch-back-confirm");
+      await expect(confirm).toBeDisabled();
+      await page.screenshot({
+        path: resolve(GALLERY, `30-switchback/review-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`switch-back — both-live warning (keep away running) — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openInspector(page, {});
+      await page.getByTestId("switch-back-card").click();
+      await expect(page.getByTestId("switch-back-review")).toBeVisible();
+      await page.getByText("Keep it running").click();
+      await expect(page.getByTestId("switch-back-both-live")).toContainText(
+        "Both accounts are now live on this work item",
+      );
+      await page.screenshot({
+        path: resolve(GALLERY, `30-switchback/both-live-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`switch-back — S-F7 dead original (fresh-f0 offer) — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openInspector(page, {
+        __AIJ_SWITCH_BACK_PLAN__: {
+          suggestion: BACK_CARD.copy,
+          original_account: "Work Max",
+          away_account: "Personal",
+          original_native_id: "",
+          original_alive: false,
+          sf7_fallback: "fresh-f0",
+          sf7_copy:
+            "S-F7: the original session is gone — nearest epoch or pack-primed fresh start",
+          away_live: false,
+          both_live_copy: "",
+          divergence: "Both sides moved since the switch. 2 new turns and 0 file conflicts need your choice — nothing is merged silently.",
+          delta_preview:
+            "While you were away on Personal — 2 new turns (4 shared before the switch).\n\nFull detail: the attached switch pack (not replayed).",
+          away_only_turns: 2,
+          original_only_turns: 0,
+          base_turns: 4,
+          conflicts: [],
+        },
+      });
+      await page.getByTestId("switch-back-card").click();
+      await expect(page.getByTestId("switch-back-sf7")).toContainText("S-F7");
+      await expect(page.getByTestId("switch-back-sf7")).toContainText("fresh instance");
+      await page.screenshot({
+        path: resolve(GALLERY, `30-switchback/sf7-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`switch-back — S-F8 forked (refused merge) — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openInspector(page, {
+        __AIJ_SWITCH_BACK_EXECUTE_FAIL__:
+          "S-F8: merge conflict unresolved — work stays forked, both sides resumable",
+      });
+      await page.getByTestId("switch-back-card").click();
+      await expect(page.getByTestId("switch-back-review")).toBeVisible();
+      await page.getByText("Keep original").click();
+      await page.getByTestId("switch-back-confirm").click();
+      await expect(page.getByTestId("switch-back-failed")).toContainText(
+        "both sides stay resumable",
+      );
+      await page.screenshot({
+        path: resolve(GALLERY, `30-switchback/sf8-forked-${vp.name}-${theme}.png`),
       });
     });
   }
