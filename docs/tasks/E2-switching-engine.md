@@ -35,7 +35,7 @@ start in parallel with E204 but its gate closes last.
 
 ---
 
-### AJ-E201 Switch Graph domain types and append-only storage | Status: TODO | Priority P0 | Effort M | Depends: none
+### AJ-E201 Switch Graph domain types and append-only storage | Status: DONE-EVIDENCED | Priority P0 | Effort M | Depends: none
 **Goal**: Replace the linear `prev_handover` chain with Work / Epoch /
 SwitchEdge so A→B→A→C→B, forks, and merges are representable and
 restart-identical.
@@ -97,7 +97,7 @@ numbering to deep/09; sequence after them. Trap: `sessions.project`
 already exists (`model.rs:401-403`) — use it as the Work anchor key,
 do not add a parallel project id. Next agent: E202 consumes `pack_id`.
 
-### AJ-E202 Portable context pack v1 — schema, deterministic generation, manifest | Status: TODO | Priority P0 | Effort M | Depends: AJ-E201
+### AJ-E202 Portable context pack v1 — schema, deterministic generation, manifest | Status: DONE-EVIDENCED | Priority P0 | Effort M | Depends: AJ-E201
 **Goal**: Fix one canonical pack (`format_version: 1`) that serves as
 T4 export, staging artifact for every edge, and merge substrate, so
 two implementations cannot diverge.
@@ -168,7 +168,7 @@ docs — there is no pack code to extend. Do not put pack logic in
 `commands.rs` (that is the v0 anti-pattern, deep/09 D3). E208 adds
 `redactions[]` to this schema; reserve the field now as `[]`.
 
-### AJ-E203 Per-pair fidelity matrix and capped scoring engine | Status: TODO | Priority P0 | Effort M | Depends: AJ-E202
+### AJ-E203 Per-pair fidelity matrix and capped scoring engine | Status: DONE-EVIDENCED | Priority P0 | Effort M | Depends: AJ-E202
 **Goal**: Compute, per ordered Provider pair and per artifact,
 Copy/Translate/Regenerate/Drop plus a capped F0-F4 label, so no
 pair ever advertises fidelity it has not proven.
@@ -600,10 +600,32 @@ must cost the same as the first.
 - [ ] Source transcripts hash-identical after every automated and live switch test.
 
 
+---
 
+**Status report (2026-10-16, foundation batch E201–E203)**: all three
+DONE-EVIDENCED — manifests `docs/qa/evidence/AJ-E201..E203/manifest.md`
+(one PR, one gate run per the maintainer's batching directive).
 
+- **AJ-E201**: graph types + V20 migration + append-only repo; 6/6
+  tests incl. the a→b→a→c→b restart-identity fixture and a 64-case
+  round-trip property. Migration numbering continues after V19
+  (the doc's V5/V6 references are Prior-09 prose; current tree is
+  at V19 pre-batch — V20 is the graph).
+- **AJ-E202**: pack v1 in the new `juggler-handover` code (manifest.rs
+  + pack.rs); 9/9 tests + 4 committed goldens; atomic writes with the
+  always-on credential guard. PACK.md visual render DEFERRED to
+  E206's wizard preview (same artifact, real host) — recorded in the
+  manifest, not skipped. Live export dogfood PENDING maintainer login.
+- **AJ-E203**: fidelity engine (12/12 tests) — weights/caps/labels
+  exactly per §3.4+§H6, ordered-pair only, todos default Drop,
+  zcode-target F0; committed full-matrix golden (12 pairs, all ≤F1
+  today per D-04). Badge UI DEFERRED to E209 (its spec owns the
+  F0–F4 renders). `has_compact_boundary` added to the Claude parser.
 
+**Implementation-mapping**: model.rs (graph types + id-macro serde),
+storage V20 + switch_graph.rs, juggler-handover (manifest/pack/
+fidelity + goldens), adapters `has_compact_boundary`,
+tests: switch_graph 6, pack_v1 9, fidelity_matrix 12.
 
-
-
-
+Next: AJ-E204 (HandoverSupport trait + honest Claude transplant
+rebuild) on this branch's successor.

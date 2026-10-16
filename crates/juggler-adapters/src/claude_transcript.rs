@@ -191,6 +191,19 @@ pub fn dedupe_messages(messages: &[ParsedMessage]) -> Vec<ParsedMessage> {
     out
 }
 
+impl ParsedTranscript {
+    /// Whether the transcript contains a `compact_boundary` line
+    /// (AJ-E203): post-compact live context ≠ the raw file, so the
+    /// fidelity engine caps such sources at F2.
+    #[must_use]
+    pub fn has_compact_boundary(&self) -> bool {
+        self.kinds
+            .get("compact_boundary")
+            .is_some_and(|count| *count > 0)
+    }
+}
+
+#[cfg(test)]
 #[cfg(test)]
 mod tests {
     use super::parse_transcript;
