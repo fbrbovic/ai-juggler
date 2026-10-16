@@ -17,6 +17,9 @@ import {
   launchRecipesList,
   type AccountInfo,
   type LaunchRecipeInfo,
+  redactionPolicyGet,
+  redactionPolicySetOverride,
+  type RedactionInfoData,
 } from "../lib/bridge";
 
 /**
@@ -197,6 +200,60 @@ function AccountCard({
   onLoginRechecked: () => Promise<void>;
   onInspect?: () => void;
 }) {
+/** AJ-E208: the per-Provider redaction override — Provider settings
+ * (D-14: the remembered choice; "Use global" clears the override).
+ * Read-only until the user picks; masked counts only, never
+ * values. */
+function RedactionOverrideRow({ provider }: { provider: string }) {
+  const [policy, setPolicy] = useState<RedactionInfoData | null>(null);
+  useEffect(() => {
+    let alive = true;
+    redactionPolicyGet(provider)
+      .then((info) => {
+        if (alive) setPolicy(info);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [provider]);
+  const pick = async (value: string | null) => {
+    await redactionPolicySetOverride(provider, value);
+    setPolicy(await redactionPolicyGet(provider));
+  };
+  const options: [string | null, string][] = [
+    [null, `Use global${policy?.global ? ` (${policy.global})` : " — not chosen yet"}`],
+    ["strip", "Strip — replace keys with •••"],
+    ["keep", "Keep — pack stays on this Mac"],
+    ["ask", "Ask each time"],
+  ];
+  return (
+    <div className="flex flex-col gap-1 border-t border-hairline px-5 py-2.5" data-testid="provider-redaction">
+      <span className="text-[11px] uppercase tracking-wider text-faint">
+        Redaction for {provider} (pack secrets)
+      </span>
+      {policy?.override && <Chip tone="accent">Override</Chip>}
+      <div className="flex flex-wrap gap-1.5">
+        {options.map(([value, label]) => (
+          <button
+            key={label}
+            type="button"
+            onClick={() => void pick(value)}
+            className={
+              "rounded-lg border px-2 py-1 text-[11px] transition-colors " +
+              ((value === null && policy?.override == null) || policy?.override === value
+                ? "border-accent/50 bg-accent-soft text-accent-hi"
+                : "border-hairline text-muted hover:border-accent/30")
+            }
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
   const [settingsOpen, setSettingsOpen] = useState(false);
   const onToggleSettings = () => setSettingsOpen((v) => !v);
   const loggedIn = account.login_state === "logged_in";
@@ -250,6 +307,7 @@ function AccountCard({
       </div>
 
       <div className={settingsOpen ? "divide-y divide-hairline" : "hidden"}>
+        {settingsOpen && <RedactionOverrideRow provider={account.provider} />}
         <div className="flex items-center justify-between px-5 py-2">
           <span className="text-[11px] uppercase tracking-wider text-faint">Launch settings</span>
           <button

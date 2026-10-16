@@ -935,3 +935,101 @@ for (const theme of ["dark", "light"] as const) {
     expect(all).toHaveLength(0);
   });
 }
+
+// AJ-E208: axe-core 0 critical/serious on the redaction surfaces —
+// the first-run chooser (labelled radios, no default) and the
+// per-item un-redact list (masked previews, checkbox per item) —
+// in BOTH themes.
+for (const theme of ["dark", "light"] as const) {
+  test(`redaction — chooser + un-redact list — axe 0 critical/serious — ${theme}`, async ({ page }) => {
+    await page.addInitScript(
+      ({ fixture, t0, theme: t }) => {
+        const w = window as unknown as Record<string, unknown>;
+        w.__AIJ_FIXTURE__ = fixture;
+        w.__AIJ_SWITCH_PREFLIGHT__ = {
+          mechanism: "transplant",
+          fidelity: "F2",
+          score: 0.78,
+          warnings: [],
+          zombies: [],
+          diff_snapshotted: true,
+          source_live: true,
+          experimental_copy: "Experimental copy.",
+          door: "wizard",
+          wizard_steps: ["Target", "What's carried", "Confirm"],
+          wizard_reasons: ["This isn't the usual account for this project."],
+          usual_account: false,
+          carry: {
+            carried: ["chat transcript"],
+            regenerated: [],
+            dropped: ["todo list"],
+          },
+          redaction: { global: null, override: null, effective: null, source: "unset", line: "" },
+          redaction_items: [],
+        };
+        localStorage.setItem("aij.theme", t);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+        Date.now = () => t0;
+      },
+      { fixture: allStatuses, t0: T0, theme },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+    await page.getByRole("tab", { name: "Sessions" }).click();
+    await page.getByRole("button", { name: /Work Max/ }).first().click();
+    await page.getByTestId("handover-section")
+      .locator("button[title*='Experimental']")
+      .first()
+      .click();
+    // The wizard renders the chooser on its carried/confirm steps —
+    // walk to Confirm (Target → What's carried) first.
+    await page.getByTestId("switch-continue").click();
+    await page.getByTestId("switch-continue").click();
+    await expect(page.getByTestId("switch-redaction-chooser")).toBeVisible();
+    const chooserScan = await new AxeBuilder({ page })
+      .include("[data-testid='switch-flow']")
+      .analyze();
+
+    // Switch to a set policy + items on the preview step and re-scan
+    // (a second init script overwrites the seam on reload).
+    await page.addInitScript(() => {
+      const w = window as unknown as { __AIJ_SWITCH_PREFLIGHT__?: Record<string, unknown> };
+      if (w.__AIJ_SWITCH_PREFLIGHT__) {
+        w.__AIJ_SWITCH_PREFLIGHT__.redaction = {
+          global: "strip",
+          override: null,
+          effective: "strip",
+          source: "global",
+          line: "Redaction for claude-code: Strip — replace keys with ••• (your global choice)",
+        };
+        w.__AIJ_SWITCH_PREFLIGHT__.redaction_items = [
+          { kind: "sk-key", preview: "s•••5678", segment: 0 },
+        ];
+      }
+    });
+    await page.reload();
+    await page.getByRole("tab", { name: "Sessions" }).click();
+    await page.getByRole("button", { name: /Work Max/ }).first().click();
+    await page.getByTestId("handover-section")
+      .locator("button[title*='Experimental']")
+      .first()
+      .click();
+    await page.getByTestId("switch-continue").click();
+    await expect(page.getByTestId("switch-redaction-items")).toBeVisible();
+    const itemsScan = await new AxeBuilder({ page })
+      .include("[data-testid='switch-flow']")
+      .analyze();
+    const all = [chooserScan, itemsScan]
+      .flatMap((result) => result.violations)
+      .filter((violation) => ["serious", "critical"].includes(violation.impact ?? ""));
+    if (all.length > 0) {
+      const summary = all
+        .map((v) => `${v.id} (${v.impact}): ${v.nodes.map((n) => n.target.join(" ")).slice(0, 3).join(", ")}`)
+        .join("\n");
+      throw new Error(`axe violations on the redaction surfaces (${theme}):\n${summary}`);
+    }
+    expect(all).toHaveLength(0);
+  });
+}

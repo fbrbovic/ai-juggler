@@ -18,8 +18,16 @@ import {
   switchPreflight,
   switchExecute,
   switchUndo,
+  redactionPolicySetGlobal,
   type PreflightInfoData,
 } from "../lib/bridge";
+
+/** The plain-words picker options (same words as Settings). */
+const REDACTION_OPTIONS = [
+  { value: "strip", label: "Strip — replace keys with •••" },
+  { value: "keep", label: "Keep — pack stays on this Mac" },
+  { value: "ask", label: "Ask each time" },
+] as const;
 
 type Phase =
   | { kind: "preflight" }
@@ -48,6 +56,124 @@ function carryOneLiner(carry: PreflightInfoData["carry"]): string {
   return parts.join(" · ");
 }
 
+/** AJ-E208: the redaction surface both confirm doors render — the
+ * verbatim policy line, the first-run chooser (required, no
+ * default — it blocks the first pack until the user chooses), the
+ * per-switch Ask answer, and the per-item un-redact list (this
+ * switch only — never a remembered-policy change). */
+function RedactionBlock({
+  preflight,
+  askChoice,
+  onAskChoice,
+  chooserPick,
+  onChooserPick,
+  onGlobalChosen,
+  showItems,
+  unredact,
+  onToggleItem,
+}: {
+  preflight: PreflightInfoData;
+  askChoice: "strip" | "keep" | null;
+  onAskChoice: (choice: "strip" | "keep") => void;
+  chooserPick: string | null;
+  onChooserPick: (pick: string) => void;
+  onGlobalChosen: (pick: string) => void;
+  showItems: boolean;
+  unredact: Set<number>;
+  onToggleItem: (index: number) => void;
+}): JSX.Element {
+  const { redaction, redaction_items: items } = preflight;
+  if (redaction.effective === null) {
+    return (
+      <fieldset className="flex flex-col gap-1.5 rounded border border-warning/40 px-2 py-1.5" data-testid="switch-redaction-chooser">
+        <legend className="text-[11px] uppercase tracking-wider text-warning">
+          Choose how secrets are handled in packs (required, once)
+        </legend>
+        {REDACTION_OPTIONS.map((option) => (
+          <label key={option.value} className="flex items-center gap-2 text-xs">
+            <input
+              type="radio"
+              name="redaction-global"
+              checked={chooserPick === option.value}
+              onChange={() => onChooserPick(option.value)}
+            />
+            {option.label}
+          </label>
+        ))}
+        <button
+          type="button"
+          disabled={chooserPick === null}
+          onClick={() => chooserPick !== null && onGlobalChosen(chooserPick)}
+          data-testid="switch-redaction-save"
+          className={
+            "self-start rounded-lg border px-3 py-1.5 text-xs " +
+            (chooserPick === null
+              ? "border-hairline text-muted"
+              : "border-accent/40 bg-accent-soft text-accent-hi")
+          }
+        >
+          Save my choice
+        </button>
+      </fieldset>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-1" data-testid="switch-redaction">
+      <p className="text-[11px] text-muted" data-testid="switch-redaction-line">
+        {redaction.line}
+      </p>
+      {redaction.effective === "ask" && (
+        <fieldset className="flex flex-col gap-1 rounded border border-hairline px-2 py-1.5">
+          <legend className="text-[11px] uppercase tracking-wider text-muted">
+            This switch
+          </legend>
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="radio"
+              name="redaction-ask"
+              checked={askChoice === "strip"}
+              onChange={() => onAskChoice("strip")}
+            />
+            Strip secrets this time
+          </label>
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="radio"
+              name="redaction-ask"
+              checked={askChoice === "keep"}
+              onChange={() => onAskChoice("keep")}
+            />
+            Keep secrets this time (pack stays on this Mac)
+          </label>
+        </fieldset>
+      )}
+      {showItems && items.length > 0 && (
+        <div className="flex flex-col gap-1 rounded border border-hairline px-2 py-1.5" data-testid="switch-redaction-items">
+          <p className="text-[11px] uppercase tracking-wider text-muted">
+            Secrets detected — un-redact per item for this switch only
+          </p>
+          {items.map((item, index) => (
+            <label key={`${item.kind}-${index}`} className="flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                checked={unredact.has(index)}
+                onChange={() => onToggleItem(index)}
+              />
+              <span className="font-mono text-[11px]">{item.preview}</span>
+              <span className="text-muted">{item.kind}</span>
+            </label>
+          ))}
+        </div>
+      )}
+      {items.length === 0 && (
+        <p className="text-[10px] text-muted" data-testid="switch-redaction-none">
+          No secrets detected in this conversation.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function SwitchFlow({
   sessionId,
   targetProfileId,
@@ -64,7 +190,19 @@ export function SwitchFlow({
   const [phase, setPhase] = useState<Phase>({ kind: "preflight" });
   const [freeze, setFreeze] = useState<"finish-turn" | "stop-now">("finish-turn");
   const [step, setStep] = useState(0);
+  // AJ-E208: the redaction will for this switch (Ask answer, the
+  // first-run chooser pick, and the per-item un-redact set).
+  const [askChoice, setAskChoice] = useState<"strip" | "keep" | null>(null);
+  const [chooserPick, setChooserPick] = useState<string | null>(null);
+  const [unredact, setUnredact] = useState<Set<number>>(new Set());
   const dialogRef = useRef<HTMLDivElement | null>(null);
+
+  // Reset the redaction state when the flow opens for a new target.
+  useEffect(() => {
+    setAskChoice(null);
+    setChooserPick(null);
+    setUnredact(new Set());
+  }, [sessionId, targetProfileId]);
 
   useEffect(() => {
     let alive = true;
@@ -89,9 +227,15 @@ export function SwitchFlow({
       : [];
   // The execute click lives on the 1-click popover or the wizard's
   // LAST step only — never mid-wizard (deep/09 H-5).
+  const redactionRequired =
+    phase.kind === "confirm" &&
+    (phase.preflight.redaction.effective === null
+      ? chooserPick === null
+      : phase.preflight.redaction.effective === "ask" && askChoice === null);
   const executeArmed =
     phase.kind === "confirm" &&
-    (phase.preflight.door === "one-click" || step === steps.length - 1);
+    (phase.preflight.door === "one-click" || step === steps.length - 1) &&
+    !redactionRequired;
 
   // Focus trap + Esc/⏎ handling (2.1.2/2.1.1 — the dialog is the
   // only operable surface while open).
@@ -129,12 +273,42 @@ export function SwitchFlow({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase.kind, step, executeArmed, onClose]);
 
+  const toggleUnredact = (index: number) => {
+    setUnredact((current) => {
+      const next = new Set(current);
+      if (next.has(index)) {
+        next.delete(index);
+      } else {
+        next.add(index);
+      }
+      return next;
+    });
+  };
+
+  const chooseGlobal = async (pick: string) => {
+    try {
+      await redactionPolicySetGlobal(pick);
+      // Refresh the plan — the backend rebuilds the verbatim line
+      // (wizard state survives: step + freeze are untouched).
+      const refreshed = await switchPreflight(sessionId, targetProfileId);
+      setPhase({ kind: "confirm", preflight: refreshed });
+    } catch {
+      // The chooser stays up; nothing is guessed on failure.
+    }
+  };
+
   const execute = async () => {
     if (phase.kind !== "confirm") return;
     const oneClick = phase.preflight.door === "one-click";
     setPhase({ kind: "executing", startedAt: Date.now() });
     try {
-      const result = await switchExecute(sessionId, targetProfileId, freeze);
+      const result = await switchExecute(
+        sessionId,
+        targetProfileId,
+        freeze,
+        askChoice,
+        [...unredact],
+      );
       if (oneClick) {
         // The modal closes into the undo window (App renders the
         // toast); the graph keeps the edge as the undo handle.
@@ -184,6 +358,17 @@ export function SwitchFlow({
                 ))}
               </ul>
             )}
+            <RedactionBlock
+              preflight={phase.preflight}
+              askChoice={askChoice}
+              onAskChoice={setAskChoice}
+              chooserPick={chooserPick}
+              onChooserPick={setChooserPick}
+              onGlobalChosen={(pick) => void chooseGlobal(pick)}
+              showItems={false}
+              unredact={unredact}
+              onToggleItem={toggleUnredact}
+            />
             <fieldset className="flex flex-col gap-1.5">
               <legend className="text-[11px] uppercase tracking-wider text-muted">
                 {phase.preflight.source_live ? "Freeze the source first" : "The source is at rest"}
@@ -217,9 +402,15 @@ export function SwitchFlow({
               </button>
               <button
                 type="button"
+                disabled={redactionRequired}
                 onClick={() => void execute()}
                 data-testid="switch-confirm"
-                className="rounded-lg border border-accent/40 bg-accent-soft px-3 py-1.5 text-xs text-accent-hi hover:border-accent/60"
+                className={
+                  "rounded-lg border px-3 py-1.5 text-xs " +
+                  (redactionRequired
+                    ? "border-hairline text-muted"
+                    : "border-accent/40 bg-accent-soft text-accent-hi hover:border-accent/60")
+                }
               >
                 Switch ▸ <span className="text-muted">(⏎)</span>
               </button>
@@ -313,6 +504,17 @@ export function SwitchFlow({
                     </p>
                   )}
                 </div>
+                <RedactionBlock
+                  preflight={phase.preflight}
+                  askChoice={askChoice}
+                  onAskChoice={setAskChoice}
+                  chooserPick={chooserPick}
+                  onChooserPick={setChooserPick}
+                  onGlobalChosen={(pick) => void chooseGlobal(pick)}
+                  showItems
+                  unredact={unredact}
+                  onToggleItem={toggleUnredact}
+                />
               </div>
             )}
 
@@ -345,6 +547,17 @@ export function SwitchFlow({
                   {phase.preflight.mechanism}
                   {phase.preflight.usual_account ? " · usual account" : ""}
                 </p>
+                <RedactionBlock
+                  preflight={phase.preflight}
+                  askChoice={askChoice}
+                  onAskChoice={setAskChoice}
+                  chooserPick={chooserPick}
+                  onChooserPick={setChooserPick}
+                  onGlobalChosen={(pick) => void chooseGlobal(pick)}
+                  showItems={false}
+                  unredact={unredact}
+                  onToggleItem={toggleUnredact}
+                />
                 <p className="text-[11px] text-muted">{phase.preflight.experimental_copy}</p>
                 {phase.preflight.warnings.length > 0 && (
                   <ul className="flex flex-col gap-1" data-testid="switch-warnings">
@@ -409,9 +622,15 @@ export function SwitchFlow({
               ) : (
                 <button
                   type="button"
+                  disabled={redactionRequired}
                   onClick={() => void execute()}
                   data-testid="switch-confirm"
-                  className="rounded-lg border border-accent/40 bg-accent-soft px-3 py-1.5 text-xs text-accent-hi hover:border-accent/60"
+                  className={
+                    "rounded-lg border px-3 py-1.5 text-xs " +
+                    (redactionRequired
+                      ? "border-hairline text-muted"
+                      : "border-accent/40 bg-accent-soft text-accent-hi hover:border-accent/60")
+                  }
                 >
                   Switch ▸ <span className="text-muted">(⏎)</span>
                 </button>

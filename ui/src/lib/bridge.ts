@@ -1600,6 +1600,27 @@ export interface PreflightInfoData {
   usual_account: boolean;
   /** The carry-list the door renders (AJ-E206). */
   carry: CarryListData;
+  /** AJ-E208: the destination Provider's redaction policy. */
+  redaction: RedactionInfoData;
+  /** AJ-E208: detected secrets (masked) — the per-item un-redact list. */
+  redaction_items: RedactionItemData[];
+}
+
+/** AJ-E208: the resolved redaction policy for one Provider. */
+export interface RedactionInfoData {
+  global: string | null;
+  override: string | null;
+  effective: string | null;
+  source: "global" | "override" | "unset";
+  /** The verbatim confirm line ("" when unset). */
+  line: string;
+}
+
+/** AJ-E208: one masked detection (values never cross the bridge). */
+export interface RedactionItemData {
+  kind: string;
+  preview: string;
+  segment: number;
 }
 
 /** The carry-list grouped by disposition (AJ-E206). */
@@ -1617,6 +1638,37 @@ export interface SwitchExecutedData {
   source_session_id: string;
 }
 
+/** The no-backend preflight default (fixtures merge over it —
+ * AJ-E206 door facts + AJ-E208 redaction policy). */
+const DEFAULT_PREFLIGHT: PreflightInfoData = {
+  mechanism: "transplant",
+  fidelity: "F1",
+  score: 0.85,
+  warnings: [],
+  zombies: [],
+  diff_snapshotted: false,
+  source_live: true,
+  experimental_copy:
+    "Experimental: only the main transcript moves. Subagent files and rewind history stay on the source. The source stays resumable.",
+  door: "wizard",
+  wizard_steps: ["Target", "What's carried", "Confirm"],
+  wizard_reasons: ["This isn't the usual account for this project."],
+  usual_account: false,
+  carry: {
+    carried: ["chat transcript", "rules & guidelines", "uncommitted git diff"],
+    regenerated: [],
+    dropped: ["todo list", "subagent state"],
+  },
+  redaction: {
+    global: "strip",
+    override: null,
+    effective: "strip",
+    source: "global",
+    line: "Redaction for claude-code: Strip — replace keys with ••• (your global choice)",
+  },
+  redaction_items: [],
+};
+
 /** AJ-E205: preflight — ordered checks stop BEFORE any byte moves;
  * warnings render in the freeze dialog. */
 export async function switchPreflight(
@@ -1624,29 +1676,18 @@ export async function switchPreflight(
   targetProfileId: string,
 ): Promise<PreflightInfoData> {
   if (!hasBackend) {
-    return (
-      (window as unknown as { __AIJ_SWITCH_PREFLIGHT__?: PreflightInfoData })
-        .__AIJ_SWITCH_PREFLIGHT__ ?? {
-        mechanism: "transplant",
-        fidelity: "F1",
-        score: 0.85,
-        warnings: [],
-        zombies: [],
-        diff_snapshotted: false,
-        source_live: true,
-        experimental_copy:
-          "Experimental: only the main transcript moves. Subagent files and rewind history stay on the source. The source stays resumable.",
-        door: "wizard",
-        wizard_steps: ["Target", "What's carried", "Confirm"],
-        wizard_reasons: ["This isn't the usual account for this project."],
-        usual_account: false,
-        carry: {
-          carried: ["chat transcript", "rules & guidelines", "uncommitted git diff"],
-          regenerated: [],
-          dropped: ["todo list", "subagent state"],
-        },
-      }
-    );
+    const seam = (window as unknown as { __AIJ_SWITCH_PREFLIGHT__?: Partial<PreflightInfoData> })
+      .__AIJ_SWITCH_PREFLIGHT__;
+    // Merge over the default so fixtures that predate a field keep
+    // working (the seam overrides only what it defines).
+    if (seam) {
+      return {
+        ...DEFAULT_PREFLIGHT,
+        ...seam,
+        redaction: { ...DEFAULT_PREFLIGHT.redaction, ...seam.redaction },
+      } as PreflightInfoData;
+    }
+    return DEFAULT_PREFLIGHT;
   }
   return invoke<PreflightInfoData>("switch_preflight", { sessionId, targetProfileId });
 }
@@ -1658,12 +1699,27 @@ export async function switchExecute(
   sessionId: string,
   targetProfileId: string,
   freezeChoice: string,
+  redactionChoice?: string | null,
+  redactionUnredact?: number[],
 ): Promise<SwitchExecutedData> {
   if (!hasBackend) {
     const seams = window as unknown as {
       __AIJ_SWITCH_EXECUTE_FAIL__?: string;
       __AIJ_SWITCH_EXECUTE_HANG__?: boolean;
+      __AIJ_SWITCH_EXECUTE_REDACTION__?: {
+        redactionChoice: string | null | undefined;
+        redactionUnredact: number[];
+      }[];
     };
+    // The guardrail seam: the redaction payload is observable so
+    // tests can prove it fires only from the click.
+    seams.__AIJ_SWITCH_EXECUTE_REDACTION__ = [
+      ...(seams.__AIJ_SWITCH_EXECUTE_REDACTION__ ?? []),
+      {
+        redactionChoice,
+        redactionUnredact: redactionUnredact ?? [],
+      },
+    ];
     if (seams.__AIJ_SWITCH_EXECUTE_FAIL__ !== undefined) {
       return Promise.reject(seams.__AIJ_SWITCH_EXECUTE_FAIL__);
     }
@@ -1681,6 +1737,8 @@ export async function switchExecute(
     sessionId,
     targetProfileId,
     freezeChoice,
+    redactionChoice: redactionChoice ?? null,
+    redactionUnredact: redactionUnredact ?? [],
   });
 }
 
@@ -1852,4 +1910,57 @@ export async function switchBackExecute(
     choices,
     keepAwayRunning,
   });
+}
+
+/** AJ-E208: the redaction policy for one Provider (settings + the
+ * switch confirm line). */
+export async function redactionPolicyGet(
+  provider: string,
+): Promise<RedactionInfoData> {
+  if (!hasBackend) {
+    return (
+      (window as unknown as { __AIJ_REDACTION_POLICY__?: RedactionInfoData })
+        .__AIJ_REDACTION_POLICY__ ?? {
+        global: null,
+        override: null,
+        effective: null,
+        source: "unset",
+        line: "",
+      }
+    );
+  }
+  return invoke<RedactionInfoData>("redaction_policy_get", { provider });
+}
+
+/** AJ-E208: sets (or clears) the GLOBAL policy — Settings →
+ * Privacy. */
+export async function redactionPolicySetGlobal(
+  policy: string | null,
+): Promise<void> {
+  if (!hasBackend) {
+    const seams = window as unknown as { __AIJ_REDACTION_SET_GLOBAL__?: (string | null)[] };
+    seams.__AIJ_REDACTION_SET_GLOBAL__ = [
+      ...(seams.__AIJ_REDACTION_SET_GLOBAL__ ?? []),
+      policy,
+    ];
+    return;
+  }
+  await invoke("redaction_policy_set_global", { policy });
+}
+
+/** AJ-E208: sets (or clears) one Provider's override — Provider
+ * settings. */
+export async function redactionPolicySetOverride(
+  provider: string,
+  policy: string | null,
+): Promise<void> {
+  if (!hasBackend) {
+    const seams = window as unknown as { __AIJ_REDACTION_SET_OVERRIDE__?: [string, string | null][] };
+    seams.__AIJ_REDACTION_SET_OVERRIDE__ = [
+      ...(seams.__AIJ_REDACTION_SET_OVERRIDE__ ?? []),
+      [provider, policy],
+    ];
+    return;
+  }
+  await invoke("redaction_policy_set_override", { provider, policy });
 }

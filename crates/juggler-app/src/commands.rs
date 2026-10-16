@@ -3977,11 +3977,17 @@ pub fn session_handover_impl(
     // AJ-E205: the pipeline owns execution (freeze → stage → verify →
     // launch → record); the default freeze choice waits for the turn
     // boundary. The UI calls `switch_execute` with the user's choice.
-    switch_execute_impl(state, session_id, target_profile_id, "finish-turn").map(|switched| {
-        LaunchResult {
-            session_id: switched.session_id,
-            pid: switched.pid,
-        }
+    switch_execute_impl(
+        state,
+        session_id,
+        target_profile_id,
+        "finish-turn",
+        None,
+        &[],
+    )
+    .map(|switched| LaunchResult {
+        session_id: switched.session_id,
+        pid: switched.pid,
     })
 }
 
@@ -4019,6 +4025,12 @@ pub struct PreflightInfo {
     /// The carry-list the door renders (carried / rebuilt / dropped
     /// names — the popover one-liner and the wizard's preview).
     pub carry: CarryListInfo,
+    /// AJ-E208: the destination Provider's redaction policy (the
+    /// verbatim confirm line; unset ⇒ the first-run chooser).
+    pub redaction: RedactionPolicyInfo,
+    /// AJ-E208: the source conversation's detected secrets (masked)
+    /// — the per-item un-redact list.
+    pub redaction_items: Vec<RedactionItemInfo>,
 }
 
 /// The carry-list grouped by disposition (AJ-E206; every name is a
@@ -4134,6 +4146,15 @@ pub fn switch_preflight_impl(
     };
     let (door, wizard_steps, wizard_reasons) =
         door_verdict(state, &door_inputs, &carry, report.pair.label);
+    let (redaction, redaction_items) = {
+        let storage = lock_storage_arc(state)?;
+        let policy = RedactionPolicyInfo::from_parts(
+            &account_b.harness,
+            redaction_global_of(&storage),
+            redaction_override_of(&storage, account_b.harness.as_str()),
+        );
+        (policy, redaction_items_of(&source))
+    };
 
     Ok(PreflightInfo {
         mechanism: match report.mechanism {
@@ -4156,6 +4177,8 @@ pub fn switch_preflight_impl(
         wizard_reasons,
         usual_account,
         carry,
+        redaction,
+        redaction_items,
     })
 }
 
@@ -4371,12 +4394,16 @@ pub fn switch_execute(
     session_id: String,
     target_profile_id: String,
     freeze_choice: String,
+    redaction_choice: Option<String>,
+    redaction_unredact: Option<Vec<u32>>,
 ) -> AppResult<SwitchExecutedInfo> {
     switch_execute_impl(
         state.inner(),
         &session_id,
         &target_profile_id,
         &freeze_choice,
+        redaction_choice.as_deref(),
+        &redaction_unredact.unwrap_or_default(),
     )
 }
 
@@ -4390,6 +4417,8 @@ pub fn switch_execute_impl(
     session_id: &str,
     target_profile_id: &str,
     freeze_choice: &str,
+    redaction_choice: Option<&str>,
+    redaction_unredact: &[u32],
 ) -> AppResult<SwitchExecutedInfo> {
     use juggler_handover::pipeline::{self, FreezeChoice, Mechanism};
 
@@ -4472,6 +4501,15 @@ pub fn switch_execute_impl(
             session: new_session.clone(),
         },
     )?;
+
+    // AJ-E208: the switch's redaction decision rides the edge.
+    record_redaction_decision(
+        state,
+        &edge_id,
+        &account_b.harness,
+        redaction_choice,
+        redaction_unredact,
+    );
 
     Ok(SwitchExecutedInfo {
         session_id: new_session.to_string(),
@@ -4763,6 +4801,49 @@ fn record_compensating_edge(
     graph.mark_launched(&undo_edge_id, &epoch_undo)?;
     graph.mark_confirmed(&undo_edge_id)?;
     Ok(())
+}
+
+/// AJ-E208: records the switch's redaction decision on the edge —
+/// the effective policy, the per-switch choice (Ask), and how many
+/// items the user un-redacted for THIS switch only (never a
+/// remembered-policy change). A storage failure never fails the
+/// switch (the decision is diagnostics; the switch already landed).
+fn record_redaction_decision(
+    state: &Arc<AppState>,
+    edge_id: &juggler_core::model::SwitchEdgeId,
+    provider: &juggler_core::model::HarnessId,
+    redaction_choice: Option<&str>,
+    redaction_unredact: &[u32],
+) {
+    let Ok(storage) = lock_storage_arc(state) else {
+        return;
+    };
+    let policy = {
+        let global = redaction_global_of(&storage);
+        let r#override = redaction_override_of(&storage, provider.as_str());
+        juggler_handover::redaction::resolve_policy(global, r#override)
+    };
+    let chosen = redaction_choice.and_then(juggler_handover::redaction::RedactionPolicy::from_wire);
+    let applied = chosen
+        .or(policy)
+        .map_or_else(|| "unset".to_owned(), |parsed| parsed.as_str().to_owned());
+    let rows = vec![
+        juggler_core::model::ManifestEntry {
+            rel_path: "redaction/policy".to_owned(),
+            sha256: String::new(),
+            bytes: 0,
+            kind: "redaction".to_owned(),
+            disposition: applied,
+        },
+        juggler_core::model::ManifestEntry {
+            rel_path: "redaction/unredacted".to_owned(),
+            sha256: String::new(),
+            bytes: u64::try_from(redaction_unredact.len()).unwrap_or_default(),
+            kind: "redaction-unredact".to_owned(),
+            disposition: "this-switch-only".to_owned(),
+        },
+    ];
+    let _ = storage.switch_graph().append_manifest(edge_id, &rows);
 }
 
 /// The supervisor launch hook: builds the resume spec for the
@@ -9810,4 +9891,295 @@ pub fn switch_back_suggestions_impl(
         }
     }
     Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// AJ-E208: pack redaction policy — global choice + per-Provider
+// override (D-14). Always the user's remembered choice; unset BLOCKS
+// pack generation (no code path applies an unchosen default).
+
+/// Settings KV keys (schema-less strings — persisted across
+/// restarts; round-trip pinned by test).
+const REDACTION_GLOBAL_KEY: &str = "redaction_global";
+const REDACTION_OVERRIDES_KEY: &str = "redaction_overrides";
+
+/// The resolved policy a switch surface shows (the confirm line is
+/// verbatim per Req.2).
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize)]
+pub struct RedactionPolicyInfo {
+    /// The user's global choice wire name (`strip|keep|ask`).
+    pub global: Option<String>,
+    /// This Provider's override wire name, when set.
+    pub r#override: Option<String>,
+    /// override-if-set else global; `null` = unset (the first pack
+    /// is blocked until the user chooses).
+    pub effective: Option<String>,
+    /// `global` | `override` | `unset`.
+    pub source: String,
+    /// The verbatim confirm line ("Redaction for {Provider}: …").
+    pub line: String,
+}
+
+impl RedactionPolicyInfo {
+    /// Builds the info block (line verbatim per Req.2).
+    #[must_use]
+    pub fn from_parts(
+        provider: &juggler_core::model::HarnessId,
+        global: Option<juggler_handover::redaction::RedactionPolicy>,
+        r#override: Option<juggler_handover::redaction::RedactionPolicy>,
+    ) -> Self {
+        let effective = juggler_handover::redaction::resolve_policy(global, r#override);
+        Self {
+            global: global.map(|policy| policy.as_str().to_owned()),
+            r#override: r#override.map(|policy| policy.as_str().to_owned()),
+            effective: effective.map(|policy| policy.as_str().to_owned()),
+            source: match (&global, &r#override) {
+                (_, Some(_)) => "override".to_owned(),
+                (Some(_), None) => "global".to_owned(),
+                (None, None) => "unset".to_owned(),
+            },
+            line: redaction_line(provider.as_str(), global, r#override),
+        }
+    }
+}
+
+/// The stored global choice.
+fn redaction_global_of(storage: &Storage) -> Option<juggler_handover::redaction::RedactionPolicy> {
+    storage
+        .app_settings()
+        .get(REDACTION_GLOBAL_KEY)
+        .ok()
+        .flatten()
+        .and_then(|wire| juggler_handover::redaction::RedactionPolicy::from_wire(&wire))
+}
+
+/// The stored override for one Provider.
+fn redaction_override_of(
+    storage: &Storage,
+    provider: &str,
+) -> Option<juggler_handover::redaction::RedactionPolicy> {
+    let overrides: std::collections::BTreeMap<String, String> = storage
+        .app_settings()
+        .get(REDACTION_OVERRIDES_KEY)
+        .ok()
+        .flatten()
+        .and_then(|blob| serde_json::from_str(&blob).ok())
+        .unwrap_or_default();
+    overrides
+        .get(provider)
+        .and_then(|wire| juggler_handover::redaction::RedactionPolicy::from_wire(wire))
+}
+
+/// Builds the confirm line verbatim (Req.2) — "(your global
+/// choice)" vs "(override)"; empty when unset (the UI shows the
+/// first-run chooser instead).
+#[must_use]
+fn redaction_line(
+    provider: &str,
+    global: Option<juggler_handover::redaction::RedactionPolicy>,
+    r#override: Option<juggler_handover::redaction::RedactionPolicy>,
+) -> String {
+    let effective = juggler_handover::redaction::resolve_policy(global, r#override);
+    let Some(policy) = effective else {
+        return String::new();
+    };
+    let source = if r#override.is_some() {
+        "override"
+    } else {
+        "your global choice"
+    };
+    format!(
+        "Redaction for {provider}: {} ({source})",
+        strip_label(policy)
+    )
+}
+
+/// The Strip label words the picker uses ("replace keys with •••");
+/// Keep/Ask use their own plain words.
+fn strip_label(policy: juggler_handover::redaction::RedactionPolicy) -> String {
+    match policy {
+        juggler_handover::redaction::RedactionPolicy::Strip => {
+            "Strip — replace keys with •••".to_owned()
+        }
+        juggler_handover::redaction::RedactionPolicy::Keep => {
+            "Keep — pack stays on this Mac".to_owned()
+        }
+        juggler_handover::redaction::RedactionPolicy::AskEachTime => "Ask each time".to_owned(),
+    }
+}
+
+/// AJ-E208: the redaction policy for one Provider (settings surface
+/// + the switch confirm line).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] when storage reads fail.
+#[tauri::command]
+pub fn redaction_policy_get(
+    state: tauri::State<'_, Arc<AppState>>,
+    provider: String,
+) -> AppResult<RedactionPolicyInfo> {
+    redaction_policy_get_impl(state.inner(), &provider)
+}
+
+/// Core implementation shared with integration tests.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] when storage reads fail.
+pub fn redaction_policy_get_impl(
+    state: &Arc<AppState>,
+    provider: &str,
+) -> AppResult<RedactionPolicyInfo> {
+    let storage = lock_storage_arc(state)?;
+    let global = redaction_global_of(&storage);
+    let r#override = redaction_override_of(&storage, provider);
+    let effective = juggler_handover::redaction::resolve_policy(global, r#override);
+    Ok(RedactionPolicyInfo {
+        global: global.map(|policy| policy.as_str().to_owned()),
+        r#override: r#override.map(|policy| policy.as_str().to_owned()),
+        effective: effective.map(|policy| policy.as_str().to_owned()),
+        source: match (&global, &r#override) {
+            (_, Some(_)) => "override".to_owned(),
+            (Some(_), None) => "global".to_owned(),
+            (None, None) => "unset".to_owned(),
+        },
+        line: redaction_line(provider, global, r#override),
+    })
+}
+
+/// AJ-E208: sets (or clears) the GLOBAL policy — Settings →
+/// Privacy. `None` clears (back to unset — the first pack blocks).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] when storage writes fail.
+#[tauri::command]
+pub fn redaction_policy_set_global(
+    state: tauri::State<'_, Arc<AppState>>,
+    policy: Option<String>,
+) -> AppResult<()> {
+    redaction_policy_set_global_impl(state.inner(), policy.as_deref())
+}
+
+/// Core implementation shared with integration tests.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] on an unknown wire name or a
+/// storage write failure (an unknown name is refused, never
+/// guessed).
+pub fn redaction_policy_set_global_impl(
+    state: &Arc<AppState>,
+    policy: Option<&str>,
+) -> AppResult<()> {
+    let parsed = policy.and_then(juggler_handover::redaction::RedactionPolicy::from_wire);
+    if policy.is_some() && parsed.is_none() {
+        return Err(AppError::Io {
+            context: "redaction policy",
+            message: format!("Unknown policy {policy:?} — strip, keep, or ask"),
+        });
+    }
+    let storage = lock_storage_arc(state)?;
+    let settings = storage.app_settings();
+    match parsed {
+        Some(parsed) => {
+            settings.set(REDACTION_GLOBAL_KEY, parsed.as_str())?;
+        }
+        None => {
+            settings.set(REDACTION_GLOBAL_KEY, "")?;
+        }
+    }
+    Ok(())
+}
+
+/// AJ-E208: sets (or clears) one Provider's override — Provider
+/// settings.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] on an unknown wire name or a
+/// storage write failure.
+#[tauri::command]
+pub fn redaction_policy_set_override(
+    state: tauri::State<'_, Arc<AppState>>,
+    provider: String,
+    policy: Option<String>,
+) -> AppResult<()> {
+    redaction_policy_set_override_impl(state.inner(), &provider, policy.as_deref())
+}
+
+/// Core implementation shared with integration tests.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] per the command docs.
+pub fn redaction_policy_set_override_impl(
+    state: &Arc<AppState>,
+    provider: &str,
+    policy: Option<&str>,
+) -> AppResult<()> {
+    let parsed = policy.and_then(juggler_handover::redaction::RedactionPolicy::from_wire);
+    if policy.is_some() && parsed.is_none() {
+        return Err(AppError::Io {
+            context: "redaction policy",
+            message: format!("Unknown policy {policy:?} — strip, keep, or ask"),
+        });
+    }
+    let storage = lock_storage_arc(state)?;
+    let settings = storage.app_settings();
+    let mut overrides: std::collections::BTreeMap<String, String> = settings
+        .get(REDACTION_OVERRIDES_KEY)
+        .ok()
+        .flatten()
+        .and_then(|blob| serde_json::from_str(&blob).ok())
+        .unwrap_or_default();
+    match parsed {
+        Some(parsed) => {
+            overrides.insert(provider.to_owned(), parsed.as_str().to_owned());
+        }
+        None => {
+            overrides.remove(provider);
+        }
+    }
+    let blob = serde_json::to_string(&overrides).map_err(|error| AppError::Io {
+        context: "redaction policy",
+        message: error.to_string(),
+    })?;
+    settings.set(REDACTION_OVERRIDES_KEY, &blob)?;
+    Ok(())
+}
+
+/// One listed secret for the preview UI (masked — values never
+/// cross the bridge).
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize)]
+pub struct RedactionItemInfo {
+    /// Detection kind (`sk-key`, `bearer`, `env-value`,
+    /// `private-key`, `zcode-rollout`).
+    pub kind: String,
+    /// Masked preview (first char + `•••` + last 4).
+    pub preview: String,
+    /// Segment ordinal (conversation turns first).
+    pub segment: u32,
+}
+
+/// Lists the source conversation's secrets (masked) for the
+/// preview; the un-redact indices the user picks address these.
+fn redaction_items_of(source: &juggler_core::model::InstanceRecord) -> Vec<RedactionItemInfo> {
+    let Some(reference) = source.transcript_ref.as_ref() else {
+        return Vec::new();
+    };
+    let Some((_uuids, turns)) = transcript_side(&reference.path) else {
+        return Vec::new();
+    };
+    let segments: Vec<String> = turns.iter().map(|turn| turn.text.clone()).collect();
+    let refs: Vec<&str> = segments.iter().map(String::as_str).collect();
+    juggler_handover::redaction::list_segments(&refs)
+        .into_iter()
+        .map(|listed| RedactionItemInfo {
+            kind: listed.kind.to_owned(),
+            preview: listed.preview,
+            segment: u32::try_from(listed.segment).unwrap_or(u32::MAX),
+        })
+        .collect()
 }

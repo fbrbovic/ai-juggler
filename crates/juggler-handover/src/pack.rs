@@ -308,6 +308,18 @@ pub enum ConversationMode {
 /// pinned by golden tests). Pure — no I/O, no clock, no randomness.
 #[must_use]
 pub fn generate_pack(input: &PackInput, mode: ConversationMode) -> GeneratedPack {
+    generate_pack_with_redactions(input, mode, Vec::new())
+}
+
+/// Same as [`generate_pack`] with the redaction counts recorded in
+/// the manifest state (AJ-E208 — rows must be set BEFORE
+/// serialization so the manifest hashes the final bytes).
+#[must_use]
+pub(crate) fn generate_pack_with_redactions(
+    input: &PackInput,
+    mode: ConversationMode,
+    redactions: Vec<RedactionCount>,
+) -> GeneratedPack {
     // Conversation facts (deterministic reductions over the turns).
     let mut uuids = String::new();
     let mut replay_tokens = 0_u64;
@@ -345,7 +357,7 @@ pub fn generate_pack(input: &PackInput, mode: ConversationMode) -> GeneratedPack
         fidelity: input.fidelity.clone(),
         quota_at_creation: input.quota_at_creation.clone(),
         lineage: input.lineage.clone(),
-        redactions: Vec::new(), // reserved for AJ-E208; always present
+        redactions, // AJ-E208: counts under the user's policy
     };
     let state_json = serde_json::to_vec_pretty(&state).unwrap_or_default();
     let pack_md = render_pack_md(&state);

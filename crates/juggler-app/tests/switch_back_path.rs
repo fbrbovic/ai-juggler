@@ -130,9 +130,15 @@ fn switch_a_to_b(work: &Path) -> RoundTrip {
     }
 
     // The juggle: A → B.
-    let switched =
-        commands::switch_execute_impl(&state, &launched.session_id, &profile_b.id, "stop-now")
-            .unwrap();
+    let switched = commands::switch_execute_impl(
+        &state,
+        &launched.session_id,
+        &profile_b.id,
+        "stop-now",
+        None,
+        &[],
+    )
+    .unwrap();
     let b_transcript = transcript_of(&state, &account_b.id, &cwd, "native-5");
     assert!(b_transcript.is_file(), "transcript transplanted to B");
 

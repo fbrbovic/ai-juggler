@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking", "28-switch", "29-door", "30-switchback"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking", "28-switch", "29-door", "30-switchback", "31-redaction"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -2828,6 +2828,137 @@ for (const theme of THEMES) {
       );
       await page.screenshot({
         path: resolve(GALLERY, `30-switchback/sf8-forked-${vp.name}-${theme}.png`),
+      });
+    });
+  }
+}
+
+/**
+ * AJ-E207 gallery 31 — the redaction policy surfaces (D-14): the
+ * first-run chooser (required, NO pre-selected default — no dark
+ * pattern), the verbatim policy line (global choice vs override),
+ * the per-item un-redact list on the wizard's preview step, and the
+ * per-switch Ask answer on Confirm — across 1280×800 + 800×600 ×
+ * light+dark. The destination policy is readable without opening
+ * Settings; no secret VALUE ever appears (masked previews only).
+ */
+const REDACTION_LINE_GLOBAL =
+  "Redaction for claude-code: Strip — replace keys with ••• (your global choice)";
+
+for (const theme of THEMES) {
+  for (const vp of SWITCH_VP) {
+    const openRedactionDoor = async (
+      page: import("@playwright/test").Page,
+      doorFixture: Record<string, unknown>,
+    ) => {
+      await page.addInitScript(
+        ({ fixture, door, t0, theme: themeName }) => {
+          const w = window as unknown as Record<string, unknown>;
+          w.__AIJ_FIXTURE__ = fixture;
+          w.__AIJ_SWITCH_PREFLIGHT__ = door;
+          localStorage.setItem("aij.theme", themeName);
+          localStorage.setItem("aij.onboarding.dismissed", "1");
+          sessionStorage.setItem("aij.ready.skipped", "1");
+          Date.now = () => t0;
+        },
+        { fixture: allStatuses, door: doorFixture, t0: T0, theme },
+      );
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await page.getByRole("tab", { name: "Sessions" }).click();
+      await page.getByRole("button", { name: /Work Max/ }).first().click();
+      await page.getByTestId("handover-section")
+        .locator("button[title*='Experimental']")
+        .first()
+        .click();
+      await expect(page.getByTestId("switch-flow")).toBeVisible();
+    };
+
+    test(`redaction — first-run chooser (no default) — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openRedactionDoor(page, {
+        ...SWITCH_ONECLICK_FIXTURE,
+        redaction: { global: null, override: null, effective: null, source: "unset", line: "" },
+        redaction_items: [],
+      });
+      await expect(page.getByTestId("switch-redaction-chooser")).toBeVisible();
+      await expect(page.getByTestId("switch-redaction-save")).toBeDisabled();
+      // Every option UNCHECKED — the choice is the user's, not ours.
+      for (const radio of await page.getByRole("radio", { name: /Strip|Keep|Ask/ }).all()) {
+        await expect(radio).not.toBeChecked();
+      }
+      await expect(page.getByTestId("switch-confirm")).toBeDisabled();
+      await page.screenshot({
+        path: resolve(GALLERY, `31-redaction/chooser-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`redaction — policy line (global choice) — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openRedactionDoor(page, {
+        ...SWITCH_ONECLICK_FIXTURE,
+        redaction: {
+          global: "strip",
+          override: null,
+          effective: "strip",
+          source: "global",
+          line: REDACTION_LINE_GLOBAL,
+        },
+        redaction_items: [],
+      });
+      await expect(page.getByTestId("switch-redaction-line")).toContainText(
+        "Strip — replace keys with ••• (your global choice)",
+      );
+      await expect(page.getByTestId("switch-redaction-none")).toBeVisible();
+      await page.screenshot({
+        path: resolve(GALLERY, `31-redaction/line-global-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`redaction — override + per-item un-redact list — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openRedactionDoor(page, {
+        ...SWITCH_WIZARD_FIXTURE,
+        redaction: {
+          global: "keep",
+          override: "strip",
+          effective: "strip",
+          source: "override",
+          line: "Redaction for claude-code: Strip — replace keys with ••• (override)",
+        },
+        redaction_items: [
+          { kind: "sk-key", preview: "s•••5678", segment: 0 },
+          { kind: "bearer", preview: "c•••aaaa", segment: 1 },
+        ],
+      });
+      await page.getByTestId("switch-continue").click();
+      await expect(page.getByTestId("switch-redaction-items")).toBeVisible();
+      await expect(page.getByTestId("switch-redaction-line")).toContainText("(override)");
+      // Masked previews only — never a value.
+      await expect(page.getByText("sk-key")).toBeVisible();
+      await page.screenshot({
+        path: resolve(GALLERY, `31-redaction/items-override-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`redaction — Ask per switch on Confirm — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openRedactionDoor(page, {
+        ...SWITCH_WIZARD_FIXTURE,
+        redaction: {
+          global: "ask",
+          override: null,
+          effective: "ask",
+          source: "global",
+          line: "Redaction for claude-code: Ask each time (your global choice)",
+        },
+        redaction_items: [],
+      });
+      await page.getByTestId("switch-continue").click();
+      await page.getByTestId("switch-continue").click();
+      await expect(page.getByTestId("switch-step-confirm")).toBeVisible();
+      await expect(page.getByTestId("switch-confirm")).toBeDisabled();
+      await page.getByText("Strip secrets this time").click();
+      await expect(page.getByTestId("switch-confirm")).toBeEnabled();
+      await page.screenshot({
+        path: resolve(GALLERY, `31-redaction/ask-${vp.name}-${theme}.png`),
       });
     });
   }
