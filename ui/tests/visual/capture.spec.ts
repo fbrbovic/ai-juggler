@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -2060,5 +2060,86 @@ for (const theme of THEMES) {
       await expect(page.getByTestId("cleanup-kill-8123")).toBeVisible();
       await page.screenshot({ path: resolve(GALLERY, `24-fleet/machine-filter-${vp.name}-${theme}.png`) });
     });
+  }
+}
+
+/**
+ * AJ-E609 — the Usage cost matrix states: priced / unpriced-model /
+ * stale-pricing across the viewport × theme matrix. The component
+ * reads the __AIJ_COST_ROLLUPS__ seam (no backend), so the states are
+ * deterministic fixtures, exactly as the gallery law requires.
+ */
+const costStates: Record<string, Record<string, unknown>> = {
+  priced: {
+    rows: [
+      {
+        key: "sess-alpha", model: "claude-opus-4", day: "2026-10-15",
+        tokens: { input: 1_204_318, output: 88_412, cache_read: 902_114, cache_write: 12_004, reasoning: 0 },
+        usd: { usd: 24.31, label: "Estimate" }, confidence: "Measured",
+      },
+      {
+        key: "sess-beta", model: "claude-sonnet-4", day: "2026-10-15",
+        tokens: { input: 402_118, output: 30_221, cache_read: 200_331, cache_write: 0, reasoning: 0 },
+        usd: { usd: 3.92, label: "Estimate" }, confidence: "Measured",
+      },
+    ],
+    subscription: { api_equivalent_usd: 28.23, flat_fee_usd: 200, value_ratio: 0.14 },
+    pricing_stale: false, total_usd: 28.23, scope: "ALL",
+  },
+  "unpriced-model": {
+    rows: [
+      {
+        key: "sess-z", model: "GLM-6-X", day: "2026-10-15",
+        tokens: { input: 12_004, output: 1_204, cache_read: 0, cache_write: 0, reasoning: 0 },
+        usd: { label: "Estimate" }, credits: 1.25, confidence: "Computed",
+      },
+    ],
+    subscription: {}, pricing_stale: false, scope: "ALL",
+  },
+  "stale-pricing": {
+    rows: [
+      {
+        key: "sess-alpha", model: "claude-opus-4", day: "2026-09-01",
+        tokens: { input: 999_999, output: 50_000, cache_read: 0, cache_write: 0, reasoning: 0 },
+        usd: { usd: 15.0, label: "Estimate" }, confidence: "Measured",
+      },
+    ],
+    subscription: {}, pricing_stale: true, total_usd: 15.0,
+    pricing_last_synced_ms: T0 - 40 * 24 * 3_600_000, scope: "ALL",
+  },
+};
+
+for (const theme of THEMES) {
+  for (const vp of VIEWPORTS) {
+    for (const [state, fixture] of Object.entries(costStates)) {
+      test(`cost matrix — ${state} — ${vp.name} — ${theme}`, async ({ page }) => {
+        await page.addInitScript(
+          ({ rollups, t0, theme: themeName }) => {
+            (window as never as { __AIJ_COST_ROLLUPS__: unknown }).__AIJ_COST_ROLLUPS__ = rollups;
+            (window as never as { __AIJ_COST_CSV__: unknown }).__AIJ_COST_CSV__ =
+              "/tmp/ai-juggler-costs.csv";
+            (window as never as { __AIJ_FIXTURE__: unknown }).__AIJ_FIXTURE__ = {
+              accounts: [], recipes: [], sessions: [], projects: [],
+            };
+            localStorage.setItem("aij.theme", themeName);
+            localStorage.setItem("aij.onboarding.dismissed", "1");
+            sessionStorage.setItem("aij.ready.skipped", "1");
+            Date.now = () => t0;
+          },
+          { rollups: fixture, t0: T0, theme },
+        );
+        await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+        await page.setViewportSize({ width: vp.width, height: vp.height });
+        await page.goto("/");
+        // The matrix rides under the WorkPanels empty state (no
+        // sessions needed — it renders from the seam).
+        await expect(
+          page.getByText("USD is Estimated — list pricing, not your subscription fee."),
+        ).toBeVisible();
+        await page.screenshot({
+          path: resolve(GALLERY, `25-costs/${state}-${vp.name}-${theme}.png`),
+        });
+      });
+    }
   }
 }

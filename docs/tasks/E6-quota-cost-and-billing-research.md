@@ -375,7 +375,7 @@ recorded in gate-M3, rides the next authenticated session.
 fixtures `tests/fixtures/quota/` + `quota_ingest.rs` (13) +
 `usage_pipeline.rs` (1) tests, `gate-M3.md` §AJ-E607.
 
-### AJ-E608 Burn-rate forecast: EWMA, time-to-exhaust & confidence inheritance | Status: TODO | Priority P0 | Effort M | Depends: AJ-E606, AJ-E607
+### AJ-E608 Burn-rate forecast: EWMA, time-to-exhaust & confidence inheritance | Status: DONE-EVIDENCED | Priority P0 | Effort M | Depends: AJ-E606, AJ-E607
 **Goal**: Turn AJ-E606 window state into honest burn forecasts — EWMA burn-rate, time-to-exhaust
 (TTE), and launch-gate projections — that widen or disappear when the data cannot support them, per deep/09 §Q4.
 **User story**: As Maya (P1) starting a 3-hour refactor, I want "A exhausts in ~40 min" before I
@@ -419,7 +419,19 @@ acceptance); SPEC.md:257 (burn-down projections); EPICS.md:91 (M3-2 projections 
 third miss — `Learning` and `wont-exhaust` are features, not missing polish. ZCode forecasts run on
 credits, Codex on Estimated windows; the cone math is shared, the units and badges are not interchangeable.
 
-### AJ-E609 Cost ledger: USD pricing, per-model attribution & subscription value | Status: TODO | Priority P1 | Effort M | Depends: AJ-E606, AJ-E607
+
+**Status report (2026-10-16)**: DONE-EVIDENCED — evidence
+`docs/qa/evidence/AJ-E608/manifest.md`; gate `docs/qa/gate-M3.md`
+§AJ-E608. 13/13 fixture-timeline tests (constant ±10%, accelerating
+MAPE ≤30%, cold-start no-number, reset-bounded TTE, confidence
+inheritance, credits units). Numeric trap found+fixed: empty float
+`.sum()` yields −0.0 on this toolchain — signed-zero normalisation +
+finite guard, documented in-code.
+
+**Implementation-mapping**: `quota_forecast.rs` (new) +
+`tests/quota_forecast.rs` (new).
+
+### AJ-E609 Cost ledger: USD pricing, per-model attribution & subscription value | Status: DONE-EVIDENCED | Priority P1 | Effort M | Depends: AJ-E606, AJ-E607
 **Goal**: Price every usage event per model into an auditable USD ledger — versioned pricing,
 per-session/account/project/day rollups, CSV export, and the dual subscription view ("≈$X at API
 prices · you pay flat") — without ever labelling USD as Measured (deep/09 §Q7, §Q2 Q-4).
@@ -472,6 +484,21 @@ table missing = F1.2, cost stays Est/hidden until this lands).
 **Handover note**: Deep/10 line 75 and deep/09 §Q7 differ slightly (query-time join vs event-time
 priced entry) — this task follows query-time join with event-time rate selection (`effective_from ≤
 ts`), which satisfies both; record the reading in the PR. Trap: never sum ZCode credits into USD totals in CSV either — separate column, always.
+
+
+**Status report (2026-10-16)**: DONE-EVIDENCED — evidence
+`docs/qa/evidence/AJ-E609/manifest.md`; gate `docs/qa/gate-M3.md`
+§AJ-E609. ccusage-pattern oracle cross-check delta $0.00 (corpus
+sha256 recorded); repricing retroactive with byte-identical stored
+rows; CSV↔rollup reconciliation to the cent; 24 visual captures
+(25-costs) + 5 vitest incl. the "you paid $" grep gate. The live-week
+export dogfood is PENDING the authenticated session (recorded).
+Query-time join with event-time rate selection — the deep/10-75 vs
+deep/09-§Q7 reading — recorded here and in the PR.
+
+**Implementation-mapping**: `cost_ledger.rs` + seed (new), usage.rs
+repo + V19, 4 commands, `CostMatrix.tsx` + App mount + bridge seams,
+`tests/cost_ledger.rs` (12) + `ccusage-oracle.py`, gallery 25-costs.
 
 ### AJ-E610 Quota & expiry display: confidence labels, two-clock indicators, manual renewal entry (D-12) | Status: TODO | Priority P0 | Effort L | Depends: AJ-E606, AJ-E607, AJ-E608, AJ-E609, AJ-E602, AJ-E603, AJ-E604, AJ-E605
 **Goal**: Render the two clocks honestly everywhere quota appears — rail/account indicators

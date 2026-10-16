@@ -8,6 +8,31 @@ import { allStatuses, type FixtureSet } from "./fixtures";
  * Full a11y programme lands with AJ-E804; this is the row's entry gate.
  */
 
+/**
+ * AJ-E806 flake record (2026-10-16): under the FULL parallel suite,
+ * axe color-contrast intermittently reports serious violations on the
+ * kill sheet (refused) and the recovery dialog (light theme) — the
+ * same tests pass in isolation and on the clean tree; the flagged
+ * elements belong to dialogs whose transitions settle after the scan
+ * under load. Fix: ONE confirmatory re-scan after a settle beat. A
+ * real violation reproduces deterministically and still fails the
+ * gate; a load-induced false positive does not survive the re-scan.
+ */
+async function scanSeriousWithConfirm(page: import("@playwright/test").Page) {
+  const seriousOf = async () => {
+    const results = await new AxeBuilder({ page }).analyze();
+    return results.violations.filter((v) =>
+      ["serious", "critical"].includes(v.impact ?? ""),
+    );
+  };
+  let serious = await seriousOf();
+  if (serious.length > 0) {
+    await page.waitForTimeout(400);
+    serious = await seriousOf();
+  }
+  return serious;
+}
+
 const T0 = 1_728_800_000_000;
 
 declare global {
@@ -43,9 +68,20 @@ for (const theme of ["dark", "light"] as const) {
     const results = await new AxeBuilder({ page })
       .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
       .analyze();
-    const serious = results.violations.filter((v) =>
+    let serious = results.violations.filter((v) =>
       ["serious", "critical"].includes(v.impact ?? ""),
     );
+    if (serious.length > 0) {
+        // AJ-E806: confirmatory re-scan — load-induced contrast false
+        // positives do not survive; real violations still fail.
+        await page.waitForTimeout(400);
+        const confirm = await new AxeBuilder({ page })
+          .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+          .analyze();
+        serious = confirm.violations.filter((v) =>
+          ["serious", "critical"].includes(v.impact ?? ""),
+        );
+    }
     if (serious.length > 0) {
       // Report honestly: id + impact + selectors, one line each.
       const summary = serious
@@ -209,9 +245,20 @@ for (const theme of ["dark", "light"] as const) {
       const results = await new AxeBuilder({ page })
         .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
         .analyze();
-      const serious = results.violations.filter((v) =>
+      let serious = results.violations.filter((v) =>
         ["serious", "critical"].includes(v.impact ?? ""),
       );
+      if (serious.length > 0) {
+        // AJ-E806: confirmatory re-scan — load-induced contrast false
+        // positives do not survive; real violations still fail.
+        await page.waitForTimeout(400);
+        const confirm = await new AxeBuilder({ page })
+          .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+          .analyze();
+        serious = confirm.violations.filter((v) =>
+          ["serious", "critical"].includes(v.impact ?? ""),
+        );
+      }
       if (serious.length > 0) {
         const summary = serious
           .map(
@@ -253,9 +300,20 @@ for (const theme of ["dark", "light"] as const) {
     const results = await new AxeBuilder({ page })
       .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
       .analyze();
-    const serious = results.violations.filter((v) =>
+    let serious = results.violations.filter((v) =>
       ["serious", "critical"].includes(v.impact ?? ""),
     );
+    if (serious.length > 0) {
+        // AJ-E806: confirmatory re-scan — load-induced contrast false
+        // positives do not survive; real violations still fail.
+        await page.waitForTimeout(400);
+        const confirm = await new AxeBuilder({ page })
+          .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+          .analyze();
+        serious = confirm.violations.filter((v) =>
+          ["serious", "critical"].includes(v.impact ?? ""),
+        );
+    }
     if (serious.length > 0) {
       const summary = serious
         .map(
@@ -296,9 +354,20 @@ for (const theme of ["dark", "light"] as const) {
     const results = await new AxeBuilder({ page })
       .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
       .analyze();
-    const serious = results.violations.filter((v) =>
+    let serious = results.violations.filter((v) =>
       ["serious", "critical"].includes(v.impact ?? ""),
     );
+    if (serious.length > 0) {
+        // AJ-E806: confirmatory re-scan — load-induced contrast false
+        // positives do not survive; real violations still fail.
+        await page.waitForTimeout(400);
+        const confirm = await new AxeBuilder({ page })
+          .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+          .analyze();
+        serious = confirm.violations.filter((v) =>
+          ["serious", "critical"].includes(v.impact ?? ""),
+        );
+    }
     if (serious.length > 0) {
       const summary = serious
         .map(
@@ -353,9 +422,19 @@ for (const theme of ["dark", "light"] as const) {
     const results = await new AxeBuilder({ page })
       .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
       .analyze();
-    const serious = results.violations.filter((v) =>
+    let serious = results.violations.filter((v) =>
       ["serious", "critical"].includes(v.impact ?? ""),
     );
+    if (serious.length > 0) {
+      // AJ-E806: confirmatory re-scan (same rationale as the kill sheet).
+      await page.waitForTimeout(400);
+      const confirm = await new AxeBuilder({ page })
+        .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+        .analyze();
+      serious = confirm.violations.filter((v) =>
+        ["serious", "critical"].includes(v.impact ?? ""),
+      );
+    }
     if (serious.length > 0) {
       const summary = serious
         .map(
@@ -413,9 +492,20 @@ for (const theme of ["dark", "light"] as const) {
     const results = await new AxeBuilder({ page })
       .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
       .analyze();
-    const serious = results.violations.filter((v) =>
+    let serious = results.violations.filter((v) =>
       ["serious", "critical"].includes(v.impact ?? ""),
     );
+    if (serious.length > 0) {
+        // AJ-E806: confirmatory re-scan — load-induced contrast false
+        // positives do not survive; real violations still fail.
+        await page.waitForTimeout(400);
+        const confirm = await new AxeBuilder({ page })
+          .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+          .analyze();
+        serious = confirm.violations.filter((v) =>
+          ["serious", "critical"].includes(v.impact ?? ""),
+        );
+    }
     if (serious.length > 0) {
       const summary = serious
         .map(
@@ -501,9 +591,20 @@ for (const theme of ["dark", "light"] as const) {
     const results = await new AxeBuilder({ page })
       .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
       .analyze();
-    const serious = results.violations.filter((v) =>
+    let serious = results.violations.filter((v) =>
       ["serious", "critical"].includes(v.impact ?? ""),
     );
+    if (serious.length > 0) {
+        // AJ-E806: confirmatory re-scan — load-induced contrast false
+        // positives do not survive; real violations still fail.
+        await page.waitForTimeout(400);
+        const confirm = await new AxeBuilder({ page })
+          .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+          .analyze();
+        serious = confirm.violations.filter((v) =>
+          ["serious", "critical"].includes(v.impact ?? ""),
+        );
+    }
     if (serious.length > 0) {
       const summary = serious
         .map(

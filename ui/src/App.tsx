@@ -28,6 +28,7 @@ import { OnboardingWizard } from "./screens/OnboardingWizard";
 import { NewSessionModal } from "./screens/NewSession";
 import { ReadyHome } from "./screens/ReadyHome";
 import { SessionPanel } from "./screens/WorkPanels";
+import { CostMatrix } from "./components/CostMatrix";
 import { RightInspector } from "./components/RightInspector";
 import {
   accountsList,
@@ -649,7 +650,14 @@ export default function App() {
               }}
             />
           ) : (
-            <RightInspector
+            <>
+              {/* AJ-E609: the Usage cost matrix — per-session model
+                  attribution, the dual subscription view, and the CSV
+                  export (rides above the inspector's content). */}
+              <div className="max-h-64 overflow-y-auto">
+                <CostMatrix />
+              </div>
+              <RightInspector
               selection={
                 selection.kind === "session"
                   ? { kind: "instance", id: selection.id }
@@ -722,6 +730,7 @@ export default function App() {
               }}
               onNew={() => setNewSession(true)}
             />
+            </>
           )}
         </main>
       </div>

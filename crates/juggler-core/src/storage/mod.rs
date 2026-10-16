@@ -289,8 +289,26 @@ CREATE TABLE reset_queue (
 CREATE INDEX idx_usage_acct_ts ON usage_events(account, ts);
 ";
 
+/// v19 (AJ-E609): user pricing overrides — same shape as the bundled
+/// ledger rows; a user row supersedes bundled rows for its model from
+/// its effective instant (query-time join; history reprices,
+/// `usage_events` never change).
+const V19: &str = "
+CREATE TABLE pricing_overrides (
+    model TEXT NOT NULL,
+    effective_from_ms INTEGER NOT NULL,
+    input_per_1k REAL NOT NULL,
+    output_per_1k REAL NOT NULL,
+    cache_read_per_1k REAL NOT NULL DEFAULT 0,
+    cache_write_per_1k REAL NOT NULL DEFAULT 0,
+    source_url TEXT NOT NULL DEFAULT '',
+    captured TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (model, effective_from_ms)
+);
+";
+
 const MIGRATIONS: &[&str] = &[
-    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17, V18,
+    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17, V18, V19,
 ];
 
 /// An opened AI Juggler database with typed repositories.

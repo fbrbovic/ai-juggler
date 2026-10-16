@@ -106,6 +106,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
             commands::usage_source_health,
+            commands::cost_rollups,
+            commands::cost_csv_export,
+            commands::pricing_override_set,
+            commands::pricing_override_clear,
+            commands::pricing_catalog_info,
             commands::harnesses_list,
             commands::legacy_aliases::harnesses_list_alias,
             commands::accounts_list,

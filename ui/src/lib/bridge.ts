@@ -834,6 +834,58 @@ export interface CleanupAlertsData {
 /** AJ-E512: reads the passive alerts (hog alerts name the top helper;
  * idle nudges fire once per orphan). Purely passive — no alert
  * carries a signal path; the hog alert routes to the staged sheet. */
+/** AJ-E609: one cost rollup row (session × model × day). */
+export interface CostRollupRow {
+  key: string;
+  model?: string;
+  day?: string;
+  tokens: { input: number; output: number; cache_read: number; cache_write: number; reasoning: number };
+  usd: { usd?: number; label: string };
+  credits?: number;
+  confidence: "Measured" | "Computed" | "Estimate";
+}
+
+/** AJ-E609: the dual subscription view ("≈$X at API prices · you pay flat"). */
+export interface SubscriptionViewData {
+  api_equivalent_usd?: number;
+  flat_fee_usd?: number;
+  value_ratio?: number;
+}
+
+/** AJ-E609: the cost matrix payload (the UI and the CSV read the same rows). */
+export interface CostRollupsData {
+  rows: CostRollupRow[];
+  subscription: SubscriptionViewData;
+  pricing_stale: boolean;
+  pricing_last_synced_ms?: number;
+  total_usd?: number;
+  scope: string;
+}
+
+/** AJ-E609: the session cost matrix + dual subscription view. */
+export async function costRollups(account?: string): Promise<CostRollupsData> {
+  if (!hasBackend) {
+    return (
+      (window as unknown as { __AIJ_COST_ROLLUPS__?: CostRollupsData })
+        .__AIJ_COST_ROLLUPS__ ?? {
+        rows: [],
+        subscription: {},
+        pricing_stale: false,
+        scope: account ?? "ALL",
+      }
+    );
+  }
+  return invoke<CostRollupsData>("cost_rollups", { account });
+}
+
+/** AJ-E609: stream the CSV export; resolves to the written file path. */
+export async function costCsvExport(account?: string): Promise<string> {
+  if (!hasBackend) {
+    return (window as unknown as { __AIJ_COST_CSV__?: string }).__AIJ_COST_CSV__ ?? "";
+  }
+  return invoke<string>("cost_csv_export", { account });
+}
+
 export async function cleanupAlerts(): Promise<CleanupAlertsData> {
   if (!hasBackend) {
     return (

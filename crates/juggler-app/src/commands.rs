@@ -47,11 +47,237 @@ impl AppInfo {
     }
 }
 
-/// Returns static application information.
+/// AJ-E609: the account's cost rollups (session/account/project/day
+/// dimensions share one shape — the UI matrix and the CSV export read
+/// the SAME rows, so reconciliation is exact) plus the dual
+/// subscription view and the pricing-staleness flag.
+#[derive(Clone, PartialEq, Debug, serde::Serialize)]
+pub struct CostRollupsInfo {
+    /// Day-bucketed rollup rows (`key` = session id in the session
+    /// dimension).
+    pub rows: Vec<juggler_core::cost_ledger::CostRollup>,
+    /// "≈$X at API prices · you pay flat" — ratio only when a fee
+    /// exists (AJ-E610's form owns entry).
+    pub subscription: juggler_core::cost_ledger::SubscriptionView,
+    /// The bundled pricing table is >30 d old (inline warn).
+    pub pricing_stale: bool,
+    /// The bundled table's `last synced`, epoch ms.
+    pub pricing_last_synced_ms: Option<i64>,
+    /// The grand-total row (ALL bucket) for the scope.
+    pub total_usd: Option<f64>,
+    /// The scope the query ran over (account id or `ALL`).
+    pub scope: String,
+}
+
+/// The catalog as loaded: bundled seed + user overrides + staleness.
+#[must_use]
+fn pricing_catalog(
+    storage: &juggler_core::storage::Storage,
+) -> juggler_core::cost_ledger::PricingCatalog {
+    use juggler_core::cost_ledger::PricingCatalog;
+    let mut catalog = PricingCatalog {
+        bundled: juggler_core::cost_ledger::load_seed_rows(),
+        overrides: storage.usage().pricing_overrides().unwrap_or_default(),
+        last_synced_ms: None,
+    };
+    catalog.last_synced_ms = storage
+        .app_settings()
+        .get("pricing_synced_at")
+        .ok()
+        .flatten()
+        .and_then(|value| value.parse::<i64>().ok());
+    catalog
+}
+
+/// The scoped events (one account, or every account with usage) plus
+/// the account's optional user-entered flat fee.
+fn scoped_cost_events(
+    storage: &juggler_core::storage::Storage,
+    account: Option<&str>,
+) -> (String, Vec<juggler_core::quota::UsageEvent>, Option<f64>) {
+    let account = account.map_or_else(|| "ALL".to_owned(), str::to_owned);
+    let usage = storage.usage();
+    let mut events = Vec::new();
+    if account == "ALL" {
+        for account_id in usage.usage_accounts().unwrap_or_default() {
+            events.extend(usage.events_for_account(&account_id, 0).unwrap_or_default());
+        }
+    } else {
+        events = usage.events_for_account(&account, 0).unwrap_or_default();
+    }
+    let fee = storage
+        .app_settings()
+        .get(&format!("subscription_fee:{account}"))
+        .ok()
+        .flatten()
+        .and_then(|value| value.parse::<f64>().ok());
+    (account, events, fee)
+}
+
+/// AJ-E609 Req.3: the per-session cost matrix (session × model × day).
+#[tauri::command]
+#[must_use]
+pub fn cost_rollups(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+    account: Option<String>,
+) -> CostRollupsInfo {
+    let Ok(storage) = state.storage.lock() else {
+        return CostRollupsInfo::default_cost();
+    };
+    let catalog = pricing_catalog(&storage);
+    let (scope, events, fee) = scoped_cost_events(&storage, account.as_deref());
+    let rows = juggler_core::cost_ledger::rollup(
+        &events,
+        &catalog,
+        juggler_core::cost_ledger::RollupDimension::Session,
+    );
+    let all = juggler_core::cost_ledger::rollup(
+        &events,
+        &catalog,
+        juggler_core::cost_ledger::RollupDimension::All,
+    );
+    let total_usd = all.first().and_then(|row| row.usd.usd);
+    let view = juggler_core::cost_ledger::subscription_view(total_usd, fee);
+    let now = juggler_core::model::Timestamp::now().millis();
+    CostRollupsInfo {
+        rows,
+        subscription: view,
+        pricing_stale: catalog.is_stale(now),
+        pricing_last_synced_ms: catalog.last_synced_ms,
+        total_usd,
+        scope,
+    }
+}
+
+impl CostRollupsInfo {
+    /// The poison/error fallback: an empty, honest matrix.
+    #[must_use]
+    fn default_cost() -> Self {
+        Self {
+            rows: Vec::new(),
+            subscription: juggler_core::cost_ledger::subscription_view(None, None),
+            pricing_stale: false,
+            pricing_last_synced_ms: None,
+            total_usd: None,
+            scope: String::new(),
+        }
+    }
+}
+
+/// AJ-E609 Req.6: streams the CSV to a temp file (chunked month
+/// windows — never a full-table read) and returns its path. The rows
+/// are the SAME rollup shape the UI displays.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] on storage or I/O failure.
+#[tauri::command]
+pub fn cost_csv_export(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+    account: Option<String>,
+) -> AppResult<String> {
+    let storage = lock_storage_arc(&state)?;
+    let catalog = pricing_catalog(&storage);
+    let usage = storage.usage();
+    let accounts: Vec<String> = match account.as_deref() {
+        Some(named) => vec![named.to_owned()],
+        None => usage.usage_accounts()?,
+    };
+    let month_ms = 30 * 24 * 60 * 60 * 1000_i64;
+    let now = juggler_core::model::Timestamp::now().millis();
+    let path = std::env::temp_dir().join(format!("ai-juggler-costs-{now}.csv"));
+    let mut file =
+        std::fs::File::create(&path).map_err(|error| AppError::io("create cost csv", &error))?;
+    // Header + chunked month windows, merged into the day map as we
+    // go (bounded memory: the map is day-bucketed, the events chunk
+    // never accumulates).
+    let mut merged: Vec<juggler_core::cost_ledger::CostRollup> = Vec::new();
+    for account_id in &accounts {
+        let mut hi = now;
+        loop {
+            let lo = hi.saturating_sub(month_ms);
+            let chunk = usage.events_between(account_id, lo, hi)?;
+            if !chunk.is_empty() {
+                let mut rows = juggler_core::cost_ledger::rollup(
+                    &chunk,
+                    &catalog,
+                    juggler_core::cost_ledger::RollupDimension::Session,
+                );
+                merged.append(&mut rows);
+            }
+            if lo <= 0 {
+                break;
+            }
+            hi = lo;
+        }
+    }
+    juggler_core::cost_ledger::write_csv(&merged, &mut file)
+        .map_err(|error| AppError::io("write cost csv", &error))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// AJ-E609 Req.1: set one user pricing override (the editor shows
+/// `source_url` + effective date before save — AJ-E610's surface).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] on validation or storage failure.
+#[tauri::command]
+pub fn pricing_override_set(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+    row: juggler_core::cost_ledger::LedgerPriceRow,
+) -> AppResult<()> {
+    if row.model.trim().is_empty() || row.source_url.trim().is_empty() {
+        return Err(AppError::Validation {
+            subject: "pricing override",
+            message: "model and source_url are required (auditable pricing law)".into(),
+        });
+    }
+    let storage = lock_storage_arc(&state)?;
+    storage
+        .usage()
+        .pricing_override_upsert(&row)
+        .map_err(AppError::from)?;
+    Ok(())
+}
+
+/// AJ-E609: clear one override (history reprices back to bundled).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] on storage failure.
+#[tauri::command]
+pub fn pricing_override_clear(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+    model: String,
+    effective_from_ms: i64,
+) -> AppResult<()> {
+    let storage = lock_storage_arc(&state)?;
+    storage
+        .usage()
+        .pricing_override_delete(&model, effective_from_ms)
+        .map_err(AppError::from)?;
+    Ok(())
+}
+
+/// AJ-E609: catalog metadata for the pricing editor (staleness, last
+/// synced, the bundled + override rows).
+#[tauri::command]
+#[must_use]
+pub fn pricing_catalog_info(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+) -> juggler_core::cost_ledger::PricingCatalog {
+    match state.storage.lock() {
+        Ok(storage) => pricing_catalog(&storage),
+        Err(_) => juggler_core::cost_ledger::PricingCatalog::default(),
+    }
+}
+
 /// AJ-E607 Req.5: every ingest source's observable health — the typed
 /// state the AJ-E610 "Feed stale" banner binds to. A source silent
-/// >10 min carries `last_event_at` older than that (the ENGINE
-/// demotes its Measured readings to Stale; data is never deleted).
+/// for more than 10 min carries `last_event_at` older than that (the
+/// ENGINE demotes its Measured readings to Stale; data is never
+/// deleted).
 #[tauri::command]
 #[must_use]
 pub fn usage_source_health(

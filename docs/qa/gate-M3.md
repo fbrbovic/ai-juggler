@@ -128,3 +128,85 @@ session; the maintained login is pending re-auth (the same blocker as
 the E5 authenticated-helper dogfood, gate-E5.md). Fixture gates above
 pass; the live check is recorded as PENDING here and rides the next
 authenticated session.
+
+## AJ-E608 — burn-rate forecast (2026-10-16)
+
+Fixture timelines with implementation-independent oracles (the
+generator's arithmetic), `crates/juggler-core/tests/quota_forecast.rs`
+— 13/13 green:
+
+```text
+test accelerating_burn_mape_within_30pct_after_20_min ... ok   (oracle 20.6 min, MAPE ≤30%)
+test admission_gate_verdicts_and_never_blocks ... ok           (OK/Tight/No; None on unknown inputs)
+test calibration_notes_trip_only_beyond_2x ... ok              (2.5×/0.4× trip; 1.5× holds)
+test cold_start_returns_learning_and_no_number ... ok          (9 min ⇒ Learning, no number)
+test constant_burn_reproduces_known_tte_within_10pct ... ok     (oracle 60 min ±10%)
+test median_session_burn_ignores_empty_sessions ... ok
+test no_cap_means_no_headroom_forecast ... ok
+test one_estimated_input_confidence_inherits_lowest ... ok      (cone renders a range)
+test rate_cone_shape_is_stable ... ok
+test stalled_burn_is_wont_exhaust_never_a_fake_number ... ok
+test thirty_day_fixture_timeline_evaluates_fast ... ok          (≤500 ms ceiling)
+test tte_beyond_the_reset_is_wont_exhaust_never_emitted ... ok  (incl. unknown-reset ⇒ no promise)
+test zcode_forecasts_run_on_credits ... ok                     (oracle 30 min)
+```
+
+Numeric-trap record: an EMPTY float `.sum()` on this toolchain yields
+**−0.0** (reduction contraction), and `headroom / −0.0 = −inf` slipped
+past the reset bound. Fixed by IEEE signed-zero normalisation
+(`+ 0.0`) at every fold plus a `!tte.is_finite()` guard; both are
+documented in `quota_forecast.rs` and pinned by the stalled fixture.
+
+## AJ-E609 — cost ledger (2026-10-16)
+
+### ccusage-pattern cross-check (shared fixture corpus)
+
+```text
+$ python3 docs/research/evidence/billing/ccusage-oracle.py
+corpus=crates/juggler-adapters/tests/fixtures/quota/claude-transcript.jsonl
+sha256=143941e1514e074ec144cfe0b56a2566763c0d8fd1735a2b716ca0dd66d6947b
+priced_messages=2      (uuid-deduped — the resumed duplicate counts once)
+total_usd=0.0083100
+
+Rust rollup on the same corpus + seed: 0.0083100
+delta: $0.0000000
+```
+
+(The oracle prices the corpus with independent python arithmetic —
+the ccusage aggregation pattern; it dedupes by message uuid exactly
+like the store.)
+
+### Tests (`cargo test -p juggler-core --test cost_ledger`)
+
+12/12 green: exact cache-class pricing (hand oracle 37.95), unpriced
+`—` never `$0.00`, effective_from event-time selection,
+repricing-is-retroactive + `usage_events` byte-identical (raw SQL
+before/after), stale >30d, `ZCode` credits alongside never converted,
+dual subscription ratio only with a fee, model-switch row split
+summing to the session total, CSV↔rollup reconciliation to the cent,
+UTC day buckets, seed loads with auditable fields, corpus = oracle.
+
+### UI (CostMatrix + gallery 25-costs)
+
+5/5 vitest green (label discipline, `—` law, dual view, th scope +
+totals row, "you paid $" grep gate). Visual: 24 captures across
+priced/unpriced-model/stale-pricing × 4 viewports × 2 themes in
+`_gallery/25-costs/`; full suite 246/246 twice consecutively.
+
+### AJ-E806 flake record — axe color-contrast under parallel load
+
+Under the FULL parallel visual suite, axe intermittently flagged
+serious color-contrast violations on a DIFFERENT dialog each run (kill
+sheet refused/light, then recovery light, then rail light) — each
+passing in isolation and on the clean tree: load-induced false
+positives while dialog transitions settle. Fix (not a retry): a
+confirmatory 400 ms re-scan in every a11y block — real violations
+reproduce deterministically and still fail; false positives do not
+survive. Two full-suite runs green after the fix.
+
+### Vendor passthrough note
+
+`cost.total_cost_usd` passthrough ("vendor-reported" label) is not
+ingested yet — it rides the statusline capture's live verification
+(the AJ-E602 candidate, pending the authenticated session). Until
+then USD is uniformly `Estimate`, which is the stricter label.
