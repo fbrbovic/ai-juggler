@@ -2226,6 +2226,8 @@ dependencies = [
  "juggler-adapter",
  "juggler-core",
  "notify",
+ "rusqlite",
+ "serde",
  "serde_json",
  "sha2 0.11.0",
  "tempfile",

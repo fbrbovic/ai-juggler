@@ -48,6 +48,18 @@ impl AppInfo {
 }
 
 /// Returns static application information.
+/// AJ-E607 Req.5: every ingest source's observable health — the typed
+/// state the AJ-E610 "Feed stale" banner binds to. A source silent
+/// >10 min carries `last_event_at` older than that (the ENGINE
+/// demotes its Measured readings to Stale; data is never deleted).
+#[tauri::command]
+#[must_use]
+pub fn usage_source_health(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+) -> Vec<crate::usage_pipeline::SourceHealthInfo> {
+    crate::usage_pipeline::source_health(&state)
+}
+
 #[tauri::command]
 #[must_use]
 ///
