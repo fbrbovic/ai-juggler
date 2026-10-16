@@ -181,7 +181,7 @@ export function RightInspector({
   onOpenSession: (id: string) => void;
   onLaunch: (recipe: LaunchRecipeInfo, project: ProjectInfo) => void;
   onStopped: () => void;
-  onHandover: (sessionId: string, targetProfileId: string) => void;
+  onHandover: (sessionId: string, targetProfileId: string, targetLabel: string) => void;
   onNew: () => void;
   processesBridge?: ProcessesBridge;
   focusBridge?: FocusBridge;
@@ -390,7 +390,7 @@ function InspectorPanel(props: {
   onOpenSession: (id: string) => void;
   onLaunch: (recipe: LaunchRecipeInfo, project: ProjectInfo) => void;
   onStopped: () => void;
-  onHandover: (sessionId: string, targetProfileId: string) => void;
+  onHandover: (sessionId: string, targetProfileId: string, targetLabel: string) => void;
   onFocusTerminal: () => void;
   focusBridge: FocusBridge;
   visible: boolean;
@@ -522,7 +522,7 @@ type PanelProps = {
   onOpenSession: (id: string) => void;
   onLaunch: (recipe: LaunchRecipeInfo, project: ProjectInfo) => void;
   onStopped: () => void;
-  onHandover: (sessionId: string, targetProfileId: string) => void;
+  onHandover: (sessionId: string, targetProfileId: string, targetLabel: string) => void;
   onFocusTerminal: () => void;
   /** AJ-E413 seam (E410 pattern): the desktop window-focus source
    *  (tests inject a recorder; the app uses the bridge default). */
@@ -823,7 +823,7 @@ function InstanceOverview(props: PanelProps) {
                     key={recipe.id}
                     type="button"
                     disabled={!ready}
-                    onClick={() => props.onHandover(session.id, recipe.id)}
+                    onClick={() => props.onHandover(session.id, recipe.id, recipe.account_label)}
                     title={ready ? "Experimental: copies the full transcript set to this account and resumes it — F1 Transcript-only until validated" : "Needs sign-in first (Ready home)"}
                     className={
                       "rounded-lg border px-2.5 py-1.5 text-[11px] transition-colors " +

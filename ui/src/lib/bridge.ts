@@ -1579,6 +1579,72 @@ export async function sessionHandover(
   return invoke<LaunchResult>("session_handover", { sessionId, targetProfileId });
 }
 
+/** AJ-E205: the preflight verdict for one switch (rendered by the
+ * freeze dialog before anything executes). */
+export interface PreflightInfoData {
+  mechanism: string;
+  fidelity: string;
+  score: number;
+  warnings: string[];
+  zombies: string[];
+  diff_snapshotted: boolean;
+  source_live: boolean;
+  experimental_copy: string;
+}
+
+/** AJ-E205: preflight — ordered checks stop BEFORE any byte moves;
+ * warnings render in the freeze dialog. */
+export async function switchPreflight(
+  sessionId: string,
+  targetProfileId: string,
+): Promise<PreflightInfoData> {
+  if (!hasBackend) {
+    return (
+      (window as unknown as { __AIJ_SWITCH_PREFLIGHT__?: PreflightInfoData })
+        .__AIJ_SWITCH_PREFLIGHT__ ?? {
+        mechanism: "transplant",
+        fidelity: "F1",
+        score: 0.85,
+        warnings: [],
+        zombies: [],
+        diff_snapshotted: false,
+        source_live: true,
+        experimental_copy:
+          "Experimental: only the main transcript moves. Subagent files and rewind history stay on the source. The source stays resumable.",
+      }
+    );
+  }
+  return invoke<PreflightInfoData>("switch_preflight", { sessionId, targetProfileId });
+}
+
+/** AJ-E205: executes the switch with the user's freeze choice
+ * (`finish-turn` default | `stop-now`) — the pipeline stages,
+ * verifies, launches, and records the edge. */
+export async function switchExecute(
+  sessionId: string,
+  targetProfileId: string,
+  freezeChoice: string,
+): Promise<LaunchResult> {
+  if (!hasBackend) {
+    const seams = window as unknown as {
+      __AIJ_SWITCH_EXECUTE_FAIL__?: string;
+      __AIJ_SWITCH_EXECUTE_HANG__?: boolean;
+    };
+    if (seams.__AIJ_SWITCH_EXECUTE_FAIL__ !== undefined) {
+      return Promise.reject(seams.__AIJ_SWITCH_EXECUTE_FAIL__);
+    }
+    if (seams.__AIJ_SWITCH_EXECUTE_HANG__) {
+      return new Promise<LaunchResult>(() => {});
+    }
+    return { session_id: `sess-preview-${Date.now()}`, pid: 0 };
+  }
+  return invoke<LaunchResult>("switch_execute", {
+    sessionId,
+    targetProfileId,
+    freezeChoice,
+  });
+}
+
 /** Native macOS folder picker; null when cancelled. */
 export async function pickDirectory(): Promise<string | null> {
   if (!hasBackend) return null;

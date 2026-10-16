@@ -694,3 +694,85 @@ for (const theme of ["dark", "light"] as const) {
     expect(serious).toHaveLength(0);
   });
 }
+
+
+// AJ-E205: axe-core 0 critical/serious on the switch flow — freeze
+// dialog (two radio choices, focus trapped), labelled stage panel,
+// and the source-safe failure banner — in BOTH themes.
+for (const theme of ["dark", "light"] as const) {
+  test(`switch flow — freeze dialog + failure — axe 0 critical/serious — ${theme}`, async ({ page }) => {
+    await page.addInitScript(
+      ({ fixture, t0, theme: t, preflight, fail }) => {
+        const w = window as unknown as Record<string, unknown>;
+        w.__AIJ_FIXTURE__ = fixture;
+        w.__AIJ_SWITCH_PREFLIGHT__ = preflight;
+        w.__AIJ_SWITCH_EXECUTE_FAIL__ = fail;
+        localStorage.setItem("aij.theme", t);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+        Date.now = () => t0;
+      },
+      {
+        fixture: allStatuses,
+        t0: T0,
+        theme,
+        preflight: {
+          mechanism: "transplant",
+          fidelity: "F2",
+          score: 0.78,
+          warnings: ["This conversation was compacted. Early detail carries as text, not as live memory — it may ask about early decisions."],
+          zombies: [],
+          diff_snapshotted: true,
+          source_live: true,
+          experimental_copy: "Experimental: only the main transcript moves. Subagent files and rewind history stay on the source. The source stays resumable.",
+        },
+        fail: "S-F5: target launch failed — staged for retry (terminal spawn failed).",
+      },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+    await page.getByRole("tab", { name: "Sessions" }).click();
+    await page.getByRole("button", { name: /Work Max/ }).first().click();
+    await page.getByTestId("handover-section")
+      .locator("button[title*='Experimental']")
+      .first()
+      .click();
+    await expect(page.getByTestId("switch-flow")).toBeVisible();
+    // Scope to the dialog while a modal is open: the backdrop
+    // intentionally dims the app behind it (a transient rendering
+    // state, not the design's contrast); the dialog itself is
+    // scanned in full.
+    const dialogScan = async () => {
+      const results = await new AxeBuilder({ page })
+        .include("[data-testid='switch-flow']")
+        .analyze();
+      let serious = results.violations.filter((v) =>
+        ["serious", "critical"].includes(v.impact ?? ""),
+      );
+      if (serious.length > 0) {
+        await page.waitForTimeout(400);
+        const confirm = await new AxeBuilder({ page })
+          .include("[data-testid='switch-flow']")
+          .analyze();
+        serious = confirm.violations.filter((v) =>
+          ["serious", "critical"].includes(v.impact ?? ""),
+        );
+      }
+      return serious;
+    };
+    const serious = await dialogScan();
+    // Then the failure banner surface.
+    await page.getByTestId("switch-confirm").click();
+    await expect(page.getByTestId("switch-failed")).toBeVisible();
+    const serious2 = await dialogScan();
+    const all = [...serious, ...serious2];
+    if (all.length > 0) {
+      const summary = all
+        .map((v) => `${v.id} (${v.impact}): ${v.nodes.map((n) => n.target.join(" ")).slice(0, 3).join(", ")}`)
+        .join("\n");
+      throw new Error(`axe violations on the switch flow (${theme}):\n${summary}`);
+    }
+    expect(all).toHaveLength(0);
+  });
+}

@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking", "28-switch"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -2390,6 +2390,145 @@ for (const theme of THEMES) {
       await page.getByRole("button", { name: "Resume" }).focus();
       await page.screenshot({
         path: resolve(GALLERY, `27-ranking/queue-${vp.name}-${theme}.png`),
+      });
+    });
+  }
+}
+/**
+ * AJ-E205 — the switch execution surface: the two-choice freeze
+ * dialog (default finish-turn; stop-now with the truncation note),
+ * preflight warnings rendered before anything moves, the honest
+ * labelled stage panel while executing (no fake determinism), and
+ * the §7.1 source-safe failure banner — across 1280×800 + 800×600 ×
+ * light+dark. Copy conformance asserted before each capture.
+ */
+const SWITCH_VP = [
+  { name: "1280x800", width: 1280, height: 800 },
+  { name: "800x600", width: 800, height: 600 },
+] as const;
+
+const preflightSeams: Record<string, unknown> = {
+  "live-default": undefined, // the bridge default: live source, no warnings
+};
+void preflightSeams;
+
+for (const theme of THEMES) {
+  for (const vp of SWITCH_VP) {
+    const openDialog = async (page: import("@playwright/test").Page) => {
+      await page.getByRole("tab", { name: "Sessions" }).click();
+      await page.getByRole("button", { name: /Work Max/ }).first().click();
+      await page.getByTestId("handover-section")
+        .locator("button[title*='Experimental']")
+        .first()
+        .click();
+      await expect(page.getByTestId("switch-flow")).toBeVisible();
+    };
+
+    test(`switch — freeze dialog (finish-turn default) — ${vp.name} — ${theme}`, async ({ page }) => {
+      await page.addInitScript(
+        ({ fixture, t0, theme: themeName }) => {
+          const w = window as unknown as Record<string, unknown>;
+          w.__AIJ_FIXTURE__ = fixture;
+          localStorage.setItem("aij.theme", themeName);
+          localStorage.setItem("aij.onboarding.dismissed", "1");
+          sessionStorage.setItem("aij.ready.skipped", "1");
+          Date.now = () => t0;
+        },
+        { fixture: allStatuses, t0: T0, theme },
+      );
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await openDialog(page);
+      await expect(page.getByText("Finish this turn, then switch")).toBeVisible();
+      await expect(page.getByTestId("switch-experimental")).toContainText("Experimental");
+      await page.screenshot({
+        path: resolve(GALLERY, `28-switch/dialog-finish-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`switch — freeze dialog (stop-now + warnings) — ${vp.name} — ${theme}`, async ({ page }) => {
+      await page.addInitScript(
+        ({ fixture, t0, theme: themeName }) => {
+          const w = window as unknown as Record<string, unknown>;
+          w.__AIJ_FIXTURE__ = fixture;
+          w.__AIJ_SWITCH_PREFLIGHT__ = {
+            mechanism: "transplant",
+            fidelity: "F2",
+            score: 0.78,
+            warnings: [
+              "This conversation was compacted. Early detail carries as text, not as live memory — it may ask about early decisions.",
+            ],
+            zombies: ["pid 1234 (node vite)"],
+            diff_snapshotted: true,
+            source_live: true,
+            experimental_copy:
+              "Experimental: only the main transcript moves. Subagent files and rewind history stay on the source. The source stays resumable.",
+          };
+          localStorage.setItem("aij.theme", themeName);
+          localStorage.setItem("aij.onboarding.dismissed", "1");
+          sessionStorage.setItem("aij.ready.skipped", "1");
+          Date.now = () => t0;
+        },
+        { fixture: allStatuses, t0: T0, theme },
+      );
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await openDialog(page);
+      await page.getByText("Stop now and switch").click();
+      await expect(page.getByTestId("switch-warnings")).toContainText("compacted");
+      await page.screenshot({
+        path: resolve(GALLERY, `28-switch/dialog-stop-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`switch — executing (labelled stages) — ${vp.name} — ${theme}`, async ({ page }) => {
+      await page.addInitScript(
+        ({ fixture, t0, theme: themeName }) => {
+          const w = window as unknown as Record<string, unknown>;
+          w.__AIJ_FIXTURE__ = fixture;
+          w.__AIJ_SWITCH_EXECUTE_HANG__ = true;
+          localStorage.setItem("aij.theme", themeName);
+          localStorage.setItem("aij.onboarding.dismissed", "1");
+          sessionStorage.setItem("aij.ready.skipped", "1");
+          Date.now = () => t0;
+        },
+        { fixture: allStatuses, t0: T0, theme },
+      );
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await openDialog(page);
+      await page.getByTestId("switch-confirm").click();
+      await expect(page.getByTestId("switch-executing")).toContainText("Launch");
+      await page.screenshot({
+        path: resolve(GALLERY, `28-switch/executing-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`switch — failure banner (source safe) — ${vp.name} — ${theme}`, async ({ page }) => {
+      await page.addInitScript(
+        ({ fixture, t0, theme: themeName }) => {
+          const w = window as unknown as Record<string, unknown>;
+          w.__AIJ_FIXTURE__ = fixture;
+          w.__AIJ_SWITCH_EXECUTE_FAIL__ =
+            "S-F5: target launch failed — staged for retry (terminal spawn failed).";
+          localStorage.setItem("aij.theme", themeName);
+          localStorage.setItem("aij.onboarding.dismissed", "1");
+          sessionStorage.setItem("aij.ready.skipped", "1");
+          Date.now = () => t0;
+        },
+        { fixture: allStatuses, t0: T0, theme },
+      );
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await openDialog(page);
+      await page.getByTestId("switch-confirm").click();
+      await expect(page.getByTestId("switch-failed")).toContainText("resume it exactly where you left it");
+      await page.screenshot({
+        path: resolve(GALLERY, `28-switch/failed-${vp.name}-${theme}.png`),
       });
     });
   }

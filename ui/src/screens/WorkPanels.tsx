@@ -59,7 +59,7 @@ export function SessionPanel({
   accounts: AccountInfo[];
   onOpenProject: (id: string) => void;
   onStopped: () => void;
-  onHandover: (sessionId: string, targetProfileId: string) => void;
+  onHandover: (sessionId: string, targetProfileId: string, targetLabel: string) => void;
 }) {
   const isLoginTerminal = Boolean(loginTerminal);
   const title = loginTerminal?.title ?? session?.account_label ?? "Session";
@@ -155,7 +155,7 @@ export function SessionPanel({
                     key={recipe.id}
                     type="button"
                     disabled={!ready}
-                    onClick={() => onHandover(session.id, recipe.id)}
+                    onClick={() => onHandover(session.id, recipe.id, recipe.account_label)}
                     title={
                       ready
                         ? "Moves this session's context to this account and resumes it"

@@ -3970,27 +3970,202 @@ pub fn session_handover_impl(
     session_id: &str,
     target_profile_id: &str,
 ) -> AppResult<LaunchResult> {
+    // AJ-E205: the pipeline owns execution (freeze → stage → verify →
+    // launch → record); the default freeze choice waits for the turn
+    // boundary. The UI calls `switch_execute` with the user's choice.
+    switch_execute_impl(state, session_id, target_profile_id, "finish-turn")
+}
+
+/// AJ-E205: the preflight verdict for one switch (rendered by the
+/// freeze dialog / door before anything executes).
+#[derive(Clone, PartialEq, Debug, serde::Serialize)]
+pub struct PreflightInfo {
+    /// Mechanism wire name (`native-resume|transplant|replay|pack`).
+    pub mechanism: String,
+    /// The F-label shown (F0–F4).
+    pub fidelity: String,
+    /// The capped score (internal honesty; the label is the UI).
+    pub score: f64,
+    /// §7.1 warning copy (verbatim table renders).
+    pub warnings: Vec<String>,
+    /// Zombie children listed at freeze (no action taken).
+    pub zombies: Vec<String>,
+    /// Whether an uncommitted diff snapshot rides the pack.
+    pub diff_snapshotted: bool,
+    /// Whether the source instance is live (freeze dialog needed).
+    pub source_live: bool,
+    /// The F1-experimental transplant copy (until E210 proves pairs).
+    pub experimental_copy: String,
+}
+
+/// AJ-E205: preflight for a switch — ordered checks stop BEFORE any
+/// byte moves; warnings render for the door (E206).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] when resolution fails or a hard
+/// gate stops the switch.
+#[tauri::command]
+pub fn switch_preflight(
+    state: tauri::State<'_, Arc<AppState>>,
+    session_id: String,
+    target_profile_id: String,
+) -> AppResult<PreflightInfo> {
+    switch_preflight_impl(state.inner(), &session_id, &target_profile_id)
+}
+
+/// Core implementation shared with integration tests.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] on resolution failures or hard
+/// preflight stops.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // display-copy rounding, clamped to [0, u32::MAX) before the cast
+pub fn switch_preflight_impl(
+    state: &Arc<AppState>,
+    session_id: &str,
+    target_profile_id: &str,
+) -> AppResult<PreflightInfo> {
+    use juggler_handover::pipeline::{self, CopySituation};
+
+    let (_profile_b, account_b) = find_profile_with_account_arc(state, target_profile_id)?;
+    let (source, account_a) = handover_source(state, session_id)?;
+    let reference = source.transcript_ref.clone().ok_or_else(|| AppError::Io {
+        context: "hand over",
+        message: "Couldn't tell which file is this session — pick it".into(),
+    })?;
+
+    // Compaction scan from the source transcript (the F2 signal).
+    let compacted = std::fs::read(&reference.path).is_ok_and(|bytes| {
+        juggler_adapters::claude_transcript::parse_transcript(&bytes).has_compact_boundary()
+    });
+
+    // Target quota gate from the E606/E610 engine (hard filter =
+    // exhausted with no reset; tight = the warn copy).
+    let now = Timestamp::now().millis();
+    let storage = lock_storage_arc(state)?;
+    let target_display = quota_display_inner(&storage, &account_b, now);
+    let (exhausted, tight) = match target_display.five_hour.as_ref().map(|w| w.state.as_str()) {
+        Some("exhausted") => (true, None),
+        Some(_) => {
+            let used = target_display
+                .five_hour
+                .as_ref()
+                .and_then(|window| window.percentage)
+                .unwrap_or(0.0);
+            let tight = target_display
+                .forecast
+                .tte_min
+                .filter(|tte| *tte < 45.0)
+                .map(|tte| {
+                    (
+                        (100.0 - used).round().clamp(0.0, 99.0) as u32,
+                        tte.round().clamp(0.0, 999.0) as u32,
+                    )
+                });
+            (false, tight)
+        }
+        None => (false, None),
+    };
+    drop(storage);
+
+    let input = pipeline::PreflightInput {
+        fidelity: juggler_handover::fidelity::base_dispositions(
+            account_a.harness.as_str(),
+            account_b.harness.as_str(),
+        ),
+        compacted,
+        gates: pipeline::PreflightGates {
+            target_exhausted_no_reset: exhausted,
+            version_drift: false, // per-version pinning rides E210's matrix
+        },
+        target_quota_tight: tight,
+        git: pipeline::GitState::default(),
+        hop_count: 0,
+        replay_tokens_spent: 0,
+    };
+    let report = pipeline::preflight(&input).map_err(|failure| AppError::Io {
+        context: "hand over",
+        message: failure.to_string(),
+    })?;
+    let warnings: Vec<String> = report
+        .warnings
+        .iter()
+        .map(|situation| pipeline::user_copy(situation.clone()))
+        .collect();
+    let source_live = matches!(source.status.as_str(), "running" | "starting");
+    Ok(PreflightInfo {
+        mechanism: match report.mechanism {
+            pipeline::Mechanism::NativeResume => "native-resume".to_owned(),
+            pipeline::Mechanism::Transplant => "transplant".to_owned(),
+            pipeline::Mechanism::Replay => "replay".to_owned(),
+            pipeline::Mechanism::PackOnly => "pack".to_owned(),
+        },
+        fidelity: report.pair.label.as_str().to_owned(),
+        score: report.pair.score,
+        warnings,
+        zombies: report.zombie_children.clone(),
+        diff_snapshotted: report.diff_snapshotted,
+        source_live,
+        experimental_copy: pipeline::user_copy(CopySituation::TransplantUnproven {
+            account_a: account_a.label.clone(),
+        }),
+    })
+}
+
+/// AJ-E205: executes a switch with the user's freeze choice — the
+/// pipeline stages + verifies + launches (via the supervisor), and
+/// every attempt records its edge in the Switch Graph (E201).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on any failure; the source
+/// is exactly resumable in all of them (S-F contract).
+#[tauri::command]
+pub fn switch_execute(
+    state: tauri::State<'_, Arc<AppState>>,
+    session_id: String,
+    target_profile_id: String,
+    freeze_choice: String,
+) -> AppResult<LaunchResult> {
+    switch_execute_impl(
+        state.inner(),
+        &session_id,
+        &target_profile_id,
+        &freeze_choice,
+    )
+}
+
+/// Core implementation shared with integration tests.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] message on any failure.
+pub fn switch_execute_impl(
+    state: &Arc<AppState>,
+    session_id: &str,
+    target_profile_id: &str,
+    freeze_choice: &str,
+) -> AppResult<LaunchResult> {
+    use juggler_handover::pipeline::{self, FreezeChoice, Mechanism};
+
+    let freeze = if freeze_choice == "stop-now" {
+        FreezeChoice::StopNowAndSwitch
+    } else {
+        FreezeChoice::FinishTurnThenSwitch
+    };
     let (profile_b, account_b) = find_profile_with_account_arc(state, target_profile_id)?;
-    let (source, _account_a) = handover_source(state, session_id)?;
+    let (source, account_a) = handover_source(state, session_id)?;
     if source.project.is_none() {
         return Err(AppError::Io {
             context: "hand over",
             message: "session has no project link".into(),
         });
     }
-
-    // F-H-01: the source resolves via the instance's transcript_ref
-    // — never newest-mtime guessing. A missing ref is the honest
-    // "pick it" stop.
     let reference = source.transcript_ref.clone().ok_or_else(|| AppError::Io {
         context: "hand over",
         message: "Couldn't tell which file is this session — pick it".into(),
     })?;
-
-    // AJ-E204: tier logic lives in the engine (deep/09 D3) — this
-    // command parses args, calls it, and emits. The bundle copies the
-    // FULL sibling set (credentials never involved), the target dir
-    // is discovered by embedded cwd, and an id collision forks.
     let support = state
         .registry
         .handover(&account_b.harness)
@@ -4001,83 +4176,286 @@ pub fn session_handover_impl(
                 account_b.harness
             ),
         })?;
-    let outcome = juggler_handover::transplant::hand_over(support.as_ref(), &reference, &account_b)
+
+    // Record (E201): the Staged edge exists BEFORE anything moves;
+    // failures transition it, history is never rewritten.
+    let (work_id, from_epoch, edge_id) =
+        record_edge_staged(state, &source, &reference, &account_a, &account_b)?;
+
+    // The pipeline: snapshot → stage → verify → launch (the app's
+    // supervisor hook) → the copy-never-move invariant.
+    let adapter = state
+        .registry
+        .get(&account_b.harness)
+        .ok_or_else(|| AppError::UnknownHarness(account_b.harness.to_string()))?;
+    let new_session = SessionId::new(format!("sess-{}", unique_suffix()));
+    let mut launch_hook = make_launch_hook(
+        state,
+        adapter,
+        &account_b,
+        &profile_b,
+        &source,
+        &new_session,
+    );
+    let outcome = pipeline::execute(
+        support.as_ref(),
+        &reference,
+        &account_b,
+        freeze,
+        Mechanism::Transplant,
+        &mut launch_hook,
+    );
+    let (record, pid) = match outcome {
+        Ok(value) => value,
+        Err(failure) => {
+            record_edge_failed(state, &edge_id, &failure);
+            return Err(AppError::Io {
+                context: "hand over",
+                message: failure.copy(&account_a.label),
+            });
+        }
+    };
+    record_edge_succeeded(
+        state,
+        &source,
+        &profile_b,
+        &record,
+        &account_b,
+        &EdgeCtx {
+            work: work_id,
+            from_epoch,
+            edge: edge_id,
+            session: new_session.clone(),
+        },
+    )?;
+
+    Ok(LaunchResult {
+        session_id: new_session.to_string(),
+        pid,
+    })
+}
+
+/// The supervisor launch hook: builds the resume spec for the
+/// INSTALLED native id (a collision fork changes it) and spawns under
+/// the app's supervisor — the only spawn path (suggest-only law).
+fn make_launch_hook<'a>(
+    state: &'a Arc<AppState>,
+    adapter: juggler_adapter::SharedAdapter,
+    account_b: &'a juggler_core::model::Account,
+    profile_b: &'a juggler_core::model::LaunchRecipe,
+    source: &'a juggler_core::model::InstanceRecord,
+    new_session: &'a SessionId,
+) -> impl FnMut(&juggler_adapter::handover::InstallOutcome) -> Result<u32, String> + 'a {
+    move |install: &juggler_adapter::handover::InstallOutcome| -> Result<u32, String> {
+        let spec = adapter
+            .launch_spec(
+                account_b,
+                profile_b,
+                &source.cwd,
+                &LaunchMode::Resume {
+                    session_id: install.reference.native_id.clone().unwrap_or_default(),
+                },
+            )
+            .map_err(|error| error.to_string())?;
+        let spawned = state
+            .supervisor
+            .spawn(
+                new_session,
+                &spec,
+                &ledger_ctx(
+                    state,
+                    account_b,
+                    source.project.as_ref().map(ToString::to_string),
+                ),
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(spawned.pid)
+    }
+}
+
+/// Records the pre-execution graph state: the work item (created on
+/// first switch), the SOURCE epoch, and the Staged edge. Returns
+/// `(work, from_epoch, edge)` ids.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] on storage failures.
+fn record_edge_staged(
+    state: &Arc<AppState>,
+    source: &juggler_core::model::InstanceRecord,
+    reference: &juggler_core::model::TranscriptRef,
+    account_a: &juggler_core::model::Account,
+    account_b: &juggler_core::model::Account,
+) -> AppResult<(
+    juggler_core::model::WorkItemId,
+    juggler_core::model::EpochId,
+    juggler_core::model::SwitchEdgeId,
+)> {
+    use juggler_core::model::{Epoch, EpochId, SwitchEdge, SwitchEdgeId, SwitchMechanism};
+
+    let storage = lock_storage_arc(state)?;
+    let graph = storage.switch_graph();
+    let Some(project) = source.project.as_ref() else {
+        return Err(AppError::Io {
+            context: "hand over",
+            message: "session has no project link".into(),
+        });
+    };
+    let work = match graph.works_for_project(project)?.into_iter().next_back() {
+        Some(existing) => existing,
+        None => graph
+            .create_work(project, "Work")
+            .map_err(|error| AppError::Io {
+                context: "hand over",
+                message: error.to_string(),
+            })?,
+    };
+    let from = Epoch {
+        id: EpochId::new(format!("ep-{}", unique_suffix())),
+        work: work.id.clone(),
+        session_ref: Some(source.id.clone()),
+        native_id: reference.native_id.clone(),
+        account: account_a.id.clone(),
+        provider: account_a.harness.clone(),
+        resumed_from_epoch: None,
+    };
+    graph.insert_epoch(&from).map_err(|error| AppError::Io {
+        context: "hand over",
+        message: error.to_string(),
+    })?;
+    let edge_id = SwitchEdgeId::new(format!("edge-{}", unique_suffix()));
+    graph
+        .append_edge(&SwitchEdge {
+            id: edge_id.clone(),
+            work: work.id.clone(),
+            from_epoch: from.id.clone(),
+            to_epoch: None,
+            from_account: account_a.id.clone(),
+            to_account: account_b.id.clone(),
+            from_provider: account_a.harness.clone(),
+            to_provider: account_b.harness.clone(),
+            mechanism: SwitchMechanism::Transplant,
+            pack_id: None,
+            fidelity_shown: Some("F1".to_owned()),
+            manifest_sha256: None,
+            state: juggler_core::model::EdgeState::Staged,
+            actor: juggler_core::model::EdgeActor::User,
+            parent_edge_a: None,
+            parent_edge_b: None,
+            created_at: Timestamp::now(),
+        })
         .map_err(|error| AppError::Io {
             context: "hand over",
             message: error.to_string(),
         })?;
-    let native_id = outcome
+    Ok((work.id.clone(), from.id.clone(), edge_id))
+}
+
+/// Transitions the edge to `Failed{stage, reason}` — the same edge,
+/// never a rewrite (S-G1); the source is safe by the pipeline's
+/// contract.
+fn record_edge_failed(
+    state: &Arc<AppState>,
+    edge: &juggler_core::model::SwitchEdgeId,
+    failure: &juggler_handover::pipeline::SwitchFailure,
+) {
+    if let Ok(storage) = lock_storage_arc(state) {
+        let _ = storage
+            .switch_graph()
+            .mark_failed(edge, failure.stage(), &failure.to_string());
+    }
+}
+
+/// The graph ids one executing switch carries through recording.
+struct EdgeCtx {
+    /// The work item.
+    work: juggler_core::model::WorkItemId,
+    /// The source epoch.
+    from_epoch: juggler_core::model::EpochId,
+    /// The staged edge.
+    edge: juggler_core::model::SwitchEdgeId,
+    /// The continuation Instance id.
+    session: SessionId,
+}
+
+/// Records the succeeded switch: the source rests (`HandedOver`), the
+/// continuation Instance starts, the TARGET epoch is created, the
+/// edge launches + confirms (the supervisor accepting the spawn is
+/// the confirmation provable today), and the manifest rows land.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] on storage failures.
+fn record_edge_succeeded(
+    state: &Arc<AppState>,
+    source: &juggler_core::model::InstanceRecord,
+    profile_b: &juggler_core::model::LaunchRecipe,
+    record: &juggler_handover::pipeline::SwitchRecord,
+    target: &juggler_core::model::Account,
+    ctx: &EdgeCtx,
+) -> AppResult<()> {
+    use juggler_core::model::{Epoch, EpochId};
+
+    let native_id = record
         .install
         .reference
         .native_id
         .clone()
         .unwrap_or_default();
-    let dest = outcome.install.reference.path.clone();
-
-    // Resume under account B in the same project directory.
-    let adapter = state
-        .registry
-        .get(&account_b.harness)
-        .ok_or_else(|| AppError::UnknownHarness(account_b.harness.to_string()))?;
-    let spec = adapter.launch_spec(
-        &account_b,
-        &profile_b,
-        &source.cwd,
-        &LaunchMode::Resume {
-            session_id: native_id.clone(),
-        },
+    let machine = local_machine_id(state);
+    let storage = lock_storage_arc(state)?;
+    let mut handed = source.clone();
+    handed.status = SessionStatus::HandedOver;
+    storage.sessions().update(&handed)?;
+    let usage = engine_usage_snapshot(&storage, &profile_b.id);
+    storage.sessions().insert(&SessionRecord {
+        id: ctx.session.clone(),
+        conversation: Some(juggler_core::model::ConversationId::new(native_id.clone())),
+        profile: profile_b.id.clone(),
+        machine,
+        kind: juggler_core::model::InstanceKind::Terminal,
+        project: source.project.clone(),
+        cwd: source.cwd.clone(),
+        status: SessionStatus::Starting,
+        started_at: Timestamp::now(),
+        last_activity: None,
+        usage,
+        attention: None,
+        running: None,
+        window: None,
+        transcript_ref: Some(juggler_core::model::TranscriptRef {
+            path: record.install.reference.path.clone(),
+            native_id: Some(native_id.clone()),
+        }),
+    })?;
+    let graph = storage.switch_graph();
+    let to_epoch = EpochId::new(format!("ep-{}", unique_suffix()));
+    graph.insert_epoch(&Epoch {
+        id: to_epoch.clone(),
+        work: ctx.work.clone(),
+        session_ref: Some(ctx.session.clone()),
+        native_id: Some(native_id),
+        account: target.id.clone(),
+        provider: target.harness.clone(),
+        resumed_from_epoch: Some(ctx.from_epoch.clone()),
+    })?;
+    graph.mark_launched(&ctx.edge, &to_epoch)?;
+    graph.mark_confirmed(&ctx.edge)?;
+    graph.append_manifest(
+        &ctx.edge,
+        &record
+            .source_hashes
+            .iter()
+            .map(|row| juggler_core::model::ManifestEntry {
+                rel_path: row.rel_path.clone(),
+                sha256: row.sha256.clone(),
+                bytes: row.bytes,
+                kind: row.kind.clone(),
+                disposition: row.disposition.clone(),
+            })
+            .collect::<Vec<_>>(),
     )?;
-    let new_session = SessionId::new(format!("sess-{}", unique_suffix()));
-    let spawned = state.supervisor.spawn(
-        &new_session,
-        &spec,
-        &ledger_ctx(
-            state,
-            &account_b,
-            source
-                .project
-                .as_ref()
-                .map(std::string::ToString::to_string),
-        ),
-    )?;
-
-    {
-        // The machine identity locks storage itself — resolve it
-        // BEFORE the insert-scope lock (non-reentrant mutex).
-        let machine = local_machine_id(state);
-        let storage = lock_storage_arc(state)?;
-        // Source lineage: handed over.
-        let mut handed = source.clone();
-        handed.status = SessionStatus::HandedOver;
-        storage.sessions().update(&handed)?;
-        // The continuation session, linked to the same project.
-        let usage = engine_usage_snapshot(&storage, &profile_b.id);
-        storage.sessions().insert(&SessionRecord {
-            id: new_session.clone(),
-            conversation: Some(juggler_core::model::ConversationId::new(native_id.clone())),
-            profile: profile_b.id,
-            machine: machine.clone(),
-            kind: juggler_core::model::InstanceKind::Terminal,
-            project: source.project,
-            cwd: source.cwd.clone(),
-            status: SessionStatus::Starting,
-            started_at: Timestamp::now(),
-            last_activity: None,
-            usage,
-            attention: None,
-            running: None,
-            window: None,
-            transcript_ref: Some(juggler_core::model::TranscriptRef {
-                path: dest,
-                native_id: Some(native_id),
-            }),
-        })?;
-    }
-
-    Ok(LaunchResult {
-        session_id: new_session.to_string(),
-        pid: spawned.pid,
-    })
+    Ok(())
 }
 
 /// Lists tracked projects with their live instance, account history, and

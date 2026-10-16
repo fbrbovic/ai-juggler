@@ -160,6 +160,49 @@ fn handover_moves_context_to_another_account_and_resumes_it() {
         "source byte-identical after transplant"
     );
 
+    // AJ-E205: the switch recorded its edge in the Switch Graph —
+    // one work item, two epochs, one CONFIRMED edge with manifest
+    // rows (append-only history from day one).
+    {
+        let storage = state.storage.lock().unwrap();
+        let graph = storage.switch_graph();
+        let work = graph
+            .works_for_project(&juggler_core::model::ProjectId::new(
+                storage
+                    .projects()
+                    .by_root(&std::fs::canonicalize(&cwd).unwrap())
+                    .unwrap()
+                    .map(|p| p.id.as_str().to_owned())
+                    .unwrap_or_default(),
+            ))
+            .unwrap();
+        assert_eq!(work.len(), 1, "one work item per project");
+        let snapshot = graph.graph(&work[0].id).unwrap();
+        assert_eq!(snapshot.epochs.len(), 2, "source + target epochs");
+        assert_eq!(snapshot.edges.len(), 1, "one edge");
+        assert!(
+            matches!(
+                snapshot.edges[0].state,
+                juggler_core::model::EdgeState::Confirmed
+            ),
+            "edge confirmed: {:?}",
+            snapshot.edges[0].state
+        );
+        assert_eq!(
+            snapshot.edges[0]
+                .to_epoch
+                .as_ref()
+                .map(|e| e.as_str().is_empty()),
+            Some(false)
+        );
+        assert!(
+            !graph
+                .manifest_for(&snapshot.edges[0].id)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     // B's instance launched with --resume native-sess-42 (the stub runs
     // asynchronously — wait for its argv record).
     let args_path = config_dir_of(&state, &account_b.id).join("last-args");
