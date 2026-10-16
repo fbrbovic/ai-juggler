@@ -168,6 +168,143 @@ impl UsageRepo<'_> {
             .map_err(CoreError::Storage)
     }
 
+    /// Events for one account inside `(lo, hi]` (the CSV export walks
+    /// month windows through this — chunked reads, never a full-table
+    /// materialisation; the `(account, ts)` index serves it).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::Storage`] on SQLite failures.
+    pub fn events_between(
+        &self,
+        account: &str,
+        lo_ms: i64,
+        hi_ms: i64,
+    ) -> Result<Vec<UsageEvent>, CoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT account, session, ts, model, input, output, cache_r, cache_w,
+                    reasoning, credits, usd_est, source, confidence, msg_uuid
+             FROM usage_events
+             WHERE account = ?1 AND ts > ?2 AND ts <= ?3
+             ORDER BY ts",
+        )?;
+        let rows = stmt.query_map(params![account, lo_ms, hi_ms], |row| {
+            Ok(UsageEvent {
+                account: row.get(0)?,
+                session: row.get(1)?,
+                ts: row.get(2)?,
+                model: row.get(3)?,
+                tokens: crate::model::TokenCounts {
+                    input: u64::try_from(row.get::<_, i64>(4)?).unwrap_or(0),
+                    output: u64::try_from(row.get::<_, i64>(5)?).unwrap_or(0),
+                    cache_read: u64::try_from(row.get::<_, i64>(6)?).unwrap_or(0),
+                    cache_write: u64::try_from(row.get::<_, i64>(7)?).unwrap_or(0),
+                    reasoning: u64::try_from(row.get::<_, i64>(8)?).unwrap_or(0),
+                },
+                credits: row.get(9)?,
+                usd_est: row.get(10)?,
+                source: UsageSource::parse(&row.get::<_, String>(11)?)
+                    .unwrap_or(UsageSource::Transcript),
+                confidence: parse_confidence(&row.get::<_, String>(12)?),
+                msg_uuid: row.get(13)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(CoreError::Storage)
+    }
+
+    /// Every account id present in `usage_events` (the export's scope
+    /// when no account is named).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::Storage`] on SQLite failures.
+    pub fn usage_accounts(&self) -> Result<Vec<String>, CoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT account FROM usage_events ORDER BY account")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(CoreError::Storage)
+    }
+
+    /// Upserts one user pricing override (same model + instant ⇒
+    /// replace).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::Storage`] on SQLite failures.
+    pub fn pricing_override_upsert(
+        &self,
+        row: &crate::cost_ledger::LedgerPriceRow,
+    ) -> Result<(), CoreError> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO pricing_overrides
+                     (model, effective_from_ms, input_per_1k, output_per_1k,
+                      cache_read_per_1k, cache_write_per_1k, source_url, captured)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    row.model,
+                    row.effective_from_ms,
+                    row.input_per_1k,
+                    row.output_per_1k,
+                    row.cache_read_per_1k,
+                    row.cache_write_per_1k,
+                    row.source_url,
+                    row.captured,
+                ],
+            )
+            .map(|_| ())
+            .map_err(CoreError::Storage)
+    }
+
+    /// Deletes one override (exact model + instant).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::Storage`] on SQLite failures.
+    pub fn pricing_override_delete(
+        &self,
+        model: &str,
+        effective_from_ms: i64,
+    ) -> Result<(), CoreError> {
+        self.conn
+            .execute(
+                "DELETE FROM pricing_overrides WHERE model = ?1 AND effective_from_ms = ?2",
+                params![model, effective_from_ms],
+            )
+            .map(|_| ())
+            .map_err(CoreError::Storage)
+    }
+
+    /// All user overrides.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::Storage`] on SQLite failures.
+    pub fn pricing_overrides(&self) -> Result<Vec<crate::cost_ledger::LedgerPriceRow>, CoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT model, effective_from_ms, input_per_1k, output_per_1k,
+                    cache_read_per_1k, cache_write_per_1k, source_url, captured
+             FROM pricing_overrides ORDER BY model, effective_from_ms",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(crate::cost_ledger::LedgerPriceRow {
+                model: row.get(0)?,
+                effective_from_ms: row.get(1)?,
+                input_per_1k: row.get(2)?,
+                output_per_1k: row.get(3)?,
+                cache_read_per_1k: row.get(4)?,
+                cache_write_per_1k: row.get(5)?,
+                source_url: row.get(6)?,
+                captured: row.get(7)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(CoreError::Storage)
+    }
+
     /// Queues a resume for an exhausted session (AJ-E611's reset
     /// queue; written by the alert FSM when it lands).
     ///
