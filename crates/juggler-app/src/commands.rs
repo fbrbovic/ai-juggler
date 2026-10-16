@@ -273,6 +273,360 @@ pub fn pricing_catalog_info(
     }
 }
 
+/// AJ-E610: one window clock's rendered state — the typed shape every
+/// quota surface reads (rail chips, Inspector `Usage` tab, `NewSession`
+/// rows). `percentage: None` in Unknown/Learning — a missing number is
+/// the honest state, never 0%.
+#[derive(Clone, PartialEq, Debug, serde::Serialize)]
+pub struct WindowDisplay {
+    /// The §Q8 machine state (`unknown|learning|tracking|stale|exhausted`).
+    pub state: String,
+    /// Percent used, ONLY when the state carries one.
+    pub percentage: Option<f64>,
+    /// The badge (`Measured|Computed|Estimate`), adjacent on screen.
+    pub badge: Option<String>,
+    /// Staleness note ("last measured Nh ago") when Measured went quiet.
+    pub stale_note_ms: Option<i64>,
+    /// Vendor reset instant, epoch ms, when known.
+    pub resets_at_ms: Option<i64>,
+    /// Absolute burn inside the window (the honest floor).
+    pub burned_tokens: u64,
+    /// Burn in vendor credits, when the provider bills credits.
+    pub burned_credits: Option<f64>,
+}
+
+/// AJ-E610: the subscription clock's rendered state — a calendar-style
+/// date line, never merged with the window clock.
+#[derive(Clone, PartialEq, Debug, serde::Serialize)]
+pub struct RenewalDisplay {
+    /// `none|set|approaching|overdue`.
+    pub state: String,
+    /// The exact copy (`Renews 3 Oct` / `Renewal: unknown — add date`).
+    pub label: String,
+    /// Entered by the user (D-12 provenance).
+    pub entered_by_user: bool,
+}
+
+/// AJ-E610: the forecast pill (deep/10 §1 states; data only — the
+/// pill component renders them).
+#[derive(Clone, PartialEq, Debug, serde::Serialize)]
+pub struct ForecastDisplay {
+    /// `learning|wont-exhaust|exhausts|no-headroom`.
+    pub state: String,
+    /// Point TTE minutes (Measured renders the point).
+    pub tte_min: Option<f64>,
+    /// Cone lower bound (Estimated renders the range).
+    pub range_min: Option<f64>,
+    /// Cone upper bound.
+    pub range_max: Option<f64>,
+    /// Inherited confidence badge.
+    pub badge: String,
+}
+
+/// AJ-E610: the two-clock display for one account — both windows (a
+/// provider/plan may omit one, with reason), the separate subscription
+/// clock, the forecast, and any provider-level unavailability.
+#[derive(Clone, PartialEq, Debug, serde::Serialize)]
+pub struct QuotaDisplayInfo {
+    /// Account id.
+    pub account: String,
+    /// The 5 h window, when the plan has one.
+    pub five_hour: Option<WindowDisplay>,
+    /// Why the 5 h ring is omitted (e.g. Codex Pro has none).
+    pub five_hour_omitted_reason: Option<String>,
+    /// The weekly window, when the plan has one.
+    pub weekly: Option<WindowDisplay>,
+    /// Why the weekly ring is omitted.
+    pub weekly_omitted_reason: Option<String>,
+    /// The subscription clock (D-12).
+    pub renewal: RenewalDisplay,
+    /// The burn forecast.
+    pub forecast: ForecastDisplay,
+    /// Provider-level unavailability (e.g. Gemini pre-verification).
+    pub unavailable_reason: Option<String>,
+}
+
+/// Evaluates one account's two-clock display from the engine (E606
+/// evaluate + E608 forecast + E411 renewal + E607 staleness).
+#[must_use]
+#[allow(clippy::too_many_lines)]
+pub fn quota_display_inner(
+    storage: &juggler_core::storage::Storage,
+    account: &juggler_core::model::Account,
+    now_ms: i64,
+) -> QuotaDisplayInfo {
+    use juggler_core::quota::{
+        self, AccountEvaluation, QuotaCap, QuotaState, SubscriptionClock, WindowKind,
+    };
+    use juggler_core::quota_forecast::{self, ForecastState, RateUnits};
+
+    let account_id = account.id.as_str();
+    let settings = storage.app_settings();
+    let usage = storage.usage();
+    let events = usage
+        .events_for_account(account_id, now_ms - quota::WEEK_MS)
+        .unwrap_or_default();
+    let samples = usage.samples_for_account(account_id).unwrap_or_default();
+    let cap = |kind: WindowKind| -> QuotaCap {
+        settings
+            .get(&juggler_core::storage::cap_settings_key(account_id, kind))
+            .ok()
+            .flatten()
+            .map(|raw| QuotaCap::decode(&raw))
+            .unwrap_or_default()
+    };
+    let anchor = settings
+        .get(&juggler_core::storage::anchor_settings_key(account_id))
+        .ok()
+        .flatten()
+        .and_then(|raw| raw.parse::<i64>().ok());
+    let clock = SubscriptionClock {
+        renewal_date: account.renewal_date.clone(),
+        entered_by_user: account.renewal_date.is_some(),
+        from_vendor_feed: false,
+    };
+    let today = epoch_today(now_ms);
+    let evaluation = quota::evaluate_account(AccountEvaluation {
+        events: &events,
+        samples: &samples,
+        account: account_id,
+        cap_five_hour: cap(WindowKind::FiveHour),
+        cap_weekly: cap(WindowKind::Weekly { anchor_ms: anchor }),
+        weekly_anchor_ms: anchor,
+        subscription: &clock,
+        now_ms,
+        today,
+    });
+
+    // Staleness (Q-1): the freshest Measured sample's age.
+    let last_measured = samples
+        .iter()
+        .filter(|sample| sample.confidence == juggler_core::model::Confidence::Measured)
+        .map(|sample| sample.ts)
+        .max();
+    let stale_note_ms =
+        last_measured.filter(|ts| now_ms.saturating_sub(*ts) > quota::STALE_AFTER_MS);
+
+    let window_display = |reading: &quota::WindowReading| WindowDisplay {
+        state: match reading.state {
+            QuotaState::Unknown => "unknown".to_owned(),
+            QuotaState::Learning => "learning".to_owned(),
+            QuotaState::Tracking => "tracking".to_owned(),
+            QuotaState::Stale => "stale".to_owned(),
+            QuotaState::Exhausted => "exhausted".to_owned(),
+        },
+        percentage: reading.percentage,
+        badge: reading
+            .percentage
+            .map(|_| confidence_name(reading.confidence).to_owned()),
+        stale_note_ms,
+        resets_at_ms: reading.resets_at,
+        burned_tokens: reading
+            .burn
+            .tokens
+            .input
+            .saturating_add(reading.burn.tokens.output)
+            .saturating_add(reading.burn.tokens.cache_read)
+            .saturating_add(reading.burn.tokens.cache_write)
+            .saturating_add(reading.burn.tokens.reasoning),
+        burned_credits: (reading.burn.credits > 0.0).then_some(reading.burn.credits),
+    };
+
+    // The forecast runs on the unit the provider bills (ZCode credits).
+    let units = if account.harness.as_str() == "zcode" {
+        RateUnits::Credits
+    } else {
+        RateUnits::Tokens
+    };
+    let forecast_cap = cap(WindowKind::FiveHour);
+    let resets_at = evaluation.five_hour.resets_at;
+    let fc = quota_forecast::forecast(
+        &events,
+        account_id,
+        WindowKind::FiveHour,
+        forecast_cap,
+        units,
+        resets_at,
+        now_ms,
+    );
+    let forecast = ForecastDisplay {
+        state: match fc.state {
+            ForecastState::Learning => "learning".to_owned(),
+            ForecastState::WontExhaust => "wont-exhaust".to_owned(),
+            ForecastState::Exhausts { .. } => "exhausts".to_owned(),
+            ForecastState::NoHeadroom => "no-headroom".to_owned(),
+        },
+        tte_min: match fc.state {
+            ForecastState::Exhausts { tte_min, .. } => Some(tte_min),
+            _ => None,
+        },
+        range_min: match fc.state {
+            ForecastState::Exhausts { range_low_min, .. } => Some(range_low_min),
+            _ => None,
+        },
+        range_max: match fc.state {
+            ForecastState::Exhausts { range_high_min, .. } => Some(range_high_min),
+            _ => None,
+        },
+        badge: confidence_name(fc.confidence).to_owned(),
+    };
+
+    // Renewal (D-12 via E411's label machine; approaching threshold
+    // user-tunable 1–30 days, default 7).
+    let warn_days: i64 = settings
+        .get("renewal_warn_days")
+        .ok()
+        .flatten()
+        .and_then(|raw| raw.parse::<i64>().ok())
+        .unwrap_or(7)
+        .clamp(1, 30);
+    let renewal = match clock.evaluate(today) {
+        juggler_core::quota::RenewalState::Unknown => RenewalDisplay {
+            state: "none".to_owned(),
+            label: "Renewal: unknown — add date".to_owned(),
+            entered_by_user: false,
+        },
+        juggler_core::quota::RenewalState::RenewIn { days, .. } => {
+            let (state, label) = if days < 0 {
+                ("overdue", "Renewal date passed".to_owned())
+            } else if days <= warn_days {
+                (
+                    "approaching",
+                    format!("Renews in {days} days — check your plan"),
+                )
+            } else {
+                (
+                    "set",
+                    format!(
+                        "Renews {}",
+                        account.renewal_date.clone().unwrap_or_default()
+                    ),
+                )
+            };
+            RenewalDisplay {
+                state: state.to_owned(),
+                label,
+                entered_by_user: true,
+            }
+        }
+    };
+
+    // Provider/plan window shapes (Req.5): Pro renders weekly; plans
+    // without a 5 h window omit that ring WITH reason, never empty.
+    let provider = account.harness.as_str();
+    let plan = account.plan.as_ref().map(ToString::to_string);
+    let mut unavailable_reason = None;
+    let (five_hour, five_hour_reason, weekly, weekly_reason) = match provider {
+        "gemini" | "antigravity" => {
+            unavailable_reason = Some("No verified quota source for this Provider yet".to_owned());
+            (None, None, None, None)
+        }
+        // Codex Pro has no 5 h limit (AJ-E603): omit that ring with
+        // its reason; every other shape renders both windows.
+        "codex" if plan.as_deref() == Some("pro") => (
+            None,
+            Some("Pro plans have no five-hour limit — weekly only".to_owned()),
+            Some(window_display(&evaluation.weekly)),
+            None,
+        ),
+        _ => (
+            Some(window_display(&evaluation.five_hour)),
+            None,
+            Some(window_display(&evaluation.weekly)),
+            None,
+        ),
+    };
+    QuotaDisplayInfo {
+        account: account_id.to_owned(),
+        five_hour,
+        five_hour_omitted_reason: five_hour_reason,
+        weekly,
+        weekly_omitted_reason: weekly_reason,
+        renewal,
+        forecast,
+        unavailable_reason,
+    }
+}
+
+/// AJ-E610 Req.3/E609 Req.4: the user-entered flat subscription fee
+/// (USD/month) behind the dual view's ratio. Explicit set/clear only;
+/// no plan-tier inference ever writes this.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] on validation or storage failure.
+#[tauri::command]
+pub fn account_set_fee(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+    account: String,
+    fee_usd: Option<f64>,
+) -> AppResult<()> {
+    if let Some(fee) = fee_usd
+        && !(0.0..=100_000.0).contains(&fee)
+    {
+        return Err(AppError::Validation {
+            subject: "subscription fee",
+            message: "must be between 0 and 100000 USD/month".into(),
+        });
+    }
+    let storage = lock_storage_arc(&state)?;
+    let key = format!("subscription_fee:{account}");
+    match fee_usd {
+        Some(fee) => storage
+            .app_settings()
+            .set(&key, &fee.to_string())
+            .map_err(AppError::from)?,
+        None => {
+            storage
+                .app_settings()
+                .set(&key, "")
+                .map_err(AppError::from)?;
+        }
+    }
+    Ok(())
+}
+
+/// AJ-E610: the two-clock display for one account (by id).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the account is unknown.
+#[tauri::command]
+pub fn quota_display(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+    account: String,
+) -> AppResult<QuotaDisplayInfo> {
+    let storage = lock_storage_arc(&state)?;
+    let record = storage
+        .accounts()
+        .get(&juggler_core::model::AccountId::new(account.clone()))?;
+    Ok(quota_display_inner(
+        &storage,
+        &record,
+        juggler_core::model::Timestamp::now().millis(),
+    ))
+}
+
+/// AJ-E610: the two-clock display for EVERY account (the rail chip /
+/// `NewSession` row source; one query, no per-row round trips).
+#[tauri::command]
+#[must_use]
+pub fn quota_display_all(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+) -> Vec<QuotaDisplayInfo> {
+    let Ok(storage) = state.storage.lock() else {
+        return Vec::new();
+    };
+    let now = juggler_core::model::Timestamp::now().millis();
+    storage
+        .accounts()
+        .list()
+        .unwrap_or_default()
+        .iter()
+        .map(|account| quota_display_inner(&storage, account, now))
+        .collect()
+}
+
 /// AJ-E607 Req.5: every ingest source's observable health — the typed
 /// state the AJ-E610 "Feed stale" banner binds to. A source silent
 /// for more than 10 min carries `last_event_at` older than that (the

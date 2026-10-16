@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, Card, Chip } from "../components/primitives";
 import { IconProjects, IconTerminal } from "../components/icons";
+import { QuotaChip } from "../components/QuotaRings";
 import {
   hasLiveBackend,
   launchSession,
   pickDirectory,
+  quotaDisplayAll,
+  type QuotaDisplayData,
   type AccountInfo,
   type LaunchRecipeInfo,
   type ProjectInfo,
@@ -45,6 +48,22 @@ export function NewSessionModal({
     for (const account of accounts) map.set(account.id, account.login_state);
     return map;
   }, [accounts]);
+
+  // AJ-E610: the account's two-clock display for the row chip (one
+  // query for all rows; typed states render as copy, never 0%).
+  const [quotaByAccount, setQuotaByAccount] = useState<Record<string, QuotaDisplayData>>({});
+  useEffect(() => {
+    let alive = true;
+    quotaDisplayAll().then((all) => {
+      if (!alive) return;
+      const map: Record<string, QuotaDisplayData> = {};
+      for (const entry of all) map[entry.account] = entry;
+      setQuotaByAccount(map);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const recents = useMemo(
     () =>
@@ -185,6 +204,7 @@ export function NewSessionModal({
                 >
                   <IconTerminal width={13} height={13} />
                   <span className="font-medium">{recipe.account_label}</span>
+                  <QuotaChip display={quotaByAccount[recipe.account_id]} />
                   <span className="text-faint">·</span>
                   <span className="text-muted">{recipe.name}</span>
                   {recipe.model && (

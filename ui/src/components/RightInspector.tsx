@@ -20,7 +20,9 @@ import type {
   ProjectInfo,
 } from "../lib/bridge";
 import { renewalLabel } from "../lib/renewal";
-import { QuotaBar, formatCountdown, quotaTierTag, QuotaRing } from "./primitives";
+import { QuotaBar, formatCountdown, quotaTierTag } from "./primitives";
+import { TwoClocks, WindowRing } from "./QuotaRings";
+import { accountSetFee, quotaDisplay, type QuotaDisplayData } from "../lib/bridge";
 import { formatBytes, stateChip } from "./indicator";
 
 /**
@@ -1165,13 +1167,15 @@ function InstanceUsage(props: PanelProps) {
           series confidence: <span className="rounded border border-hairline px-1">Measured</span> (observed tokens; time-series arrive tagged per source)
         </span>
       </Card>
-      <Card className="flex flex-col gap-1 p-4">
-        <p className="text-[11px] uppercase tracking-wider text-muted">Tokens / min · cost over time</p>
-        <p className="text-[11.5px] text-muted">No data — arrives with statusline</p>
-        <p className="text-[10px] text-muted">time-series + pricing land with the usage engine (AJ-E606+)</p>
+      <Card className="flex flex-col gap-2 p-4" data-testid="two-clock-card">
+        <p className="text-[11px] uppercase tracking-wider text-muted">Account · the two clocks</p>
+        {/* AJ-E610: the account's windows + the SEPARATE subscription
+            clock (a calendar line — never merged with the rings) and
+            the forecast pill. */}
+        <AccountTwoClocks accountId={instance.account_id} />
       </Card>
       <Card className="flex flex-col gap-1 p-4">
-        <p className="text-[11px] uppercase tracking-wider text-muted">Account-window contribution</p>
+        <p className="text-[11px] uppercase tracking-wider text-muted">Tokens / min · cost over time</p>
         <p className="text-[11.5px] text-muted">No data — arrives with statusline</p>
       </Card>
     </div>
@@ -1346,6 +1350,29 @@ function SessionOverview(props: PanelProps) {
   );
 }
 
+
+/** AJ-E610: the Usage tab's account block (engine query; a null
+ * account id — orphaned launch settings — renders the honest empty). */
+function AccountTwoClocks({ accountId }: { accountId: string | null }) {
+  const [display, setDisplay] = useState<QuotaDisplayData | null>(null);
+  useEffect(() => {
+    if (!accountId) return;
+    let alive = true;
+    quotaDisplay(accountId).then((payload) => {
+      if (alive) setDisplay(payload);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [accountId]);
+  if (!accountId) {
+    return <p className="text-xs text-muted">Account unknown — usage cannot be attributed.</p>;
+  }
+  if (!display) {
+    return <p className="text-xs text-muted">loading…</p>;
+  }
+  return <TwoClocks display={display} />;
+}
 
 /** Session Usage (§5.2): per-turn table + CSV — honest until transcript
  * indexing exists; aggregate tokens are real. */
@@ -1547,9 +1574,10 @@ function AccountOverview(props: PanelProps) {
   return (
     <div className="flex flex-col gap-3" data-testid="account-overview">
       <Card className="flex flex-wrap items-center gap-4 p-4">
-        <div className="flex items-center gap-4" data-testid="account-rings">
-          <QuotaRing percent={worst?.quota ? worst.quota.used_percentage : null} label="5h" />
-          <QuotaRing percent={null} label="week" />
+        <div className="flex flex-wrap items-center gap-4" data-testid="account-rings">
+          {/* AJ-E610: engine-evaluated windows — ring + % + badge + reset;
+              an omitted window renders its reason, never an empty ring. */}
+          <AccountWindowRings accountId={account.id} />
         </div>
         <div className="flex min-w-0 flex-1 flex-col gap-1 text-[11px]">
           <span className="flex items-center gap-2">
@@ -1572,6 +1600,7 @@ function AccountOverview(props: PanelProps) {
             })()}
           </span>
           <RenewalEditor account={account} />
+          <FeeEditor account={account} />
           {/*
            * AJ-E508 (D-08): the Account launch-settings area's TWO
            * separate tier toggles — never one bundled "auto-cleanup"
@@ -1918,6 +1947,88 @@ export function TierToggles(props: { accountId: string; initial: boolean }) {
         and every kill is audit-logged (D-08). Crash tidies wait 5 minutes and ask first
         with an Undo window.
       </span>
+    </span>
+  );
+}
+
+/** AJ-E610: the account card's engine-driven window rings. */
+function AccountWindowRings({ accountId }: { accountId: string }) {
+  const [display, setDisplay] = useState<QuotaDisplayData | null>(null);
+  useEffect(() => {
+    let alive = true;
+    quotaDisplay(accountId).then((payload) => {
+      if (alive) setDisplay(payload);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [accountId]);
+  if (!display) {
+    return (
+      <p className="text-xs text-muted" data-testid="account-rings-loading">
+        loading quota…
+      </p>
+    );
+  }
+  if (display.unavailable_reason) {
+    return (
+      <p className="text-xs text-muted" data-testid="quota-unavailable">
+        {display.unavailable_reason}
+      </p>
+    );
+  }
+  return (
+    <>
+      <WindowRing window={display.five_hour} kind="5h" omittedReason={display.five_hour_omitted_reason} />
+      <WindowRing window={display.weekly} kind="weekly" omittedReason={display.weekly_omitted_reason} />
+    </>
+  );
+}
+
+/** AJ-E610/E609: the user-entered flat fee behind the dual view's
+ * ratio — explicit save only; no plan-tier inference ever writes it. */
+function FeeEditor({ account }: { account: AccountInfo }) {
+  const [fee, setFee] = useState("");
+  const [status, setStatus] = useState("");
+  useEffect(() => {
+    setFee(localStorage.getItem(`aij.fee.${account.id}`) ?? "");
+  }, [account.id]);
+  return (
+    <span className="flex items-center gap-1.5" data-testid="fee-editor">
+      <label className="text-[11px] text-muted" htmlFor={`fee-${account.id}`}>
+        Flat fee $/mo
+      </label>
+      <input
+        id={`fee-${account.id}`}
+        value={fee}
+        onChange={(event) => setFee(event.target.value)}
+        placeholder="200"
+        inputMode="decimal"
+        className="w-16 rounded border border-hairline bg-canvas px-1.5 py-0.5 text-[11px] text-ink outline-none focus:border-accent/50"
+      />
+      <button
+        type="button"
+        className="text-[11px] underline focus:outline-none focus:ring-2 focus:ring-accent"
+        onClick={() => {
+          const parsed = fee.trim() === "" ? null : Number.parseFloat(fee);
+          if (parsed !== null && Number.isNaN(parsed)) {
+            setStatus("enter a number");
+            return;
+          }
+          localStorage.setItem(`aij.fee.${account.id}`, fee.trim());
+          void accountSetFee(account.id, parsed).then(
+            () => setStatus("saved"),
+            () => setStatus("save failed"),
+          );
+        }}
+      >
+        save
+      </button>
+      {status && (
+        <span role="status" className="text-[10px] text-faint">
+          {status}
+        </span>
+      )}
     </span>
   );
 }

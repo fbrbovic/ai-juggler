@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -411,10 +411,31 @@ test("inspector — Session Overview ended stamp", async ({ page }) => {
 
 // AJ-E408 aggregate-content captures.
 test("inspector — Account Overview rings + forecast", async ({ page }) => {
+  // AJ-E610: the rings are engine-driven now — seed the display seam
+  // (badge-adjacent % + reset, the honest typed states).
+  await page.addInitScript(
+    ({ t0 }) => {
+      (window as never as { __AIJ_QUOTA_DISPLAY__: unknown }).__AIJ_QUOTA_DISPLAY__ = [
+        {
+          account: "claude-work",
+          five_hour: { state: "tracking", percentage: 68, badge: "measured", resets_at_ms: t0 + 2 * 3_600_000, burned_tokens: 340_000 },
+          weekly: { state: "tracking", percentage: 31, badge: "measured", resets_at_ms: t0 + 3 * 86_400_000, burned_tokens: 340_000 },
+          renewal: { state: "set", label: "Renews 2026-10-23", entered_by_user: true },
+          forecast: { state: "exhausts", tte_min: 96, range_min: 70, range_max: 130, badge: "measured" },
+        },
+      ];
+      localStorage.setItem("aij.theme", "dark");
+      localStorage.setItem("aij.onboarding.dismissed", "1");
+      sessionStorage.setItem("aij.ready.skipped", "1");
+      Date.now = () => t0;
+    },
+    { t0: T0 },
+  );
   await seedInspectorPage(page, { width: 1440, height: 900 });
   await page.getByRole("button", { name: "Accounts" }).click();
   await page.getByRole("button", { name: "Inspect claude-code" }).first().click();
   await expect(page.getByTestId("account-rings")).toBeVisible();
+  await expect(page.getByText(/5-hour window · Measured/)).toBeVisible();
   await page.screenshot({ path: resolve(GALLERY, "08-inspector-aggregate/account-overview-1440x900.png") });
 });
 
@@ -2138,6 +2159,73 @@ for (const theme of THEMES) {
         ).toBeVisible();
         await page.screenshot({
           path: resolve(GALLERY, `25-costs/${state}-${vp.name}-${theme}.png`),
+        });
+      });
+    }
+  }
+}
+
+/**
+ * AJ-E610 — the two-clock surfaces: the Inspector Usage tab (measured
+ * fresh / stale / no-data / blocked), the account card's renewal
+ * states, and the NewSession row chip — across the required
+ * 1440×900 + 1280×800 × light+dark matrix. Fixtures drive the
+ * __AIJ_QUOTA_DISPLAY__ seam; states are copy-conformance-checked
+ * before capture (badge adjacent, typed empties, never 0%).
+ */
+const quotaWindow = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  state: "tracking",
+  percentage: 82,
+  badge: "measured",
+  stale_note_ms: undefined,
+  resets_at_ms: T0 + 3 * 3_600_000,
+  burned_tokens: 1_234_567,
+  ...over,
+});
+
+const quotaDisplays: Record<string, Record<string, unknown>[]> = {
+  measured: [{ account: "claude-work", five_hour: quotaWindow(), weekly: quotaWindow({ percentage: 41 }), renewal: { state: "set", label: "Renews 2026-10-23", entered_by_user: true }, forecast: { state: "exhausts", tte_min: 55, range_min: 40, range_max: 70, badge: "measured" } }],
+  stale: [{ account: "claude-work", five_hour: quotaWindow({ stale_note_ms: 22 * 60 * 1000 }), weekly: quotaWindow({ percentage: 41, stale_note_ms: 22 * 60 * 1000 }), renewal: { state: "approaching", label: "Renews in 6 days — check your plan", entered_by_user: true }, forecast: { state: "wont-exhaust", badge: "measured" } }],
+  "no-data": [{ account: "claude-work", five_hour: { state: "unknown", burned_tokens: 0 }, weekly: { state: "learning", burned_tokens: 0 }, renewal: { state: "none", label: "Renewal: unknown — add date", entered_by_user: false }, forecast: { state: "learning", badge: "estimated" } }],
+  blocked: [{ account: "claude-work", five_hour: quotaWindow({ state: "exhausted", percentage: 100 }), weekly: quotaWindow({ percentage: 41 }), renewal: { state: "overdue", label: "Renewal date passed", entered_by_user: true }, forecast: { state: "exhausts", tte_min: 0, badge: "measured" } }],
+};
+
+const RAIL_QUOTA_VP = [
+  { name: "1440x900", width: 1440, height: 900 },
+  { name: "1280x800", width: 1280, height: 800 },
+] as const;
+
+for (const theme of THEMES) {
+  for (const vp of RAIL_QUOTA_VP) {
+    for (const [state, displays] of Object.entries(quotaDisplays)) {
+      test(`two-clocks — ${state} — ${vp.name} — ${theme}`, async ({ page }) => {
+        await page.addInitScript(
+          ({ fixture, t0, theme: themeName, display }) => {
+            (window as never as { __AIJ_FIXTURE__: unknown }).__AIJ_FIXTURE__ = fixture;
+            (window as never as { __AIJ_QUOTA_DISPLAY__: unknown }).__AIJ_QUOTA_DISPLAY__ = display;
+            localStorage.setItem("aij.theme", themeName);
+            localStorage.setItem("aij.onboarding.dismissed", "1");
+            sessionStorage.setItem("aij.ready.skipped", "1");
+            Date.now = () => t0;
+          },
+          { fixture: allStatuses, t0: T0, theme, display: displays },
+        );
+        await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+        await page.setViewportSize({ width: vp.width, height: vp.height });
+        await page.goto("/");
+        await page.getByRole("tab", { name: "Sessions" }).click();
+        await page.getByRole("button", { name: /Work Max/ }).first().click();
+        await page.getByRole("tab", { name: "Usage" }).click();
+        await expect(page.getByTestId("two-clock-card")).toBeVisible();
+        // Copy conformance before capture: the badge sits adjacent.
+        if (state === "measured") {
+          await expect(page.getByText(/5-hour window · Measured/)).toBeVisible();
+        }
+        if (state === "no-data") {
+          await expect(page.getByText("Start a session to measure")).toBeVisible();
+        }
+        await page.screenshot({
+          path: resolve(GALLERY, `26-quota/usage-${state}-${vp.name}-${theme}.png`),
         });
       });
     }

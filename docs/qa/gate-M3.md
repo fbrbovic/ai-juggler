@@ -210,3 +210,38 @@ survive. Two full-suite runs green after the fix.
 ingested yet — it rides the statusline capture's live verification
 (the AJ-E602 candidate, pending the authenticated session). Until
 then USD is uniformly `Estimate`, which is the stricter label.
+
+## AJ-E610 — two-clock display (2026-10-16)
+
+### Test output
+
+- `cargo test -p juggler-app --test quota_display` — 5/5: typed no-data
+  (unknown/learning, no percentage, never 0%), Tracking with
+  percentage+badge, Codex-Pro 5 h omission WITH reason (weekly kept),
+  Gemini unavailable-with-reason, D-12 renewal states with the
+  user-tunable 1–30 day threshold.
+- `vitest src/components/QuotaRings.test.tsx` — 16/16: the full state
+  matrix on real renders (measured badge-adjacency + aria text
+  equivalent, stale demotion "last measured 22m ago" + opacity,
+  blocked reset CTA, omitted-ring reason, Gemini unavailability,
+  two-clock separation — the renewal line carries no %, rings no
+  "Renew"), forecast pill states (Estimated renders the range),
+  QuotaChip typed copies, the badge-adjacency grep gate (no
+  `percent={0}`), and the D-12 no-inference test.
+- Visual: gallery `26-quota` — the Usage tab two-clock card ×
+  measured/stale/no-data/blocked × 1440×900 + 1280×800 × light+dark
+  (16 captures), copy-conformance asserted before each shot; the
+  pre-existing `08-inspector-aggregate/account-overview` capture now
+  seeds the engine seam and asserts the badge. Full suite 262/262.
+- Grayscale readability (WCAG 1.4.1): every number + badge is text —
+  the ring's stroke is never the sole carrier; the typed-state and
+  badge tests pin this per state.
+- Rail note: the rail's per-session quota line (I-05) predates this
+  task; the ACCOUNT-level surfaces (I-06) live on the account card,
+  the Usage tab, and NewSession rows. No tray exists in the app yet
+  (deep/10 §19 tray is a later surface) — recorded, not silently
+  omitted.
+- Pending live evidence (maintainer login, same blocker as E607/E609):
+  the ±5 % `/usage` dogfood and the manual renewal-entry restart
+  persistence check ride the next authenticated session. The state
+  machine + persistence paths are covered by the fixture suites.
