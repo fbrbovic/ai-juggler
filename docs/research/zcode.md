@@ -94,3 +94,12 @@
 3. Production auto-update feed URL unknown (runtime `setFeedURL`).
 4. Whether ZCode will ever ship as a standalone npm/brew CLI; today it is app-bundle-only.
 5. Community pain-point evidence is indirect (docs revisions, third-party tracker positioning) — no quotable forum threads retrieved.
+
+## §B8 addendum — billing/credit investigation (AJ-E604, 2026-10-15)
+
+Append-only per the task law; supersedes nothing above.
+
+- Live captures + per-field AJ-E601 grades: `docs/research/evidence/billing/zcode-captures.md`. Headlines: **credit burn is `Computed`-ready** (model_usage rows verified across two days ≥24 h apart; the ±0 recomputation script ships beside the packet), with the bucket→column mapping stated as `inferred` (`computed_total = input + output` pins `input_tokens` as all-inclusive — the fresh/cached split is arithmetic, not vendor-documented); **pool totals stay `Estimate`-at-best** (no sanctioned remote source; the "no public quota API" claim re-verified against docs.z.ai on 2026-10-15 — billing web page only); **renewal stays `unknown`/user-entered** (≥4 surfaces searched, negatives recorded in the packet).
+- Tier table re-checked 2026-10-15 (docs.z.ai/devpack/overview): unchanged since the 2026-07-30 revision (Lite 2,000/10,000; Pro 12,000/60,000; Max 28,000/140,000).
+- NEW formula detail since §A1: MCP tool calls (Web Search / Web Reader / Zread) each bill at an output multiplier of 1.2 — the recomputation script does not model these; AJ-E607 must treat sessions using MCP tools as slightly under-counted (or extend the script from tool_usage rows).
+- Cap-entry wording inputs for AJ-E610 (vendor spellings): tiers "Lite", "Pro", "Max"; caps "credits per 5 hours" and "weekly credits"; burn badge "Computed"; pool badge "Estimate" until caps entered.

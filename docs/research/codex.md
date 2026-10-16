@@ -85,3 +85,11 @@ Source: **OpenAI Terms of Use, effective 2026-01-01** — https://openai.com/pol
 2. **Quota monitoring:** no official API — best local signals are rollout `token_usage_record` lines, `exec --json` `turn.completed.usage`, `/statusline` widgets; model everything as **estimated** usage, mirroring OpenAI's own language.
 3. **Control plane:** `codex app-server` (JSON-RPC, schema-generatable) is the purpose-built embedding surface — threads/turns/approvals/events; `codex exec --json` suffices for simpler supervision; `notify` hooks give turn-completion pings.
 4. **Version treadmill:** profile semantics broke at 0.134.0; MCP-server binary removed 2026-09-05. Pin versions and re-verify the config reference each release.
+
+## §9 addendum — billing/quota investigation (AJ-E603, 2026-10-15)
+
+Append-only per the task law; supersedes nothing above.
+
+- Live captures + AJ-E601 grades: `docs/research/evidence/billing/codex-captures.md`. Headlines: rollout `token_usage_record` (Desktop 0.162.0-alpha.17.2, two sessions ≥24 h apart) and the npm CLI 0.163.0 `exec --json` envelope are **verified local-observable** → per-turn tokens may render **Measured**; plan-credit percentage has **no sanctioned source** (the `/statusline` widgets render an undocumented `rateLimits` feed — prohibited; scraping is the ToS line) → Codex quota always renders **Estimate** with `≈` resets; renewal stays **unknown** (≥4 negative surfaces recorded).
+- The API boundary nailed with dated evidence: `/v1/organization/costs` is Admin-key, org-scoped, pay-as-you-go API usage only — ChatGPT seats are a separate billing system; API billing must never be presented as subscription renewal evidence.
+- Plan tier of the captured install is **unverified** (rollouts carry no plan field) — per-tier ceilings stay unverified until an authenticated capture names its tier.
