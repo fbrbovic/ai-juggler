@@ -571,6 +571,50 @@ impl ProcessLedgerRepo {
         Ok(out)
     }
 
+    /// Every LIVE (session, machine) composite key (AJ-E511): the
+    /// all-machines inventory walks these, then reads each key's
+    /// rows — sessions on two machines appear as two keys, never
+    /// merged (the D-13 join rule).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::Storage`] on SQLite failures.
+    pub fn live_session_machines(&self) -> Result<Vec<(String, String)>, CoreError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT session_id, machine_id FROM process_ledger
+             WHERE state IN ('running', 'orphaned', 'unverifiable')",
+        )?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// The FLEET composite-key read (AJ-E511, D-13): one session's
+    /// rows ON ONE MACHINE. `session_id` alone is NOT unique once
+    /// machines sync — every cross-machine join goes through
+    /// `session_id+machine_id`. Rides the v17 index.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::Storage`] on SQLite failures.
+    pub fn rows_for_session_on_machine(
+        &self,
+        session_id: &str,
+        machine_id: &str,
+    ) -> Result<Vec<LedgerRow>, CoreError> {
+        let conn = self.lock()?;
+        let mut out = Vec::new();
+        let mut stmt = conn
+            .prepare("SELECT * FROM process_ledger WHERE session_id = ?1 AND machine_id = ?2 ORDER BY depth, pid")?;
+        let rows = stmt.query_map(params![session_id, machine_id], map_row)?;
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     /// Prunes `exited` rows last seen before `before_ms`. Running
     /// rows are NEVER pruned. Returns the removed count.
     ///

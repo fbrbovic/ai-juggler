@@ -22,7 +22,7 @@ credential-byte reads (deep/09 §Q1; docs/research/codex.md:70-72). Unproven sou
 
 ---
 
-### AJ-E601 Sanctioned-source proof protocol for Provider billing & renewal data | Status: TODO | Priority P0 | Effort M | Depends: none
+### AJ-E601 Sanctioned-source proof protocol for Provider billing & renewal data | Status: DONE-EVIDENCED (evidence: docs/qa/evidence/AJ-E601/manifest.md) | Priority P0 | Effort M | Depends: none
 **Goal**: One reusable protocol that every per-Provider billing/renewal investigation (AJ-E602–E605)
 must pass before any discovered source may feed product code, so D-12's "sanctioned, read-only,
 verified live" bar is testable rather than asserted.

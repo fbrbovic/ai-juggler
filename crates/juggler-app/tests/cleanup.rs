@@ -97,7 +97,7 @@ fn cleanup_centre_dogfood_orphan_row_with_evidence_and_zero_kill_fields() {
     // WITH the helper row landed (a tree freezing at exit keeps only
     // its last pre-exit rows — the helper must be seen while live).
     let live_landed = tick_until(&state, 20_000, || {
-        let info = commands::cleanup_inventory_inner(&state, "all-managed");
+        let info = commands::cleanup_inventory_inner(&state, "all-managed", false);
         {
             use juggler_supervisor::tree::LedgerStore as _;
             eprintln!(
@@ -134,7 +134,7 @@ fn cleanup_centre_dogfood_orphan_row_with_evidence_and_zero_kill_fields() {
         })
     });
     assert!(live_landed, "the live tree never showed as healthy");
-    let live = commands::cleanup_inventory_inner(&state, "all-managed");
+    let live = commands::cleanup_inventory_inner(&state, "all-managed", false);
     println!(
         "[cleanup-live] {}",
         serde_json::to_string_pretty(&live).unwrap()
@@ -150,7 +150,7 @@ fn cleanup_centre_dogfood_orphan_row_with_evidence_and_zero_kill_fields() {
         .arg(spawned.pid.to_string())
         .status();
     let orphan_landed = tick_until(&state, 20_000, || {
-        let info = commands::cleanup_inventory_inner(&state, "needs-attention");
+        let info = commands::cleanup_inventory_inner(&state, "needs-attention", false);
         info.groups.iter().any(|group| {
             group.session == "sess-e506"
                 && group.rows.iter().any(|row| {
@@ -167,7 +167,7 @@ fn cleanup_centre_dogfood_orphan_row_with_evidence_and_zero_kill_fields() {
         "the orphan row with :5173 never appeared in needs-attention"
     );
 
-    let info = commands::cleanup_inventory_inner(&state, "needs-attention");
+    let info = commands::cleanup_inventory_inner(&state, "needs-attention", false);
     println!(
         "[cleanup-orphan] {}",
         serde_json::to_string_pretty(&info).unwrap()

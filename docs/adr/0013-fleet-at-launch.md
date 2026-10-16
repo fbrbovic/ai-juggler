@@ -42,3 +42,29 @@ multi-machine integrates cleanly rather than being retrofitted.
 E7 ships identity/transport/pairing early and remote surfaces later in
 beta; local designs must stay fleet-shaped in review; scope and
 estimates re-planned around D-13 (recorded in EPICS phases).
+
+## Open questions (beta-exit criteria, AJ-E511)
+
+Recorded per D-13/D-15 without implementing transport — shaping the
+data is this task's whole scope (`juggler-link` is SPEC §11):
+
+1. **Identity**: machine labels are user-editable display names over
+   the generated id (`This Mac` default) — when does a re-labelled
+   machine propagate, and what wins on label collision?
+2. **Sync/transport**: gRPC/mTLS per ADR-0004 — do ledger deltas sync
+   row-level (composite `session_id+machine_id+boot_id` key) or as
+   per-machine snapshots? PID/PGID are unique only per machine+boot;
+   any merge without all three re-creates the false-kill bug at fleet
+   scale (E511's disjoint-rows test is the standing guard).
+3. **Remote ownership**: a console must never signal without the
+   owning node's permission (`View`/`Control`/`NoAccess`) — is
+   permission re-checked per command or cached per pairing? Remote
+   cleanup rides the OWNING node's E507 ladder, never the console's.
+4. **Offline**: stale foreign rows must not present as live — the
+   inventory marks foreign rows display-only until a freshness
+   heartbeat exists; what is the staleness threshold, and do orphaned
+   foreign rows ever expire locally?
+5. **Security**: the STRIDE review (spoofed mDNS, MITM pre-pinning,
+   replayed commands, stolen identity keys, malicious paired peer) is
+   the AJ-E710 beta-exit gate; identity pinning UX (6-digit/QR) is
+   unvalidated.

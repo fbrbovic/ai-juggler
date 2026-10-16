@@ -964,18 +964,39 @@ import type {
 } from "../components/KillSheet";
 
 /** AJ-E506: the read-only inventory (Tier 0). */
-export async function cleanupInventory(filter: string): Promise<CleanupInventoryData> {
+export async function cleanupInventory(
+  filter: string,
+  machineScope: "this" | "all" = "this",
+): Promise<CleanupInventoryData> {
   if (!hasBackend) {
-    return (
-      (window as unknown as { __AIJ_CLEANUP__?: CleanupInventoryData }).__AIJ_CLEANUP__ ?? {
+    const seeded = (window as unknown as { __AIJ_CLEANUP__?: CleanupInventoryData })
+      .__AIJ_CLEANUP__;
+    if (seeded === undefined) {
+      return {
         groups: [],
         clean_instances: 0,
+        local_machine: "",
         ledger_degraded: false,
         history: null,
-      }
-    );
+      };
+    }
+    // Mirror the backend contract for the seam (AJ-E511): the
+    // default scope lists THIS machine's rows only; "all" widens.
+    if (machineScope !== "all" && seeded.local_machine !== "") {
+      const local = seeded.local_machine;
+      const groups = seeded.groups
+        .map((group) => ({
+          ...group,
+          rows: group.rows.filter(
+            (row) => row.machine_id === undefined || row.machine_id === local,
+          ),
+        }))
+        .filter((group) => group.rows.length > 0);
+      return { ...seeded, groups };
+    }
+    return seeded;
   }
-  return invoke<CleanupInventoryData>("cleanup_inventory", { filter });
+  return invoke<CleanupInventoryData>("cleanup_inventory", { filter, machineScope });
 }
 
 /** AJ-E507: the kill sheet's step-1 verify (zero signalling). */

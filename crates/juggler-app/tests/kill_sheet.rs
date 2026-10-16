@@ -45,12 +45,14 @@ fn sh_spec(script: &str, cwd: &Path) -> LaunchSpec {
     }
 }
 
-fn spawn_ctx() -> juggler_supervisor::tree::SpawnContext {
+fn spawn_ctx(state: &Arc<AppState>) -> juggler_supervisor::tree::SpawnContext {
     juggler_supervisor::tree::SpawnContext {
         provider: "claude-code".into(),
         account_id: Some("acc-kill".into()),
         project_id: Some("proj-kill".into()),
-        machine: juggler_core::model::MachineId::new("machine-kill"),
+        // AJ-E511: spawn attribution rides the persisted local-machine
+        // identity — a hardcoded machine now refuses at the kill gate.
+        machine: commands::local_machine_id(state),
         role: "root",
     }
 }
@@ -96,10 +98,10 @@ fn port_open(port: u16) -> bool {
 }
 
 /// Spawns the session and waits until the ledger row is live.
-fn spawn_root(state: &AppState, session: &SessionId, script: &str, dir: &Path) -> u32 {
+fn spawn_root(state: &Arc<AppState>, session: &SessionId, script: &str, dir: &Path) -> u32 {
     state
         .supervisor
-        .spawn(session, &sh_spec(script, dir), &spawn_ctx())
+        .spawn(session, &sh_spec(script, dir), &spawn_ctx(&state.clone()))
         .unwrap();
     let landed = wait_for(5_000, || {
         state

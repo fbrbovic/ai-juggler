@@ -296,7 +296,7 @@ fn crash_drill_readopts_verifies_and_reports() {
 
     // Req.2: the down-period helper is `orphaned` with the distinct
     // label; the forged row is `unverifiable`, listed, still alive.
-    let inventory = commands::cleanup_inventory_inner(&state2, "all-managed");
+    let inventory = commands::cleanup_inventory_inner(&state2, "all-managed", false);
     let c_row = inventory
         .groups
         .iter()

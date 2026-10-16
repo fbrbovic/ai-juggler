@@ -142,6 +142,26 @@ pub trait LedgerStore: Send + Sync {
     /// [`LedgerError::Store`] on store failure.
     fn session_rows(&self, session: &SessionId) -> Result<Vec<LedgerRow>, LedgerError>;
 
+    /// The FLEET composite-key read (AJ-E511): one session's rows on
+    /// ONE machine — the join key for every cross-machine query.
+    ///
+    /// # Errors
+    ///
+    /// [`LedgerError::Store`] on store failure.
+    fn rows_for_session_on_machine(
+        &self,
+        session: &SessionId,
+        machine: &MachineId,
+    ) -> Result<Vec<LedgerRow>, LedgerError>;
+
+    /// Every LIVE (session, machine) composite key (AJ-E511) — the
+    /// all-machines inventory's walk.
+    ///
+    /// # Errors
+    ///
+    /// [`LedgerError::Store`] on store failure.
+    fn live_session_machines(&self) -> Result<Vec<(String, String)>, LedgerError>;
+
     /// Batched listener join (AJ-E505): sets `listens_on` per row in
     /// ONE transaction per tick.
     ///
@@ -271,6 +291,22 @@ impl LedgerStore for CoreLedgerStore {
     fn session_rows(&self, session: &SessionId) -> Result<Vec<LedgerRow>, LedgerError> {
         self.repo
             .rows_for_session(session.as_str())
+            .map_err(|e| LedgerError::Store(e.to_string()))
+    }
+
+    fn rows_for_session_on_machine(
+        &self,
+        session: &SessionId,
+        machine: &MachineId,
+    ) -> Result<Vec<LedgerRow>, LedgerError> {
+        self.repo
+            .rows_for_session_on_machine(session.as_str(), machine.as_str())
+            .map_err(|e| LedgerError::Store(e.to_string()))
+    }
+
+    fn live_session_machines(&self) -> Result<Vec<(String, String)>, LedgerError> {
+        self.repo
+            .live_session_machines()
             .map_err(|e| LedgerError::Store(e.to_string()))
     }
 
