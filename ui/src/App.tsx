@@ -30,7 +30,7 @@ import { ReadyHome } from "./screens/ReadyHome";
 import { SessionPanel } from "./screens/WorkPanels";
 import { CostMatrix } from "./components/CostMatrix";
 import { NotificationRegion } from "./components/NotificationRegion";
-import { SwitchFlow } from "./components/SwitchFlow";
+import { SwitchFlow, SwitchUndoToast } from "./components/SwitchFlow";
 import { RightInspector } from "./components/RightInspector";
 import {
   accountsList,
@@ -149,6 +149,9 @@ export default function App() {
   // AJ-E205: the executing switch flow (freeze dialog → stages →
   // source-safe failure banner). Null = closed.
   const [switchFlow, setSwitchFlow] = useState<{ sessionId: string; targetProfileId: string; targetLabel: string } | null>(null);
+  // AJ-E206: the 10-second undo window after a 1-click switch (the
+  // edge is the undo handle). Null = no window open.
+  const [undoWindow, setUndoWindow] = useState<{ edgeId: string; targetLabel: string } | null>(null);
   // AJ-E505: the pre-launch port collision (advisor informs, never
   // blocks — Launch always proceeds on "Launch anyway").
   const [portWarning, setPortWarning] = useState<{
@@ -799,8 +802,28 @@ export default function App() {
           targetProfileId={switchFlow.targetProfileId}
           targetLabel={switchFlow.targetLabel}
           onClose={() => setSwitchFlow(null)}
-          onSwitched={(sessionId) => {
+          onSwitched={(sessionId, undo) => {
             setSwitchFlow(null);
+            void refresh();
+            selectSession(sessionId);
+            // AJ-E206: a completed 1-click switch leaves the 10s undo
+            // window open (the graph keeps the edge as the handle).
+            if (undo) {
+              setUndoWindow({
+                edgeId: undo.edgeId,
+                targetLabel: switchFlow.targetLabel,
+              });
+            }
+          }}
+        />
+      )}
+      {undoWindow && (
+        <SwitchUndoToast
+          edgeId={undoWindow.edgeId}
+          targetLabel={undoWindow.targetLabel}
+          onDismiss={() => setUndoWindow(null)}
+          onUndone={(sessionId) => {
+            setUndoWindow(null);
             void refresh();
             selectSession(sessionId);
           }}

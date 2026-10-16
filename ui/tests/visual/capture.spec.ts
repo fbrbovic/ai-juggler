@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking", "28-switch"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking", "28-switch", "29-door"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -2412,6 +2412,35 @@ const preflightSeams: Record<string, unknown> = {
 };
 void preflightSeams;
 
+/** AJ-E206: the door's wizard fixture — an unproven pair (F2,
+ * compacted) opens the wizard; the freeze choice + §7.1 warnings
+ * render on the Confirm step. */
+const SWITCH_WIZARD_FIXTURE = {
+  mechanism: "transplant",
+  fidelity: "F2",
+  score: 0.78,
+  warnings: [
+    "This conversation was compacted. Early detail carries as text, not as live memory — it may ask about early decisions.",
+  ],
+  zombies: ["pid 1234 (node vite)"],
+  diff_snapshotted: true,
+  source_live: true,
+  experimental_copy:
+    "Experimental: only the main transcript moves. Subagent files and rewind history stay on the source. The source stays resumable.",
+  door: "wizard" as const,
+  wizard_steps: ["Target", "What's carried", "Confirm"],
+  wizard_reasons: [
+    "This isn't the usual account for this project.",
+    "The carry-list drops: todo list.",
+  ],
+  usual_account: false,
+  carry: {
+    carried: ["chat transcript", "rules & guidelines", "uncommitted git diff"],
+    regenerated: [],
+    dropped: ["todo list", "subagent state"],
+  },
+};
+
 for (const theme of THEMES) {
   for (const vp of SWITCH_VP) {
     const openDialog = async (page: import("@playwright/test").Page) => {
@@ -2423,59 +2452,56 @@ for (const theme of THEMES) {
         .click();
       await expect(page.getByTestId("switch-flow")).toBeVisible();
     };
+    // The wizard's Confirm step (Target → What's carried → seen en
+    // route — no execution from an unseen preview).
+    const reachConfirm = async (page: import("@playwright/test").Page) => {
+      await openDialog(page);
+      await expect(page.getByTestId("switch-wizard")).toBeVisible();
+      await page.getByTestId("switch-continue").click();
+      await page.getByTestId("switch-continue").click();
+      await expect(page.getByTestId("switch-step-confirm")).toBeVisible();
+    };
 
-    test(`switch — freeze dialog (finish-turn default) — ${vp.name} — ${theme}`, async ({ page }) => {
+    test(`switch — freeze on the wizard Confirm step (finish-turn default) — ${vp.name} — ${theme}`, async ({ page }) => {
       await page.addInitScript(
         ({ fixture, t0, theme: themeName }) => {
           const w = window as unknown as Record<string, unknown>;
           w.__AIJ_FIXTURE__ = fixture;
+          w.__AIJ_SWITCH_PREFLIGHT__ = fixture.doorFixture;
           localStorage.setItem("aij.theme", themeName);
           localStorage.setItem("aij.onboarding.dismissed", "1");
           sessionStorage.setItem("aij.ready.skipped", "1");
           Date.now = () => t0;
         },
-        { fixture: allStatuses, t0: T0, theme },
+        { fixture: { ...allStatuses, doorFixture: SWITCH_WIZARD_FIXTURE }, t0: T0, theme },
       );
       await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
       await page.setViewportSize({ width: vp.width, height: vp.height });
       await page.goto("/");
-      await openDialog(page);
+      await reachConfirm(page);
       await expect(page.getByText("Finish this turn, then switch")).toBeVisible();
-      await expect(page.getByTestId("switch-experimental")).toContainText("Experimental");
       await page.screenshot({
         path: resolve(GALLERY, `28-switch/dialog-finish-${vp.name}-${theme}.png`),
       });
     });
 
-    test(`switch — freeze dialog (stop-now + warnings) — ${vp.name} — ${theme}`, async ({ page }) => {
+    test(`switch — freeze stop-now + warnings on Confirm — ${vp.name} — ${theme}`, async ({ page }) => {
       await page.addInitScript(
         ({ fixture, t0, theme: themeName }) => {
           const w = window as unknown as Record<string, unknown>;
           w.__AIJ_FIXTURE__ = fixture;
-          w.__AIJ_SWITCH_PREFLIGHT__ = {
-            mechanism: "transplant",
-            fidelity: "F2",
-            score: 0.78,
-            warnings: [
-              "This conversation was compacted. Early detail carries as text, not as live memory — it may ask about early decisions.",
-            ],
-            zombies: ["pid 1234 (node vite)"],
-            diff_snapshotted: true,
-            source_live: true,
-            experimental_copy:
-              "Experimental: only the main transcript moves. Subagent files and rewind history stay on the source. The source stays resumable.",
-          };
+          w.__AIJ_SWITCH_PREFLIGHT__ = fixture.doorFixture;
           localStorage.setItem("aij.theme", themeName);
           localStorage.setItem("aij.onboarding.dismissed", "1");
           sessionStorage.setItem("aij.ready.skipped", "1");
           Date.now = () => t0;
         },
-        { fixture: allStatuses, t0: T0, theme },
+        { fixture: { ...allStatuses, doorFixture: SWITCH_WIZARD_FIXTURE }, t0: T0, theme },
       );
       await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
       await page.setViewportSize({ width: vp.width, height: vp.height });
       await page.goto("/");
-      await openDialog(page);
+      await reachConfirm(page);
       await page.getByText("Stop now and switch").click();
       await expect(page.getByTestId("switch-warnings")).toContainText("compacted");
       await page.screenshot({
@@ -2488,18 +2514,19 @@ for (const theme of THEMES) {
         ({ fixture, t0, theme: themeName }) => {
           const w = window as unknown as Record<string, unknown>;
           w.__AIJ_FIXTURE__ = fixture;
+          w.__AIJ_SWITCH_PREFLIGHT__ = fixture.doorFixture;
           w.__AIJ_SWITCH_EXECUTE_HANG__ = true;
           localStorage.setItem("aij.theme", themeName);
           localStorage.setItem("aij.onboarding.dismissed", "1");
           sessionStorage.setItem("aij.ready.skipped", "1");
           Date.now = () => t0;
         },
-        { fixture: allStatuses, t0: T0, theme },
+        { fixture: { ...allStatuses, doorFixture: SWITCH_WIZARD_FIXTURE }, t0: T0, theme },
       );
       await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
       await page.setViewportSize({ width: vp.width, height: vp.height });
       await page.goto("/");
-      await openDialog(page);
+      await reachConfirm(page);
       await page.getByTestId("switch-confirm").click();
       await expect(page.getByTestId("switch-executing")).toContainText("Launch");
       await page.screenshot({
@@ -2512,6 +2539,7 @@ for (const theme of THEMES) {
         ({ fixture, t0, theme: themeName }) => {
           const w = window as unknown as Record<string, unknown>;
           w.__AIJ_FIXTURE__ = fixture;
+          w.__AIJ_SWITCH_PREFLIGHT__ = fixture.doorFixture;
           w.__AIJ_SWITCH_EXECUTE_FAIL__ =
             "S-F5: target launch failed — staged for retry (terminal spawn failed).";
           localStorage.setItem("aij.theme", themeName);
@@ -2519,16 +2547,144 @@ for (const theme of THEMES) {
           sessionStorage.setItem("aij.ready.skipped", "1");
           Date.now = () => t0;
         },
-        { fixture: allStatuses, t0: T0, theme },
+        { fixture: { ...allStatuses, doorFixture: SWITCH_WIZARD_FIXTURE }, t0: T0, theme },
       );
       await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
       await page.setViewportSize({ width: vp.width, height: vp.height });
       await page.goto("/");
-      await openDialog(page);
+      await reachConfirm(page);
       await page.getByTestId("switch-confirm").click();
       await expect(page.getByTestId("switch-failed")).toContainText("resume it exactly where you left it");
       await page.screenshot({
         path: resolve(GALLERY, `28-switch/failed-${vp.name}-${theme}.png`),
+      });
+    });
+  }
+}
+
+/**
+ * AJ-E206 gallery 29 — the door itself (pass2/02 §8): the 1-click
+ * popover for a proven pair (carry one-liner + cost + the §5.2
+ * freeze choice), the 10-second undo toast after a 1-click switch,
+ * and the wizard at 3-step and 5-step renders — only non-trivial
+ * steps ever shown, and the Drop list is visible whenever the
+ * state is lossy (the P0 visual rule: a lossy state cannot be
+ * captured without its Drop list on screen).
+ */
+const SWITCH_ONECLICK_FIXTURE = {
+  mechanism: "transplant",
+  fidelity: "F4",
+  score: 1.0,
+  warnings: [],
+  zombies: [],
+  diff_snapshotted: false,
+  source_live: true,
+  experimental_copy:
+    "Experimental: only the main transcript moves. Subagent files and rewind history stay on the source. The source stays resumable.",
+  door: "one-click" as const,
+  wizard_steps: [],
+  wizard_reasons: [],
+  usual_account: true,
+  carry: {
+    carried: [
+      "chat transcript",
+      "rules & guidelines",
+      "uncommitted git diff",
+      "MCP config",
+      "skills & commands",
+      "model settings",
+    ],
+    regenerated: [],
+    dropped: [],
+  },
+};
+
+const SWITCH_WIZARD_5STEP_FIXTURE = {
+  ...SWITCH_WIZARD_FIXTURE,
+  wizard_steps: ["Target", "What's carried", "Conflicts", "Rules & diff", "Confirm"],
+  wizard_reasons: [
+    "This isn't the usual account for this project.",
+    "The carry-list drops: todo list.",
+  ],
+};
+
+for (const theme of THEMES) {
+  for (const vp of SWITCH_VP) {
+    const openDoor = async (
+      page: import("@playwright/test").Page,
+      preflight: unknown,
+    ) => {
+      await page.addInitScript(
+        ({ fixture, door, t0, theme: themeName }) => {
+          const w = window as unknown as Record<string, unknown>;
+          w.__AIJ_FIXTURE__ = fixture;
+          w.__AIJ_SWITCH_PREFLIGHT__ = door;
+          localStorage.setItem("aij.theme", themeName);
+          localStorage.setItem("aij.onboarding.dismissed", "1");
+          sessionStorage.setItem("aij.ready.skipped", "1");
+          Date.now = () => t0;
+        },
+        { fixture: allStatuses, door: preflight, t0: T0, theme },
+      );
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await page.getByRole("tab", { name: "Sessions" }).click();
+      await page.getByRole("button", { name: /Work Max/ }).first().click();
+      await page.getByTestId("handover-section")
+        .locator("button[title*='Experimental']")
+        .first()
+        .click();
+      await expect(page.getByTestId("switch-flow")).toBeVisible();
+    };
+
+    test(`door — 1-click popover (proven pair) — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openDoor(page, SWITCH_ONECLICK_FIXTURE);
+      await expect(page.getByTestId("switch-oneclick")).toBeVisible();
+      await expect(page.getByTestId("switch-oneclick-carry")).toContainText("nothing dropped");
+      await expect(page.getByTestId("switch-oneclick")).toContainText("usual account");
+      await page.screenshot({
+        path: resolve(GALLERY, `29-door/oneclick-popover-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`door — undo toast (10 s window) — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openDoor(page, SWITCH_ONECLICK_FIXTURE);
+      await page.getByTestId("switch-confirm").click();
+      await expect(page.getByTestId("switch-undo-toast")).toBeVisible();
+      await expect(page.getByTestId("switch-undo")).toContainText("Undo (10s)");
+      await page.screenshot({
+        path: resolve(GALLERY, `29-door/undo-toast-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`door — wizard Target step (why the wizard opened) — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openDoor(page, SWITCH_WIZARD_FIXTURE);
+      await expect(page.getByTestId("switch-wizard")).toBeVisible();
+      await expect(page.getByTestId("switch-steps")).toContainText("Step 1 of 3: Target");
+      await expect(page.getByTestId("switch-wizard-reasons")).toContainText("isn't the usual account");
+      await page.screenshot({
+        path: resolve(GALLERY, `29-door/wizard-target-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`door — wizard 3-step at What's carried (Drop list visible) — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openDoor(page, SWITCH_WIZARD_FIXTURE);
+      await page.getByTestId("switch-continue").click();
+      await expect(page.getByTestId("switch-steps")).toContainText("Step 2 of 3: What's carried");
+      await expect(page.getByTestId("switch-carry-dropped")).toContainText("todo list");
+      await page.screenshot({
+        path: resolve(GALLERY, `29-door/wizard-3step-carried-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`door — wizard 5-step render (conflicts + rules steps) — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openDoor(page, SWITCH_WIZARD_5STEP_FIXTURE);
+      await page.getByTestId("switch-continue").click();
+      await expect(page.getByTestId("switch-steps")).toContainText("Step 2 of 5: What's carried");
+      await expect(page.getByTestId("switch-carry-dropped")).toContainText("todo list");
+      await page.screenshot({
+        path: resolve(GALLERY, `29-door/wizard-5step-carried-${vp.name}-${theme}.png`),
       });
     });
   }

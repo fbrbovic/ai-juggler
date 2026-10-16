@@ -12,6 +12,7 @@
     allow(clippy::pedantic, clippy::unwrap_used, clippy::expect_used)
 )]
 
+pub mod door;
 pub mod fidelity;
 pub mod manifest;
 pub mod pack;

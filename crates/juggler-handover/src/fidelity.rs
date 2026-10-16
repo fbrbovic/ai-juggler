@@ -36,6 +36,24 @@ pub enum ArtifactKind {
     Subagents,
 }
 
+impl ArtifactKind {
+    /// The carry-list name (the vocabulary the door's carry summary
+    /// renders — AJ-E206; one name per kind, never "context").
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Chat => "chat transcript",
+            Self::Rules => "rules & guidelines",
+            Self::GitDiff => "uncommitted git diff",
+            Self::Todos => "todo list",
+            Self::Mcp => "MCP config",
+            Self::Skills => "skills & commands",
+            Self::EnvModel => "model settings",
+            Self::Subagents => "subagent state",
+        }
+    }
+}
+
 /// The artifact weights (pass2/02 §3.4; constants, not tunables).
 pub const WEIGHTS: &[(ArtifactKind, f64)] = &[
     (ArtifactKind::Chat, 0.35),

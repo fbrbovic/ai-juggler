@@ -1590,6 +1590,31 @@ export interface PreflightInfoData {
   diff_snapshotted: boolean;
   source_live: boolean;
   experimental_copy: string;
+  /** AJ-E206 §8 door verdict: "one-click" | "wizard". */
+  door: "one-click" | "wizard";
+  /** Wizard step titles in §8 order (empty for 1-click). */
+  wizard_steps: string[];
+  /** Why the wizard opened (one line per failed §8 condition). */
+  wizard_reasons: string[];
+  /** The target is the project's dominant account. */
+  usual_account: boolean;
+  /** The carry-list the door renders (AJ-E206). */
+  carry: CarryListData;
+}
+
+/** The carry-list grouped by disposition (AJ-E206). */
+export interface CarryListData {
+  carried: string[];
+  regenerated: string[];
+  dropped: string[];
+}
+
+/** AJ-E206: the executed switch's handles (the edge is the undo handle). */
+export interface SwitchExecutedData {
+  session_id: string;
+  pid: number;
+  edge_id: string;
+  source_session_id: string;
 }
 
 /** AJ-E205: preflight — ordered checks stop BEFORE any byte moves;
@@ -1611,6 +1636,15 @@ export async function switchPreflight(
         source_live: true,
         experimental_copy:
           "Experimental: only the main transcript moves. Subagent files and rewind history stay on the source. The source stays resumable.",
+        door: "wizard",
+        wizard_steps: ["Target", "What's carried", "Confirm"],
+        wizard_reasons: ["This isn't the usual account for this project."],
+        usual_account: false,
+        carry: {
+          carried: ["chat transcript", "rules & guidelines", "uncommitted git diff"],
+          regenerated: [],
+          dropped: ["todo list", "subagent state"],
+        },
       }
     );
   }
@@ -1624,7 +1658,7 @@ export async function switchExecute(
   sessionId: string,
   targetProfileId: string,
   freezeChoice: string,
-): Promise<LaunchResult> {
+): Promise<SwitchExecutedData> {
   if (!hasBackend) {
     const seams = window as unknown as {
       __AIJ_SWITCH_EXECUTE_FAIL__?: string;
@@ -1634,15 +1668,43 @@ export async function switchExecute(
       return Promise.reject(seams.__AIJ_SWITCH_EXECUTE_FAIL__);
     }
     if (seams.__AIJ_SWITCH_EXECUTE_HANG__) {
-      return new Promise<LaunchResult>(() => {});
+      return new Promise<SwitchExecutedData>(() => {});
     }
-    return { session_id: `sess-preview-${Date.now()}`, pid: 0 };
+    return {
+      session_id: `sess-preview-${Date.now()}`,
+      pid: 0,
+      edge_id: `edge-preview-${Date.now()}`,
+      source_session_id: sessionId,
+    };
   }
-  return invoke<LaunchResult>("switch_execute", {
+  return invoke<SwitchExecutedData>("switch_execute", {
     sessionId,
     targetProfileId,
     freezeChoice,
   });
+}
+
+/** AJ-E206 §8.2: undoes a completed switch — stops the continuation
+ * instance, resumes the source's native session, records the
+ * compensating edge. User-click only. */
+export async function switchUndo(edgeId: string): Promise<LaunchResult> {
+  if (!hasBackend) {
+    const seams = window as unknown as {
+      __AIJ_SWITCH_UNDO_CALLS__?: string[];
+      __AIJ_SWITCH_UNDO_FAIL__?: string;
+    };
+    // The guardrail seam: undo is observable so tests can prove it
+    // fires ONLY from the click.
+    seams.__AIJ_SWITCH_UNDO_CALLS__ = [
+      ...(seams.__AIJ_SWITCH_UNDO_CALLS__ ?? []),
+      edgeId,
+    ];
+    if (seams.__AIJ_SWITCH_UNDO_FAIL__ !== undefined) {
+      return Promise.reject(seams.__AIJ_SWITCH_UNDO_FAIL__);
+    }
+    return { session_id: `sess-undo-${Date.now()}`, pid: 0 };
+  }
+  return invoke<LaunchResult>("switch_undo", { edgeId });
 }
 
 /** Native macOS folder picker; null when cancelled. */
