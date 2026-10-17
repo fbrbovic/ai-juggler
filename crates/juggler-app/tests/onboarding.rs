@@ -283,3 +283,49 @@ fn errors_carry_code_retryable_and_user_message() {
     assert_eq!(serialized["code"], "unknown_harness");
     assert!(serialized["user_message"].is_string());
 }
+
+/// AJ-E302: the full 10-signal scan — every probe present with
+/// health, progress ticks reach 10 of 10, and the report carries
+/// seeds + desktop arrays. (Credential-discipline is pinned by the
+/// adapters-side guardrail test.)
+#[test]
+fn environment_scan_full_reports_ten_probes_with_health() {
+    let work = tempfile::tempdir().unwrap();
+    let stub = claude_stub(work.path());
+    let state = app_state(work.path(), &stub);
+
+    let ticks = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let ticks_sink = ticks.clone();
+    let report = commands::environment_scan_full_impl(
+        &state,
+        Some(&move |done, total| {
+            ticks_sink.borrow_mut().push((done, total));
+        }),
+    )
+    .unwrap();
+    let ticks = ticks.borrow();
+
+    assert_eq!(report.probes.len(), 10, "S1–S10 all present");
+    let ids: Vec<&str> = report.probes.iter().map(|p| p.id.as_str()).collect();
+    for expected in [
+        "s1-config-dirs",
+        "s2-env-overrides",
+        "s3-manager-t3",
+        "s4-manager-cc-switch",
+        "s5-shell-aliases",
+        "s6-installed-clis",
+        "s7-login-metadata",
+        "s8-usage-recency",
+        "s9-projects",
+        "s10-desktop",
+    ] {
+        assert!(ids.contains(&expected), "{expected} present");
+    }
+    for probe in &report.probes {
+        assert!(["ok", "partial", "denied"].contains(&probe.health.as_str()));
+        assert!(!probe.label.is_empty() && !probe.detail.is_empty());
+    }
+    assert!(!report.cancelled);
+    assert_eq!(ticks.last(), Some(&(10, 10)), "progress reaches 10 of 10");
+    assert!(report.seeds.is_empty() || !report.installs.is_empty());
+}

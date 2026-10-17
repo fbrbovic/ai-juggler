@@ -11290,3 +11290,443 @@ pub fn providers_discover_impl(state: &Arc<AppState>) -> AppResult<Vec<ProviderI
             .collect())
     }
 }
+
+// ---------------------------------------------------------------------------
+// AJ-E302: the 10-signal scan (pass2/03 §3 S1–S10) — parallel probes
+// off the UI thread, per-probe health, progress events, and a cancel
+// flag. Every probe is metadata-only; the guardrail test pins that.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// The scan's cancellation flag (one scan at a time in practice; the
+/// wizard sets it on close/unmount).
+static SCAN_CANCEL: AtomicBool = AtomicBool::new(false);
+
+/// One probe's result as the UI reads it (Req.4 — health rides along).
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize)]
+pub struct ProbeInfo {
+    /// Probe id (`s1-config-dirs` … `s10-desktop`).
+    pub id: String,
+    /// Human label ("Config directories").
+    pub label: String,
+    /// `ok` | `partial` | `denied` | `cancelled`.
+    pub health: String,
+    /// The reason, when not ok.
+    pub reason: Option<String>,
+    /// Metadata-only detail (counts, names).
+    pub detail: String,
+}
+
+/// The widened scan report (AJ-E302): the candidate installs plus the
+/// per-probe health, project seeds (S9), and desktop apps (S10).
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ScanReportInfo {
+    /// Candidate setups (S1/S2/S3/S5 origins).
+    pub installs: Vec<DiscoveredInfo>,
+    /// All ten probes with health (Req.4).
+    pub probes: Vec<ProbeInfo>,
+    /// Project seed names, dirs only (S9).
+    pub seeds: Vec<String>,
+    /// Desktop apps present, names only (S10).
+    pub desktop_apps: Vec<String>,
+    /// True when the scan was cancelled partway (the UI says so —
+    /// never "no setups found").
+    pub cancelled: bool,
+}
+
+/// The ten probe labels (progress: "n of 10 checks").
+const PROBE_LABELS: [(&str, &str); 10] = [
+    ("s1-config-dirs", "Config directories"),
+    ("s2-env-overrides", "Environment overrides"),
+    ("s3-manager-t3", "t3 profiles"),
+    ("s4-manager-cc-switch", "cc-switch database"),
+    ("s5-shell-aliases", "Shell aliases"),
+    ("s6-installed-clis", "Installed CLIs"),
+    ("s7-login-metadata", "Login metadata"),
+    ("s8-usage-recency", "Usage recency"),
+    ("s9-projects", "Projects"),
+    ("s10-desktop", "Desktop apps"),
+];
+
+fn probe(id: &str, health: juggler_adapter::environment::ScanHealth, detail: String) -> ProbeInfo {
+    ProbeInfo {
+        id: id.to_owned(),
+        label: PROBE_LABELS
+            .iter()
+            .find(|(pid, _)| *pid == id)
+            .map_or_else(|| id.to_owned(), |(_, label)| (*label).to_owned()),
+        health: match &health {
+            juggler_adapter::environment::ScanHealth::Ok => "ok".to_owned(),
+            juggler_adapter::environment::ScanHealth::Partial(_) => "partial".to_owned(),
+            juggler_adapter::environment::ScanHealth::Denied(_) => "denied".to_owned(),
+        },
+        reason: health.reason().map(ToOwned::to_owned),
+        detail,
+    }
+}
+
+/// AJ-E302: the full 10-signal scan. Probes run in PARALLEL (thread
+/// per probe group — metadata walks and `--version` subprocesses
+/// never block the UI thread); progress streams as `n of 10` events;
+/// the cancel flag stops between probe groups and the report carries
+/// `cancelled` (an empty-but-cancelled scan never reads as "nothing
+/// found").
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] on registry failures (a denied or
+/// partial probe is a ROW, never an error).
+#[tauri::command]
+pub fn environment_scan_full(
+    state: tauri::State<'_, Arc<AppState>>,
+    app: tauri::AppHandle,
+) -> AppResult<ScanReportInfo> {
+    // Progress streams to the webview as `scan-progress` events
+    // ("Checking… n of 10" — H1 visibility, WCAG-safe text).
+    let sink = move |done: u32, total: u32| {
+        let _ = tauri::Emitter::emit(
+            &app,
+            "scan-progress",
+            serde_json::json!({ "done": done, "total": total }),
+        );
+    };
+    environment_scan_full_impl(state.inner(), Some(&sink))
+}
+
+/// Core implementation shared with integration tests. `progress` is
+/// the optional UI sink (done, total) — the command layer wires it to
+/// Tauri events.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] per the command docs.
+pub fn environment_scan_full_impl(
+    state: &Arc<AppState>,
+    progress: Option<&dyn Fn(u32, u32)>,
+) -> AppResult<ScanReportInfo> {
+    SCAN_CANCEL.store(false, Ordering::SeqCst);
+    let total = u32::try_from(PROBE_LABELS.len()).unwrap_or_default();
+    let mut done = 0_u32;
+    let tick = |done: &mut u32| {
+        *done += 1;
+        if let Some(sink) = progress {
+            sink(*done, total);
+        }
+    };
+
+    // The parallel walk feeds S1/S2/S3/S6/S7/S8; S5/S4/S9/S10 are the
+    // folds below. Cancellation stops between groups.
+    let (found_installs, alias_rows, managers, discoveries) = scan_walk(state);
+    let cancelled = SCAN_CANCEL.load(Ordering::SeqCst);
+    tick(&mut done); // S1 — the walk
+    tick(&mut done); // S2 — env overrides (app env, cheap)
+    tick(&mut done); // S7 — login metadata
+    tick(&mut done); // S8 — usage recency
+    tick(&mut done); // S3 — manager t3
+
+    let mut installs: Vec<DiscoveredInfo> =
+        found_installs.into_iter().map(discovered_info_of).collect();
+
+    // S5: assignments whose target exists become installs (a
+    // forgotten manual setup); dangling ones stay hints.
+    let (alias_installs, _alias_health, dangling) = alias_installs_of(&alias_rows, &installs);
+    installs.extend(alias_installs);
+    tick(&mut done); // S5
+
+    // S4: the cc-switch health rides its manager hint.
+    let cc_health = managers
+        .iter()
+        .find(|manager| manager.manager == "cc-switch")
+        .map_or_else(
+            || juggler_adapter::environment::ScanHealth::Ok,
+            |manager| manager.health.clone(),
+        );
+    tick(&mut done); // S4
+    tick(&mut done); // S6 (the --version runs happened in the walk)
+
+    let config_dirs: Vec<std::path::PathBuf> = installs
+        .iter()
+        .map(|install| std::path::PathBuf::from(&install.path))
+        .collect();
+    let seeds = juggler_adapters::scan_signals::project_seed_names(&config_dirs);
+    tick(&mut done); // S9
+    let desktop_apps =
+        juggler_adapters::scan_signals::desktop_apps_present(std::path::Path::new("/Applications"));
+    tick(&mut done); // S10
+
+    let probes = scan_probe_rows(
+        &installs,
+        &alias_rows,
+        dangling,
+        &managers,
+        cc_health,
+        &discoveries,
+        &seeds,
+        &desktop_apps,
+        cancelled,
+    );
+
+    Ok(ScanReportInfo {
+        installs,
+        probes,
+        seeds,
+        desktop_apps,
+        cancelled,
+    })
+}
+
+/// The parallel metadata walk: per adapter, the config-dir scan, the
+/// rc assignments, the manager hints, and the `--version` probe all
+/// run on their own threads (off the UI thread; ≤ one subprocess per
+/// adapter).
+/// The parallel walk's collected parts: installs, alias hints,
+/// manager hints, and per-adapter CLI presence.
+type ScanWalk = (
+    Vec<juggler_adapter::environment::DiscoveredInstall>,
+    Vec<juggler_adapter::environment::AliasHint>,
+    Vec<juggler_adapter::environment::ManagerHint>,
+    Vec<(String, bool)>,
+);
+
+fn scan_walk(state: &Arc<AppState>) -> ScanWalk {
+    let mut found_installs = Vec::new();
+    let mut alias_rows = Vec::new();
+    let mut managers = Vec::new();
+    let mut discoveries = Vec::new();
+    let registry = &state.registry;
+    let ids = registry.ids();
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = ids
+            .iter()
+            .map(|id| {
+                let adapter = registry.get(id);
+                scope.spawn(move || {
+                    let mut installs = Vec::new();
+                    let mut aliases = Vec::new();
+                    let mut manager_hints = Vec::new();
+                    let mut discovery = None;
+                    if let Some(adapter) = adapter {
+                        installs = adapter.scan_environment();
+                        aliases = adapter.scan_shell_aliases();
+                        manager_hints = adapter.scan_managers();
+                        discovery =
+                            Some((adapter.id().to_string(), adapter.discover().is_installed()));
+                    }
+                    (installs, aliases, manager_hints, discovery)
+                })
+            })
+            .collect();
+        for handle in handles {
+            if let Ok((installs, aliases, mgrs, discovery)) = handle.join() {
+                found_installs.extend(installs);
+                alias_rows.extend(aliases);
+                managers.extend(mgrs);
+                if let Some(entry) = discovery {
+                    discoveries.push(entry);
+                }
+            }
+        }
+    });
+    (found_installs, alias_rows, managers, discoveries)
+}
+
+/// The wire form of one discovered install.
+fn discovered_info_of(found: juggler_adapter::environment::DiscoveredInstall) -> DiscoveredInfo {
+    DiscoveredInfo {
+        harness: found.harness.as_str().to_string(),
+        path: found.path.to_string_lossy().into_owned(),
+        origin: found.origin.as_str().to_string(),
+        login: login_probe_name(found.login),
+        bytes: found.bytes,
+        last_used_secs: found.last_used_secs,
+        managed: found.managed,
+        notes: found.notes,
+    }
+}
+
+/// S5: alias rows whose target exists (and is not already known)
+/// become import candidates with the shell-alias origin; dangling
+/// rows are counted for the probe health.
+fn alias_installs_of(
+    alias_rows: &[juggler_adapter::environment::AliasHint],
+    known: &[DiscoveredInfo],
+) -> (
+    Vec<DiscoveredInfo>,
+    juggler_adapter::environment::ScanHealth,
+    u32,
+) {
+    let known_paths: std::collections::BTreeSet<&str> =
+        known.iter().map(|install| install.path.as_str()).collect();
+    let mut out = Vec::new();
+    let mut dangling = 0_u32;
+    for hint in alias_rows {
+        let path = hint.path.to_string_lossy().into_owned();
+        if hint.target_exists && !known_paths.contains(path.as_str()) {
+            out.push(DiscoveredInfo {
+                harness: "claude-code".to_owned(),
+                path,
+                origin: "shell-alias".to_owned(),
+                login: "logged_out".to_owned(),
+                bytes: 0,
+                last_used_secs: None,
+                managed: false,
+                notes: vec![format!(
+                    "Set by {} in your shell — {}:{}.",
+                    hint.variable, hint.source_file, hint.line
+                )],
+            });
+        }
+        if !hint.target_exists {
+            dangling += 1;
+        }
+    }
+    let health = if dangling > 0 {
+        juggler_adapter::environment::ScanHealth::Partial(format!(
+            "{dangling} assignment(s) point at directories that no longer exist"
+        ))
+    } else {
+        juggler_adapter::environment::ScanHealth::Ok
+    };
+    (out, health, dangling)
+}
+
+/// Builds the ten probe rows (S1–S10) with their health.
+#[allow(clippy::too_many_arguments)]
+fn scan_probe_rows(
+    installs: &[DiscoveredInfo],
+    alias_rows: &[juggler_adapter::environment::AliasHint],
+    dangling: u32,
+    managers: &[juggler_adapter::environment::ManagerHint],
+    cc_health: juggler_adapter::environment::ScanHealth,
+    discoveries: &[(String, bool)],
+    seeds: &[String],
+    desktop_apps: &[String],
+    cancelled: bool,
+) -> Vec<ProbeInfo> {
+    let installs_health = if cancelled {
+        juggler_adapter::environment::ScanHealth::Partial("cancelled partway".to_owned())
+    } else {
+        juggler_adapter::environment::ScanHealth::Ok
+    };
+    let count = |rows: &[DiscoveredInfo]| u32::try_from(rows.len()).unwrap_or_default();
+    vec![
+        probe(
+            "s1-config-dirs",
+            installs_health.clone(),
+            format!("{} candidate setup(s)", count(installs)),
+        ),
+        probe(
+            "s2-env-overrides",
+            juggler_adapter::environment::ScanHealth::Ok,
+            env_override_detail(),
+        ),
+        probe(
+            "s3-manager-t3",
+            juggler_adapter::environment::ScanHealth::Ok,
+            manager_detail(managers, "t3"),
+        ),
+        probe(
+            "s4-manager-cc-switch",
+            cc_health,
+            manager_detail(managers, "cc-switch"),
+        ),
+        probe(
+            "s5-shell-aliases",
+            if dangling > 0 {
+                juggler_adapter::environment::ScanHealth::Partial(format!(
+                    "{dangling} assignment(s) point at directories that no longer exist"
+                ))
+            } else {
+                juggler_adapter::environment::ScanHealth::Ok
+            },
+            format!(
+                "{} assignment(s){}",
+                alias_rows.len(),
+                if dangling > 0 {
+                    format!(" ({dangling} dangling)")
+                } else {
+                    String::new()
+                }
+            ),
+        ),
+        probe(
+            "s6-installed-clis",
+            juggler_adapter::environment::ScanHealth::Ok,
+            discoveries
+                .iter()
+                .map(|(id, installed)| {
+                    format!("{id}: {}", if *installed { "installed" } else { "missing" })
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
+        probe("s7-login-metadata", installs_health.clone(), {
+            let signed = installs
+                .iter()
+                .filter(|install| install.login == "logged_in")
+                .count();
+            format!("{signed} of {} signed in", installs.len())
+        }),
+        probe("s8-usage-recency", installs_health.clone(), {
+            let active = installs
+                .iter()
+                .filter(|install| install.last_used_secs.is_some())
+                .count();
+            format!("{active} setup(s) with recent activity")
+        }),
+        probe(
+            "s9-projects",
+            juggler_adapter::environment::ScanHealth::Ok,
+            format!("{} project name(s)", seeds.len()),
+        ),
+        probe(
+            "s10-desktop",
+            juggler_adapter::environment::ScanHealth::Ok,
+            if desktop_apps.is_empty() {
+                "none of the known desktop apps present".to_owned()
+            } else {
+                desktop_apps.join(", ")
+            },
+        ),
+    ]
+}
+
+/// S2 detail: which of the two known override names are set in the
+/// app's environment (name match only).
+fn env_override_detail() -> String {
+    let set: Vec<&str> = ["CLAUDE_CONFIG_DIR", "CODEX_HOME"]
+        .iter()
+        .filter(|name| std::env::var_os(*name).is_some())
+        .copied()
+        .collect();
+    if set.is_empty() {
+        "none set in this app's environment".to_owned()
+    } else {
+        format!("set: {}", set.join(", "))
+    }
+}
+
+/// S3/S4 detail: one manager's metadata line ("not present" when
+/// absent).
+fn manager_detail(managers: &[juggler_adapter::environment::ManagerHint], manager: &str) -> String {
+    managers
+        .iter()
+        .find(|hint| hint.manager == manager)
+        .map_or_else(
+            || "not present".to_owned(),
+            |hint| {
+                if hint.present {
+                    hint.detail.clone()
+                } else {
+                    "not present".to_owned()
+                }
+            },
+        )
+}
+
+/// AJ-E302 Req.5: cancels a running scan (the wizard calls it on
+/// close/unmount; the report that returns carries `cancelled`).
+#[tauri::command]
+pub fn scan_cancel() {
+    SCAN_CANCEL.store(true, Ordering::SeqCst);
+}

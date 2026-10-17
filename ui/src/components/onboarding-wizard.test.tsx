@@ -10,14 +10,34 @@ import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { OnboardingWizard } from "../screens/OnboardingWizard";
 import * as bridgeModule from "../lib/bridge";
-import type { ProviderInstallData } from "../lib/bridge";
+import type { ProviderInstallData, ScanReportData } from "../lib/bridge";
 
 const w = () => window as unknown as Record<string, unknown>;
 
 beforeEach(() => {
   delete w().__AIJ_PROVIDER_INSTALLS__;
   delete w().__AIJ_ENVIRONMENT_SCAN__;
+  delete w().__AIJ_SCAN_REPORT__;
 });
+
+const DENIED_REPORT: ScanReportData = {
+  installs: [],
+  probes: [
+    { id: "s1-config-dirs", label: "Config directories", health: "ok", reason: null, detail: "0 candidate setup(s)" },
+    { id: "s2-env-overrides", label: "Environment overrides", health: "ok", reason: null, detail: "none set" },
+    { id: "s3-manager-t3", label: "t3 profiles", health: "ok", reason: null, detail: "not present" },
+    { id: "s4-manager-cc-switch", label: "cc-switch database", health: "denied", reason: "cc-switch database is locked or unreadable", detail: "existence only" },
+    { id: "s5-shell-aliases", label: "Shell aliases", health: "partial", reason: "1 assignment points at a directory that no longer exists", detail: "1 assignment(s) (1 dangling)" },
+    { id: "s6-installed-clis", label: "Installed CLIs", health: "ok", reason: null, detail: "claude-code: installed" },
+    { id: "s7-login-metadata", label: "Login metadata", health: "ok", reason: null, detail: "0 of 0 signed in" },
+    { id: "s8-usage-recency", label: "Usage recency", health: "ok", reason: null, detail: "0 setup(s)" },
+    { id: "s9-projects", label: "Projects", health: "ok", reason: null, detail: "0 project name(s)" },
+    { id: "s10-desktop", label: "Desktop apps", health: "ok", reason: null, detail: "none present" },
+  ],
+  seeds: [],
+  desktop_apps: [],
+  cancelled: false,
+};
 
 const INSTALLED: ProviderInstallData[] = [
   {
@@ -148,13 +168,17 @@ describe("AJ-E301 Step-0 install gate", () => {
     await waitFor(() =>
       expect(container.textContent).toContain("Let's look at what Claude Code already has"),
     );
-    // Nothing to import (scan empty) → continue with a fresh account.
-    await act(async () => {
-      fireEvent.click(
-        Array.from(container.querySelectorAll("button")).find((button) =>
-          button.textContent?.includes("fresh account"),
-        )!,
+    // Nothing to import (scan empty) → wait for the 10-tick progress
+    // to finish, then continue with a fresh account.
+    const fresh = await waitFor(() => {
+      const button = Array.from(container.querySelectorAll("button")).find((candidate) =>
+        candidate.textContent?.includes("fresh account"),
       );
+      expect(button).toBeTruthy();
+      return button!;
+    });
+    await act(async () => {
+      fireEvent.click(fresh);
     });
     const input = await waitFor(() => {
       const field = container.querySelector(
@@ -178,5 +202,60 @@ describe("AJ-E301 Step-0 install gate", () => {
     expect(errorBox.textContent).toContain("Couldn't create the account's private folder");
     expect(errorBox.textContent).toContain("Try again");
     spy.mockRestore();
+  });
+});
+
+describe("AJ-E302 the 10-signal scan in the wizard", () => {
+  it("streams progress as 'n of 10' with aria-live, then the Details rows", async () => {
+    w().__AIJ_PROVIDER_INSTALLS__ = INSTALLED;
+    const { container } = mount();
+    await waitFor(() =>
+      expect(container.querySelector("[data-testid='install-continue']")).not.toBeNull(),
+    );
+    await act(async () => {
+      fireEvent.click(container.querySelector("[data-testid='install-continue']")!);
+    });
+    const progressBox = await waitFor(() => {
+      const box = container.querySelector("[data-testid='scan-progress']")!;
+      expect(box).not.toBeNull();
+      return box;
+    });
+    expect(progressBox.getAttribute("aria-live")).toBe("polite");
+    expect(progressBox.textContent).toMatch(/of 10 checks/);
+    await waitFor(() =>
+      expect(container.querySelector("[data-testid='scan-details-toggle']")).not.toBeNull(),
+    );
+    fireEvent.click(container.querySelector("[data-testid='scan-details-toggle']")!);
+    await waitFor(() =>
+      expect(container.querySelectorAll("[data-testid='scan-probe-row']").length).toBe(10),
+    );
+    const details = container.querySelector("[data-testid='scan-details']")!;
+    expect(details.textContent).toContain("checked");
+    expect(details.textContent).toContain("Config directories");
+  });
+
+  it("a denied probe with an empty result NEVER reads 'No existing setups found'", async () => {
+    w().__AIJ_PROVIDER_INSTALLS__ = INSTALLED;
+    w().__AIJ_SCAN_REPORT__ = DENIED_REPORT;
+    const { container } = mount();
+    await waitFor(() =>
+      expect(container.querySelector("[data-testid='install-continue']")).not.toBeNull(),
+    );
+    await act(async () => {
+      fireEvent.click(container.querySelector("[data-testid='install-continue']")!);
+    });
+    await waitFor(() =>
+      expect(container.querySelector("[data-testid='scan-denied']")).not.toBeNull(),
+    );
+    expect(container.querySelector("[data-testid='scan-denied']")!.textContent).toContain(
+      "We couldn't check 1 place",
+    );
+    expect(container.textContent).not.toContain("No existing Claude Code setups found");
+    fireEvent.click(container.querySelector("[data-testid='scan-details-toggle']")!);
+    await waitFor(() =>
+      expect(container.querySelector("[data-testid='scan-details']")!.textContent).toContain(
+        "cc-switch database",
+      ),
+    );
   });
 });

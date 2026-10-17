@@ -6,11 +6,14 @@ import {
   accountLoginCommand,
   accountLoginState,
   createAccount,
-  environmentScan,
+  environmentScanFull,
   hasLiveBackend,
   loginOpenWeb,
   providersDiscover,
+  scanCancel,
   terminalSpawnLogin,
+  type ProbeRowData,
+  type ScanReportData,
   type AccountInfo,
   type DiscoveredInfo,
   type ImportResult,
@@ -117,6 +120,35 @@ function ProviderRow({
   );
 }
 
+/** Denied probes in a report (the wizard's honest-empty guard: an
+ * empty result with ANY denied probe never reads "no setups
+ * found"). */
+function reportDeniedCount(probes: ProbeRowData[]): number {
+  return probes.filter((probe) => probe.health === "denied").length;
+}
+
+/** One probe row inside Details (text health, never colour-only). */
+function ScanProbeRow({ probe }: { probe: ProbeRowData }): JSX.Element {
+  const tone =
+    probe.health === "ok"
+      ? "text-muted"
+      : probe.health === "partial"
+        ? "text-warning"
+        : "text-danger";
+  const word =
+    probe.health === "ok" ? "checked" : probe.health === "partial" ? "partial" : "couldn't check";
+  return (
+    <li className="flex flex-col text-[11px] leading-relaxed" data-testid="scan-probe-row">
+      <span>
+        <span className="text-ink">{probe.label}</span>{" "}
+        <span className={tone}>{word}</span>
+        <span className="text-muted"> — {probe.detail}</span>
+      </span>
+      {probe.reason && <span className="text-muted">{probe.reason}</span>}
+    </li>
+  );
+}
+
 /**
  * The onboarding wizard (ADR-0006, spec §12.1; AJ-E301): one shell
  * for EVERY Provider (`provider` parameter — no baked-in harness),
@@ -145,7 +177,9 @@ export function OnboardingWizard({
 }) {
   const [step, setStep] = useState<Step>("install");
   const [installs, setInstalls] = useState<ProviderInstallData[] | null>(null);
-  const [scan, setScan] = useState<DiscoveredInfo[] | null>(null);
+  const [report, setReport] = useState<ScanReportData | null>(null);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [importing, setImporting] = useState<DiscoveredInfo | null>(null);
   const [label, setLabel] = useState("");
   const [plan, setPlan] = useState<string | null>(null);
@@ -175,17 +209,24 @@ export function OnboardingWizard({
     };
   }, []);
 
-  // Step 1 runs the scan automatically once the gate is passed.
+  // Step 1 runs the 10-signal scan automatically once the gate is
+  // passed — progress streams as "n of 10"; closing cancels.
   useEffect(() => {
-    if (step !== "detect" || scan !== null) return;
+    if (step !== "detect" || report !== null) return;
     let cancelled = false;
-    void environmentScan().then((found) => {
-      if (!cancelled) setScan(found);
+    void environmentScanFull((done, total) => {
+      if (!cancelled) setProgress({ done, total });
+    }).then((found) => {
+      if (!cancelled) {
+        setReport(found);
+        setProgress(null);
+      }
     });
     return () => {
       cancelled = true;
+      void scanCancel();
     };
-  }, [step, scan]);
+  }, [step, report]);
 
   useEffect(() => {
     if (account) void accountLoginCommand(account.id).then(setCommand);
@@ -375,12 +416,33 @@ export function OnboardingWizard({
                 </p>
               </div>
 
-              {scan === null ? (
-                <div className="flex items-center gap-3 rounded-xl border border-hairline px-4 py-5">
+              {report === null ? (
+                <div
+                  className="flex items-center gap-3 rounded-xl border border-hairline px-4 py-5"
+                  aria-live="polite"
+                  data-testid="scan-progress"
+                >
                   <span className="dot-live size-2 rounded-full bg-live" />
-                  <span className="text-xs text-muted">Scanning your machine…</span>
+                  <span className="text-xs text-muted">
+                    Checking your machine… {progress ? `${progress.done} of ${progress.total} checks` : "…"}
+                  </span>
                 </div>
-              ) : scan.length === 0 ? (
+              ) : reportDeniedCount(report.probes) > 0 ? (
+                <div
+                  className="flex flex-col gap-2 rounded-xl border border-hairline px-4 py-4"
+                  data-testid="scan-denied"
+                >
+                  <p className="text-xs leading-relaxed text-muted">
+                    We couldn't check {reportDeniedCount(report.probes)}{" "}
+                    {reportDeniedCount(report.probes) === 1 ? "place" : "places"} — your setups{" "}
+                    {reportDeniedCount(report.probes) === 1 ? "there won't" : "there won't"}{" "}
+                    appear.
+                  </p>
+                  {report.cancelled && (
+                    <p className="text-[11px] text-faint">The check was stopped early.</p>
+                  )}
+                </div>
+              ) : report.installs.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-hairline px-4 py-5 text-center">
                   <p className="text-xs text-muted">
                     No existing {providerName} setups found — we'll create a fresh one.
@@ -388,7 +450,7 @@ export function OnboardingWizard({
                 </div>
               ) : (
                 <div className="flex flex-col gap-2">
-                  {scan.map((found) => (
+                  {report.installs.map((found) => (
                     <button
                       key={found.path}
                       type="button"
@@ -421,20 +483,43 @@ export function OnboardingWizard({
                 </div>
               )}
 
-              {scan !== null && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setImporting(null);
-                    setLabel("");
-                    setStep("identity");
-                  }}
-                  className="self-start text-xs text-muted underline-offset-2 hover:text-ink hover:underline"
-                >
-                  {scan.length > 0
-                    ? "None of these — add a fresh account"
-                    : "Continue with a fresh account →"}
-                </button>
+              {report !== null && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setImporting(null);
+                      setLabel("");
+                      setStep("identity");
+                    }}
+                    className="self-start text-xs text-muted underline-offset-2 hover:text-ink hover:underline"
+                  >
+                    {report.installs.length > 0
+                      ? "None of these — add a fresh account"
+                      : "Continue with a fresh account →"}
+                  </button>
+                  <div className="flex flex-col gap-1.5">
+                    <button
+                      type="button"
+                      aria-expanded={detailsOpen}
+                      onClick={() => setDetailsOpen((open) => !open)}
+                      className="self-start text-[11px] text-muted underline-offset-2 hover:text-ink hover:underline"
+                      data-testid="scan-details-toggle"
+                    >
+                      Details {detailsOpen ? "▾" : "▸"}
+                    </button>
+                    {detailsOpen && (
+                      <ul
+                        className="flex flex-col gap-1 rounded-lg border border-hairline bg-canvas px-3 py-2"
+                        data-testid="scan-details"
+                      >
+                        {report.probes.map((probe) => (
+                          <ScanProbeRow key={probe.id} probe={probe} />
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </>
               )}
             </div>
           )}

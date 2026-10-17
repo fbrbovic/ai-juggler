@@ -154,6 +154,8 @@ pub fn run() {
             commands::validation_matrix,
             commands::validation_dogfood_record,
             commands::providers_discover,
+            commands::environment_scan_full,
+            commands::scan_cancel,
             commands::stop_session,
             commands::dashboard_stats,
             commands::terminal_spawn_login,
