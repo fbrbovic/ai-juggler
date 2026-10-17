@@ -25,7 +25,10 @@ const PLANS: { id: string | null; label: string; hint: string }[] = [
   { id: null, label: "Not sure yet", hint: "you can set this later" },
   { id: "free", label: "Free", hint: "trying things out" },
   { id: "pro", label: "Pro", hint: "regular daily use" },
-  { id: "max-20x", label: "Max 20×", hint: "heavy parallel work" },
+  // AJ-E303 Req.4: Max 5× joins the list (Deep-03 §2.1) — never
+  // inferred, chosen.
+  { id: "max-5x", label: "Max 5×", hint: "regular heavy use" },
+  { id: "max-20x", label: "Max 20×", hint: "extreme parallel work" },
 ];
 
 const STEPS = ["install", "detect", "identity", "login", "summary"] as const;
@@ -149,6 +152,175 @@ function ScanProbeRow({ probe }: { probe: ProbeRowData }): JSX.Element {
   );
 }
 
+/** One candidate card (pass2/03 §4.2 wireframe, AJ-E303): line 1
+ * provider · path · login chip · confidence words; line 2 the
+ * inference line ("Likely: Work · Active this week"); actions Import
+ * / Edit / Ignore; already-managed renders disabled inline. All notes
+ * render (never notes[0]-truncated); the keychain caveat reads
+ * "signed in here — you'll sign in once more after import". */
+function CandidateCards({
+  installs,
+  edits,
+  editing,
+  onEdit,
+  onEditField,
+  onImport,
+  onIgnore,
+}: {
+  installs: DiscoveredInfo[];
+  edits: Record<string, { purpose: string; plan: string | null }>;
+  editing: string | null;
+  onEdit: (path: string) => void;
+  onEditField: (path: string, patch: { purpose?: string; plan?: string | null }) => void;
+  onImport: (found: DiscoveredInfo, purpose: string) => void;
+  onIgnore: (path: string) => void;
+}): JSX.Element {
+  const confidenceWord = (wire: string): string =>
+    wire === "found" ? "Found" : wire === "likely" ? "Likely" : "Guessed";
+  return (
+    <ul className="flex flex-col gap-2" data-testid="candidate-cards">
+      {installs.map((found) => {
+        const edit = edits[found.path];
+        const purpose = edit?.purpose || found.inference.purpose;
+        const plan = edit?.plan ?? null;
+        const managed = found.managed;
+        const loginWord =
+          found.inference.login === "signed-in"
+            ? "Signed in"
+            : found.inference.login === "maybe-expired"
+              ? "May be expired"
+              : "Not signed in";
+        return (
+          <li
+            key={found.path}
+            data-testid="candidate-card"
+            data-managed={managed ? "true" : "false"}
+            data-confidence={found.inference.purpose_confidence}
+            // Managed cards stay readable (no opacity dimming): the
+            // disabled actions + inline label carry the state.
+            className={
+              "flex flex-col gap-2 rounded-xl border px-4 py-3.5 " +
+              (managed ? "border-hairline/60" : "border-hairline")
+            }
+          >
+            <div className="flex items-center gap-2">
+              <IconProfiles width={14} height={14} />
+              <span className="text-xs font-medium">{found.harness === "claude-code" ? "Claude" : found.harness}</span>
+              <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-ink" title={found.path}>
+                {found.path}
+              </span>
+              <Chip
+                tone={
+                  found.inference.login === "signed-in"
+                    ? "success"
+                    : found.inference.login === "maybe-expired"
+                      ? "warning"
+                      : "neutral"
+                }
+              >
+                {loginWord}
+              </Chip>
+            </div>
+            <p className="text-[11px] leading-relaxed text-muted">
+              <span className="text-ink">
+                {confidenceWord(found.inference.purpose_confidence)}: {purpose}
+              </span>{" "}
+              · {found.inference.activity_words}
+              {found.signals.length > 1 && (
+                <span className="text-muted"> · {found.signals.length} signals merged</span>
+              )}
+              {found.bytes > 0 && (
+                <span className="text-muted"> · {humanBytes(found.bytes)} of state</span>
+              )}
+            </p>
+            {found.inference.keychain_bound && (
+              <p className="text-[11px] text-warning" data-testid="keychain-caveat">
+                signed in here — you'll sign in once more after import (the keychain entry is
+                path-locked)
+              </p>
+            )}
+            {found.notes.length > 0 && (
+              <ul className="flex flex-col gap-0.5 text-[10px] leading-relaxed text-muted">
+                {found.notes.map((note) => (
+                  <li key={note}>{note}</li>
+                ))}
+              </ul>
+            )}
+            {editing === found.path ? (
+              <div className="flex flex-col gap-2 rounded-lg border border-hairline bg-canvas px-3 py-2.5" data-testid="inline-edit">
+                <label className="block text-[10px] uppercase tracking-wider text-faint">
+                  Name
+                  <input
+                    value={purpose}
+                    onChange={(event) => onEditField(found.path, { purpose: event.target.value })}
+                    className="mt-1 w-full rounded-lg border border-hairline bg-canvas px-2.5 py-1.5 text-xs text-ink outline-none focus:border-accent/50"
+                    data-testid="inline-edit-purpose"
+                  />
+                </label>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-faint">Plan</p>
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    {PLANS.map((tier) => (
+                      <button
+                        key={tier.label}
+                        type="button"
+                        onClick={() => onEditField(found.path, { plan: tier.id })}
+                        className={
+                          "rounded-lg border px-2 py-1 text-[10px] transition-colors " +
+                          (plan === tier.id
+                            ? "border-accent/40 bg-accent-soft text-accent-hi"
+                            : "border-hairline text-muted hover:border-accent/30")
+                        }
+                      >
+                        {tier.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={managed}
+                aria-label={
+                  managed
+                    ? `Already in AI Juggler: ${found.path}`
+                    : `Import ${found.path} as “${purpose}”`
+                }
+                title={managed ? "Already managed by AI Juggler" : undefined}
+                onClick={() => onImport(found, purpose)}
+                className="rounded-lg border border-accent/40 bg-accent-soft px-2.5 py-1 text-[11px] text-accent-hi transition-colors hover:border-accent/60 disabled:border-hairline disabled:bg-transparent disabled:text-faint"
+                data-testid="import-as"
+              >
+                {managed ? "Already in AI Juggler" : `Import as “${purpose}”`}
+              </button>
+              <button
+                type="button"
+                disabled={managed}
+                onClick={() => onEdit(found.path)}
+                aria-label={`Edit the inferred name and plan for ${found.path}`}
+                className="rounded-lg border border-hairline px-2.5 py-1 text-[11px] text-muted transition-colors hover:border-accent/30 disabled:opacity-50"
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                disabled={managed}
+                onClick={() => onIgnore(found.path)}
+                aria-label={`Ignore ${found.path} for this import`}
+                className="rounded-lg border border-hairline px-2.5 py-1 text-[11px] text-muted transition-colors hover:border-accent/30 disabled:opacity-50"
+              >
+                Ignore
+              </button>
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 /**
  * The onboarding wizard (ADR-0006, spec §12.1; AJ-E301): one shell
  * for EVERY Provider (`provider` parameter — no baked-in harness),
@@ -178,6 +350,12 @@ export function OnboardingWizard({
   const [step, setStep] = useState<Step>("install");
   const [installs, setInstalls] = useState<ProviderInstallData[] | null>(null);
   const [report, setReport] = useState<ScanReportData | null>(null);
+  // AJ-E303: inline edits (path → purpose/plan) + reversible ignores.
+  // Editing NEVER re-runs the scan (Req.5 — pinned by test).
+  const [edits, setEdits] = useState<Record<string, { purpose: string; plan: string | null }>>({});
+  const [editing, setEditing] = useState<string | null>(null);
+  const [ignored, setIgnored] = useState<Record<string, boolean>>({});
+  const [showIgnored, setShowIgnored] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [importing, setImporting] = useState<DiscoveredInfo | null>(null);
@@ -449,39 +627,74 @@ export function OnboardingWizard({
                   </p>
                 </div>
               ) : (
-                <div className="flex flex-col gap-2">
-                  {report.installs.map((found) => (
-                    <button
-                      key={found.path}
-                      type="button"
-                      onClick={() => {
-                        setImporting(found);
-                        setLabel(found.path.split("/").pop() || "Imported account");
-                        setStep("identity");
-                      }}
-                      className="flex flex-col gap-2 rounded-xl border border-hairline px-4 py-3.5 text-left transition-colors hover:border-accent/40 hover:bg-surface"
-                    >
-                      <div className="flex items-center gap-2">
-                        <IconProfiles width={14} height={14} />
-                        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-ink">
-                          {found.path}
-                        </span>
-                        {found.login === "logged_in" ? (
-                          <Chip tone="success">signed in</Chip>
-                        ) : (
-                          <Chip tone="neutral">not signed in</Chip>
-                        )}
-                      </div>
-                      <p className="text-[11px] leading-relaxed text-muted">
-                        {found.notes[0]}
-                        {found.bytes > 0 && (
-                          <span className="text-faint"> · {humanBytes(found.bytes)} of state</span>
-                        )}
-                      </p>
-                    </button>
-                  ))}
-                </div>
+                <CandidateCards
+                  installs={report.installs.filter((found) => !ignored[found.path])}
+                  edits={edits}
+                  editing={editing}
+                  onEdit={(path) => setEditing((current) => (current === path ? null : path))}
+                  onEditField={(path, patch) =>
+                    setEdits((current) => ({
+                      ...current,
+                      [path]: {
+                        purpose: patch.purpose ?? current[path]?.purpose ?? "",
+                        plan: patch.plan !== undefined ? patch.plan : (current[path]?.plan ?? null),
+                      },
+                    }))
+                  }
+                  onImport={(found, purpose) => {
+                    setImporting(found);
+                    setLabel(purpose);
+                    setStep("identity");
+                  }}
+                  onIgnore={(path) =>
+                    setIgnored((current) => ({ ...current, [path]: true }))
+                  }
+                />
               )}
+              {report !== null &&
+                report.installs.filter((found) => ignored[found.path]).length > 0 && (
+                  <div className="flex flex-col gap-1.5">
+                    <button
+                      type="button"
+                      aria-expanded={showIgnored}
+                      onClick={() => setShowIgnored((open) => !open)}
+                      className="self-start text-[11px] text-muted underline-offset-2 hover:text-ink hover:underline"
+                      data-testid="ignored-toggle"
+                    >
+                      Ignored ({report.installs.filter((found) => ignored[found.path]).length}){" "}
+                      {showIgnored ? "▾" : "▸"}
+                    </button>
+                    {showIgnored && (
+                      <ul className="flex flex-col gap-1" data-testid="ignored-list">
+                        {report.installs
+                          .filter((found) => ignored[found.path])
+                          .map((found) => (
+                            <li
+                              key={found.path}
+                              className="flex items-center gap-2 rounded-lg border border-hairline px-3 py-1.5 text-[11px]"
+                            >
+                              <span className="min-w-0 flex-1 truncate font-mono text-muted">
+                                {found.path}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setIgnored((current) => {
+                                    const next = { ...current };
+                                    delete next[found.path];
+                                    return next;
+                                  })
+                                }
+                                className="text-muted underline hover:text-ink"
+                              >
+                                Unignore
+                              </button>
+                            </li>
+                          ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
 
               {report !== null && (
                 <>

@@ -1271,3 +1271,125 @@ for (const theme of ["dark", "light"] as const) {
     await expect(dialog).toHaveCount(0);
   });
 }
+
+/**
+ * AJ-E303 a11y gate: the candidate cards — confidence words + login
+ * state + activity in TEXT (never colour alone), descriptive
+ * aria-labels on the import actions, the managed card disabled with
+ * its inline label, and axe 0 critical/serious on the Detect step.
+ */
+for (const theme of ["dark", "light"] as const) {
+  test(`candidate cards — text tiers, aria labels, axe 0 — ${theme}`, async ({ page }) => {
+    await page.addInitScript(
+      ({ fixture, theme: t }) => {
+        const w = window as unknown as Record<string, unknown>;
+        w.__AIJ_FIXTURE__ = fixture;
+        w.__AIJ_PROVIDER_INSTALLS__ = [
+          {
+            provider: "claude-code",
+            display_name: "Claude Code",
+            install_url: "https://claude.com/download",
+            status: "installed",
+            version: "2.1.296",
+            binary: "/usr/local/bin/claude",
+            notes: [],
+          },
+        ];
+        w.__AIJ_SCAN_REPORT__ = {
+          installs: [
+            {
+              harness: "claude-code",
+              path: "/Users/you/.claude-work",
+              origin: "home-pattern",
+              login: "logged_in",
+              bytes: 9,
+              last_used_secs: Math.floor(Date.now() / 1000) - 86_400,
+              managed: false,
+              notes: [],
+              inference: {
+                purpose: "Work",
+                purpose_confidence: "likely",
+                login: "signed-in",
+                login_confidence: "found",
+                activity: "active",
+                activity_confidence: "found",
+                activity_words: "Active this week",
+                keychain_bound: false,
+              },
+              signals: ["home-pattern"],
+            },
+            {
+              harness: "claude-code",
+              path: "/Users/you/.claude-managed",
+              origin: "home-pattern",
+              login: "logged_in",
+              bytes: 1,
+              last_used_secs: Math.floor(Date.now() / 1000) - 86_400,
+              managed: true,
+              notes: [],
+              inference: {
+                purpose: "Managed",
+                purpose_confidence: "guessed",
+                login: "signed-in",
+                login_confidence: "found",
+                activity: "active",
+                activity_confidence: "found",
+                activity_words: "Active this week",
+                keychain_bound: false,
+              },
+              signals: ["home-pattern"],
+            },
+          ],
+          probes: [],
+          seeds: [],
+          desktop_apps: [],
+          cancelled: false,
+        };
+        localStorage.setItem("aij.theme", t);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+      },
+      { fixture: honestEmpty, theme },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Accounts" }).click();
+    await page.getByRole("button", { name: /Add account|Finish setting up/ }).first().click();
+    await page.getByTestId("install-continue").click();
+    const cards = page.getByTestId("candidate-cards");
+    await expect(cards).toBeVisible();
+    // Words, not colours: the tier + login + activity all in text.
+    await expect(cards).toContainText("Likely: Work");
+    await expect(cards).toContainText("Signed in");
+    await expect(cards).toContainText("Active this week");
+    // Descriptive aria-label on the import action.
+    await expect(cards.getByTestId("import-as").first()).toHaveAttribute(
+      "aria-label",
+      /Import .* as “Work”/,
+    );
+    // The managed card is disabled inline with its label.
+    const managedImport = cards.locator(
+      "[data-testid='candidate-card'][data-managed='true'] [data-testid='import-as']",
+    );
+    await expect(managedImport).toBeDisabled();
+    await expect(managedImport).toContainText("Already in AI Juggler");
+    const scan = await new AxeBuilder({ page })
+      .include("[data-testid='onboarding-wizard']")
+      .analyze();
+    const serious = scan.violations.filter((v) =>
+      ["serious", "critical"].includes(v.impact ?? ""),
+    );
+    if (serious.length > 0) {
+      await page.waitForTimeout(400);
+      const recheck = await new AxeBuilder({ page })
+        .include("[data-testid='onboarding-wizard']")
+        .analyze();
+      const still = recheck.violations.filter((v) =>
+        ["serious", "critical"].includes(v.impact ?? ""),
+      );
+      expect(still).toHaveLength(0);
+    }
+    expect(serious).toHaveLength(0);
+  });
+}

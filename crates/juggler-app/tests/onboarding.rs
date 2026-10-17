@@ -329,3 +329,86 @@ fn environment_scan_full_reports_ten_probes_with_health() {
     assert_eq!(ticks.last(), Some(&(10, 10)), "progress reaches 10 of 10");
     assert!(report.seeds.is_empty() || !report.installs.is_empty());
 }
+
+/// AJ-E303: regenerates the webview's typed bindings for the scan
+/// surface (the generated file is committed; this keeps it
+/// reproducible in CI instead of a one-off local run).
+#[test]
+fn export_scan_bindings() {
+    use ts_rs::TS;
+    let config = ts_rs::Config::default();
+    juggler_app::commands::DiscoveredInfo::export(&config).unwrap();
+    juggler_app::commands::InferenceInfo::export(&config).unwrap();
+}
+
+/// AJ-E303 Req.2: the duplicate merge — the same canonical dir found
+/// by BOTH a home-pattern walk and a shell alias is ONE candidate
+/// carrying both signals; an alias to a dir no other signal found
+/// becomes a new candidate; a dangling alias becomes neither.
+#[test]
+fn alias_and_pattern_merge_into_one_candidate() {
+    let work = tempfile::tempdir().unwrap();
+    let dir = work.path().join("claude-side");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut known = vec![commands::DiscoveredInfo {
+        harness: "claude-code".to_owned(),
+        path: dir.to_string_lossy().into_owned(),
+        origin: "home-pattern".to_owned(),
+        login: "logged_out".to_owned(),
+        bytes: 0,
+        last_used_secs: None,
+        managed: false,
+        notes: vec![],
+        inference: Default::default(),
+        signals: vec!["home-pattern".to_owned()],
+    }];
+    let hint = juggler_adapter::environment::AliasHint {
+        variable: "CLAUDE_CONFIG_DIR".to_owned(),
+        path: dir.clone(),
+        source_file: "/Users/dev/.zshrc".to_owned(),
+        line: 12,
+        target_exists: true,
+    };
+    let dangling = juggler_adapter::environment::AliasHint {
+        variable: "CLAUDE_CONFIG_DIR".to_owned(),
+        path: work.path().join("gone"),
+        source_file: "/Users/dev/.zshrc".to_owned(),
+        line: 40,
+        target_exists: false,
+    };
+    let (added, health, dangling_count) =
+        commands::alias_installs_of(&[hint, dangling], &mut known);
+    assert_eq!(known.len(), 1, "no duplicate card");
+    assert_eq!(
+        added.len(),
+        0,
+        "the alias merged into the existing candidate"
+    );
+    assert_eq!(
+        known[0].signals,
+        vec![
+            "home-pattern".to_owned(),
+            "CLAUDE_CONFIG_DIR in /Users/dev/.zshrc:12".to_owned()
+        ],
+        "both signals listed on the one candidate"
+    );
+    assert_eq!(dangling_count, 1);
+    assert!(matches!(
+        health,
+        juggler_adapter::environment::ScanHealth::Partial(_)
+    ));
+
+    // An alias to an UNKNOWN dir becomes a candidate of its own.
+    let fresh = work.path().join("claude-fresh");
+    std::fs::create_dir_all(&fresh).unwrap();
+    let hint = juggler_adapter::environment::AliasHint {
+        variable: "CLAUDE_CONFIG_DIR".to_owned(),
+        path: fresh,
+        source_file: "/Users/dev/.zshrc".to_owned(),
+        line: 60,
+        target_exists: true,
+    };
+    let (added, _, _) = commands::alias_installs_of(&[hint], &mut known);
+    assert_eq!(added.len(), 1);
+    assert_eq!(added[0].origin, "shell-alias");
+}
