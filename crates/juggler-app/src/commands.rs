@@ -1809,7 +1809,7 @@ pub struct ImportResult {
     pub login: String,
     /// AJ-E307 Req.3: per top level entry bytes, largest first — the
     /// copy receipt's breakdown.
-    pub folders: Vec<(String, u64)>,
+    pub folders: Vec<FolderSizeInfo>,
     /// True when this was the settings-only degraded import.
     pub degraded: bool,
     /// When login did not carry over, the plain-language reason and next
@@ -1996,6 +1996,7 @@ pub fn environment_scan_impl(state: &Arc<AppState>) -> Vec<DiscoveredInfo> {
 
 /// AJ-E307 Req.3: one breakdown row (top-level entry + bytes).
 #[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
 pub struct FolderSizeInfo {
     /// Top-level folder (with `/`) or file name.
     pub name: String,
@@ -2006,6 +2007,7 @@ pub struct FolderSizeInfo {
 
 /// AJ-E307 Req.3: the pre-copy source inspection on the wire.
 #[derive(Clone, PartialEq, Debug, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
 pub struct SourceInspectInfo {
     /// Total importable bytes.
     #[ts(type = "number")]
@@ -2189,7 +2191,11 @@ pub fn account_import_impl(
         skipped: outcome.skipped,
         login: login_probe_name(outcome.login),
         login_note: outcome.login_note,
-        folders: outcome.folders,
+        folders: outcome
+            .folders
+            .into_iter()
+            .map(|(name, bytes)| FolderSizeInfo { name, bytes })
+            .collect(),
         degraded: outcome.degraded,
     })
 }

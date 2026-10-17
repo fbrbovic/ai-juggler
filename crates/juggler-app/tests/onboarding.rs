@@ -343,6 +343,9 @@ fn export_scan_bindings() {
     let config = ts_rs::Config::default();
     juggler_app::commands::DiscoveredInfo::export(&config).unwrap();
     juggler_app::commands::InferenceInfo::export(&config).unwrap();
+    juggler_app::commands::ImportResult::export(&config).unwrap();
+    juggler_app::commands::SourceInspectInfo::export(&config).unwrap();
+    juggler_app::commands::FolderSizeInfo::export(&config).unwrap();
 }
 
 /// AJ-E303 Req.2: the duplicate merge — the same canonical dir found
