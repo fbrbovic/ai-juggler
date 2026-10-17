@@ -350,7 +350,11 @@ fn admission_verdict_rides_the_ranked_rows_e306() {
             }])
             .unwrap();
     }
-    let rows = ranking_rows_inner(&known, Some(juggler_core::model::ProjectId::new("proj-x").to_string())).unwrap();
+    let rows = ranking_rows_inner(
+        &known,
+        Some(juggler_core::model::ProjectId::new("proj-x").to_string()),
+    )
+    .unwrap();
     let acc_a = rows.iter().find(|row| row.account == "acc-a").unwrap();
     assert_eq!(acc_a.admission.as_deref(), Some("ok"));
 
@@ -369,7 +373,11 @@ fn admission_verdict_rides_the_ranked_rows_e306() {
             )
             .unwrap();
     }
-    let rows = ranking_rows_inner(&known, Some(juggler_core::model::ProjectId::new("proj-x").to_string())).unwrap();
+    let rows = ranking_rows_inner(
+        &known,
+        Some(juggler_core::model::ProjectId::new("proj-x").to_string()),
+    )
+    .unwrap();
     let acc_a = rows.iter().find(|row| row.account == "acc-a").unwrap();
     assert_eq!(acc_a.admission.as_deref(), Some("no"));
 }

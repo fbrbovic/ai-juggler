@@ -2315,6 +2315,13 @@ export interface ProviderInstallData {
   version?: string | null;
   binary?: string | null;
   notes: string[];
+  /** AJ-E306 flow (c): the verified version range(s) — the card
+   * badge; absent/empty renders "unverified" honestly. */
+  verified_against?: string[];
+  /** `terminal` | `desktop` — the kind badge (Req.3). */
+  kind?: "terminal" | "desktop";
+  /** The single-instance desktop limit, stated BEFORE selection. */
+  single_instance_note?: string | null;
 }
 
 /** The no-backend Step-0 default (preview mode shows an installed

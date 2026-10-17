@@ -444,6 +444,7 @@ function ProposalBlock({
  */
 export function OnboardingWizard({
   provider,
+  locked = false,
   onClose,
   onAccountCreated,
   openLoginTerminal,
@@ -453,6 +454,10 @@ export function OnboardingWizard({
   /** The Provider this run sets up (AJ-E301 Req.1 — explicit at every
    * call site: first-run, Accounts → Add account, summary loop-back). */
   provider: string;
+  /** AJ-E306 flows (c)/(d): the Provider is LOCKED — no Step-0
+   * multi-Provider gate and no zero-found re-picker; the scan and
+   * identity run scoped to `provider` directly. */
+  locked?: boolean;
   onClose: () => void;
   onAccountCreated: () => void;
   openLoginTerminal: (id: string, title: string) => void;
@@ -462,7 +467,7 @@ export function OnboardingWizard({
   /** AJ-E305 Req.4: [Add another account] on the set Summary. */
   onAddAnother?: () => void;
 }) {
-  const [step, setStep] = useState<Step>("install");
+  const [step, setStep] = useState<Step>(locked ? "detect" : "install");
   const [installs, setInstalls] = useState<ProviderInstallData[] | null>(null);
   const [report, setReport] = useState<ScanReportData | null>(null);
   // AJ-E303: inline edits (path → purpose/plan) + reversible ignores.
@@ -820,9 +825,10 @@ export function OnboardingWizard({
     setStep(next);
   };
 
-  // The funnel starts at the gate — mount IS the first step.
+  // The funnel starts at the gate — mount IS the first step (a
+  // locked flow (c)/(d) skips the gate and starts at the scan).
   useEffect(() => {
-    funnelStep("a-first-install", "gate");
+    funnelStep("a-first-install", locked ? "scan" : "gate");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1033,11 +1039,26 @@ export function OnboardingWizard({
                   <div>
                     <p className="text-sm font-medium">Create your first account</p>
                     <p className="mt-1 text-xs leading-relaxed text-muted">
-                      Nothing to import — pick the Provider to start with. You can add more
-                      anytime.
+                      Nothing to import{locked ? ` — start a fresh ${providerName} account` : " — pick the Provider to start with. You can add more anytime"}.
                     </p>
                   </div>
-                  <ul className="flex flex-col gap-1.5">
+                  {locked && (
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      onClick={() => {
+                        setImporting(null);
+                        setLabel((current) =>
+                          current.trim().length > 0 ? current : "Main",
+                        );
+                        goto("identity");
+                      }}
+                      data-testid="zero-found-create"
+                    >
+                      Create your first {providerName} account
+                    </Button>
+                  )}
+                  <ul className={locked ? "hidden" : "flex flex-col gap-1.5"}>
                     {[...(installs ?? [])]
                       .sort((a, b) => Number(b.status !== "not_installed") - Number(a.status !== "not_installed"))
                       .map((row) => {

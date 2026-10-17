@@ -558,7 +558,10 @@ pub fn quota_display_inner(
             None,
         ),
         _ => (
-            Some(window_display(&evaluation.five_hour, cap(WindowKind::FiveHour))),
+            Some(window_display(
+                &evaluation.five_hour,
+                cap(WindowKind::FiveHour),
+            )),
             None,
             Some(window_display(
                 &evaluation.weekly,
@@ -11268,6 +11271,14 @@ pub struct ProviderInstallInfo {
     pub binary: Option<String>,
     /// Discovery notes (drift details), verbatim.
     pub notes: Vec<String>,
+    /// AJ-E306 flow (c): the verified version range(s) — the card's
+    /// badge; empty renders "unverified" honestly.
+    pub verified_against: Vec<String>,
+    /// `terminal` or `desktop` (the kind badge, Req.3).
+    pub kind: String,
+    /// The single-instance desktop limit, stated BEFORE selection
+    /// (Req.3) — the adapter's isolation claim verbatim.
+    pub single_instance_note: Option<String>,
 }
 
 /// AJ-E301: probes every registered Provider in parallel (thread per
@@ -11345,6 +11356,25 @@ pub fn providers_discover_impl(state: &Arc<AppState>) -> AppResult<Vec<ProviderI
                         ("probe_failed", None)
                     }
                 };
+                let adapter_meta = registry.get(&juggler_core::model::HarnessId::new(
+                    report.adapter.as_str(),
+                ));
+                let (verified_against, kind, single_instance_note) = match adapter_meta {
+                    Some(adapter) => (
+                        adapter
+                            .verified_against()
+                            .iter()
+                            .map(|v| (*v).to_owned())
+                            .collect(),
+                        if adapter.desktop_isolation_label().is_some() {
+                            "desktop".to_owned()
+                        } else {
+                            "terminal".to_owned()
+                        },
+                        adapter.desktop_isolation_label().map(str::to_owned),
+                    ),
+                    None => (Vec::new(), "terminal".to_owned(), None),
+                };
                 ProviderInstallInfo {
                     provider: report.adapter.to_string(),
                     display_name: display_name.clone(),
@@ -11356,6 +11386,9 @@ pub fn providers_discover_impl(state: &Arc<AppState>) -> AppResult<Vec<ProviderI
                         .as_ref()
                         .map(|path| path.to_string_lossy().into_owned()),
                     notes: report.notes,
+                    verified_against,
+                    kind,
+                    single_instance_note,
                 }
             })
             .collect())

@@ -4,6 +4,7 @@ import { renewalLabel, renewalRowVisible } from "../lib/renewal";
 import { Field, Input, Modal } from "../components/form";
 import { IconProfiles, IconTerminal } from "../components/icons";
 import { OnboardingWizard } from "./OnboardingWizard";
+import { AddProviderSheet } from "./AddProviderSheet";
 import { BetaMatrix } from "../components/BetaMatrix";
 import {
   accountLoginCommand,
@@ -43,6 +44,8 @@ export function ProfilesScreen({
   const [accounts, setAccounts] = useState<AccountInfo[] | null>(null);
   const [profiles, setProfiles] = useState<LaunchRecipeInfo[] | null>(null);
   const [addAccount, setAddAccount] = useState(false);
+  // AJ-E306 flow (c): the Provider picker sheet.
+  const [addProvider, setAddProvider] = useState(false);
   const [newProfileFor, setNewProfileFor] = useState<AccountInfo | null>(null);
   const [loginFor, setLoginFor] = useState<AccountInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -96,10 +99,16 @@ export function ProfilesScreen({
             profile in parallel with one click.
           </p>
         </div>
-        <Button variant="primary" size="sm" onClick={() => setAddAccount(true)}>
+        <div className="flex items-center gap-2">
+        <Button variant="secondary" size="sm" onClick={() => setAddProvider(true)} data-testid="add-provider">
+          <IconProfiles width={14} height={14} />
+          Add Provider
+        </Button>
+        <Button variant="primary" size="sm" onClick={() => setAddAccount(true)} data-testid="add-account">
           <IconProfiles width={14} height={14} />
           Add account
         </Button>
+        </div>
       </header>
 
       {error && (
@@ -139,6 +148,7 @@ export function ProfilesScreen({
       {addAccount && (
         <OnboardingWizard
           provider="claude-code"
+          locked
           onClose={() => setAddAccount(false)}
           onAccountCreated={() => void refresh()}
           openLoginTerminal={openTerminal}
@@ -151,6 +161,14 @@ export function ProfilesScreen({
             setAddAccount(false);
             window.setTimeout(() => setAddAccount(true), 0);
           }}
+        />
+      )}
+
+      {addProvider && (
+        <AddProviderSheet
+          onClose={() => setAddProvider(false)}
+          onAccountCreated={() => void refresh()}
+          openLoginTerminal={openTerminal}
         />
       )}
 
