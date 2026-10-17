@@ -71,7 +71,7 @@
 **Research basis**: pass2/03 §4.1 rule table, §4.2 wireframe; Deep-03 §1.3, §2.1 (missing Max 5×, duplicate labels), §2.3 caveat 2.
 **Handover note**: Plan honesty is load-bearing — quota tiers (Measured/Computed/Estimated, `model.rs:288`) forbid manufactured precision. Trap: fixing duplicate labels only in the UI leaves pickers ambiguous; collision suffixing belongs to AJ-E304's engine.
 
-### AJ-E304 Recommendation engine: one accept-click juggling set | Status: TODO | Priority P0 | Effort M | Depends: AJ-E303
+### AJ-E304 Recommendation engine: one accept-click juggling set | Status: DONE-EVIDENCED | Priority P0 | Effort M | Depends: AJ-E303
 **Goal**:
 Turn the inferred inventory into one explained set-level proposal
 ("Claude ×3 + Codex ×1") that the user accepts, customises, or
@@ -606,3 +606,34 @@ Dogfood on this machine: 0 overrides across all fields
 in CI via a committed test.
 
 
+**Status report (2026-10-17, AJ-E304)**: DONE-EVIDENCED — evidence
+`docs/qa/evidence/AJ-E304/manifest.md`. A pure engine
+(`juggler_core::recommendation::recommend(candidates, gaps,
+start_here)`, UI-free for E4/E5 reuse) turns the inferred inventory
+into one set-level proposal: active candidates default ON with a
+one-line rationale ("Signed in — import keeps history" / "Active —
+you'll sign in after import"), dormant candidates default OFF under
+the "Found but quiet" group (one-tap include), and installed-but-
+unconfigured providers ride in as "Add Codex (installed, not set
+up)" adds — never created before the accept click. Label collisions
+suffix in the ENGINE (Work, Work 2, Work 3 — no post-typing
+validation error anywhere); the summary sentence reproduces the §5
+worked example verbatim; "Start here" (the S9 seed) shows on BOTH
+the proposal and the set Summary. The wizard's accept executes
+sequentially with a per-item aria-live progress list; a failed item
+degrades ITSELF only (its coded `user_message` renders inline) and
+the run never aborts — the partial-failure fixture (item 2 of 4
+rejects) ends 3 done / 1 failed-with-reason / 0 aborts in both
+vitest and Playwright. Staging is pinned twice: the app guardrail
+test asserts storage stays EMPTY after proposing, and vitest asserts
+zero import calls before a click (SPEC §26). ⌘↩ accepts; Customise
+expands/collapses without discarding edits. Engine 6/6 (worked
+example, dormant-off, collisions, 64-round property,
+byte-identical determinism, 202 items inside the 100 ms budget);
+onboarding 8/8; vitest 263/263 (wizard 14/14); Playwright 450/450
+(gallery 36-recommend: teaser / customise with the quiet group /
+frozen accept-in-progress / partial-failure set-summary = 16
+captures; a11y 2/2 after one real contrast fix — the ⌘↩ hint
+faint→muted; the light-theme first-scan contrast flash is the
+recorded AJ-E806 load-race class, confirmed clean by the re-scan
+protocol). Zero-found collapse is AJ-E305's state (its Req.2).

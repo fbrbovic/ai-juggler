@@ -411,3 +411,94 @@ describe("AJ-E303 candidate cards — inference, inline edit, ignore", () => {
     );
   });
 });
+
+describe("AJ-E304 the set-level proposal", () => {
+  const openAtDetect = async () => {
+    w().__AIJ_PROVIDER_INSTALLS__ = INSTALLED;
+    w().__AIJ_RECOMMENDATION__ = {
+      items: [
+        { provider: "claude-code", label: "Work", action: "import", rationale: "Signed in — import keeps history", default_on: true, path: "/Users/you/.claude-work" },
+        { provider: "claude-code", label: "Personal", action: "import", rationale: "Signed in — import keeps history", default_on: true, path: "/Users/you/.claude-personal" },
+        { provider: "claude-code", label: "Side", action: "import", rationale: "Active — you'll sign in after import", default_on: true, path: "/Users/you/.claude-side" },
+        { provider: "claude-code", label: "Old", action: "import", rationale: "Dormant — include when you want it", default_on: false, path: "/Users/you/.claude-old" },
+      ],
+      summary: "Your juggling set: Claude ×3 (Work — signed in; Personal — signed in; Side — needs sign-in).",
+      start_here: "-users-dev-api",
+    };
+    const mounted = mount();
+    await waitFor(() =>
+      expect(mounted.container.querySelector("[data-testid='install-continue']")).not.toBeNull(),
+    );
+    await act(async () => {
+      fireEvent.click(mounted.container.querySelector("[data-testid='install-continue']")!);
+    });
+    await waitFor(() =>
+      expect(mounted.container.querySelector("[data-testid='proposal-teaser']")).not.toBeNull(),
+    );
+    return mounted;
+  };
+
+  it("shows the one-sentence proposal with per-item rationales after Customise", async () => {
+    const { container } = await openAtDetect();
+    expect(container.querySelector("[data-testid='proposal-summary']")!.textContent).toContain(
+      "Your juggling set: Claude ×3",
+    );
+    fireEvent.click(container.querySelector("[data-testid='proposal-customise']")!);
+    await waitFor(() =>
+      expect(container.querySelectorAll("[data-testid='proposal-item']").length).toBe(4),
+    );
+    const quiet = container.querySelector(
+      "[data-testid='proposal-item'][data-quiet='true']",
+    )!;
+    expect(quiet.textContent).toContain("Dormant — include when you want it");
+    // The dormant toggle starts OFF.
+    const toggles = Array.from(
+      container.querySelectorAll("[data-testid='proposal-toggle']"),
+    ) as HTMLInputElement[];
+    expect(toggles[3]!.checked).toBe(false);
+    expect(toggles[0]!.checked).toBe(true);
+  });
+
+  it("accept executes sequentially; a failed item degrades ITSELF only (3 done, 1 failed, 0 aborts)", async () => {
+    const { container } = await openAtDetect();
+    const importSpy = vi
+      .spyOn(bridgeModule, "accountImport")
+      .mockImplementation(async (_harness, path: string) => {
+        if (path.includes("personal")) {
+          throw { code: "io", retryable: true, user_message: "Disk full — this one failed." };
+        }
+        return { account: { id: "a", provider: "claude-code", label: "x", plan: null, login_state: "logged_out", cleanup_opt_in: false, renewal_date: null, preview_opt_in: false }, files_copied: 3, bytes_copied: 3, skipped: [], login: "logged_out", login_note: null } as never;
+      });
+    fireEvent.click(container.querySelector("[data-testid='proposal-customise']")!);
+    await waitFor(() =>
+      expect(container.querySelector("[data-testid='accept-setup']")).not.toBeNull(),
+    );
+    await act(async () => {
+      fireEvent.click(container.querySelector("[data-testid='accept-setup']")!);
+    });
+    await waitFor(() =>
+      expect(container.querySelector("[data-testid='set-summary']")).not.toBeNull(),
+    );
+    const items = Array.from(
+      container.querySelectorAll("[data-testid='set-summary-item']"),
+    );
+    // Only the default-ON set runs (the dormant toggle stays off).
+    expect(items.length).toBe(3);
+    expect(items.filter((item) => item.getAttribute("data-state") === "done").length).toBe(2);
+    const failed = items.find((item) => item.getAttribute("data-state") === "failed")!;
+    expect(failed.textContent).toContain("Personal");
+    expect(failed.textContent).toContain("Disk full — this one failed.");
+    // Start here rides the summary.
+    expect(container.querySelector("[data-testid='start-here']")!.textContent).toContain(
+      "-users-dev-api",
+    );
+    importSpy.mockRestore();
+  });
+
+  it("nothing executes before a click: no import calls from the proposal alone", async () => {
+    const importSpy = vi.spyOn(bridgeModule, "accountImport");
+    await openAtDetect();
+    expect(importSpy).not.toHaveBeenCalled();
+    importSpy.mockRestore();
+  });
+});

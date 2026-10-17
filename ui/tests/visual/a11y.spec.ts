@@ -1393,3 +1393,100 @@ for (const theme of ["dark", "light"] as const) {
     expect(serious).toHaveLength(0);
   });
 }
+
+/**
+ * AJ-E304 a11y gate: the recommended-set proposal reads as a list —
+ * every checkbox carries a descriptive aria-label (label + rationale),
+ * the item rows are list items, and the accept-progress list announces
+ * itself politely. Axe 0 critical/serious on the Detect step in BOTH
+ * themes (D-16), confirmatory re-scan per AJ-E806.
+ */
+for (const theme of ["dark", "light"] as const) {
+  test(`recommendation proposal — list semantics, aria labels, axe 0 — ${theme}`, async ({
+    page,
+  }) => {
+    await page.addInitScript(
+      ({ fixture, theme: t }) => {
+        const w = window as unknown as Record<string, unknown>;
+        w.__AIJ_FIXTURE__ = fixture;
+        w.__AIJ_PROVIDER_INSTALLS__ = [
+          {
+            provider: "claude-code",
+            display_name: "Claude Code",
+            install_url: "https://claude.com/download",
+            status: "installed",
+            version: "2.1.296",
+            binary: "/usr/local/bin/claude",
+            notes: [],
+          },
+        ];
+        w.__AIJ_SCAN_REPORT__ = {
+          installs: [],
+          probes: [],
+          seeds: [],
+          desktop_apps: [],
+          cancelled: false,
+        };
+        w.__AIJ_RECOMMENDATION__ = {
+          items: [
+            {
+              provider: "claude-code",
+              label: "Work",
+              action: "import",
+              rationale: "Signed in — import keeps history",
+              default_on: true,
+              path: "/Users/you/.claude-work",
+            },
+            {
+              provider: "claude-code",
+              label: "Lab",
+              action: "import",
+              rationale: "Dormant — include when you want it",
+              default_on: false,
+              path: "/Users/you/.claude-lab",
+            },
+          ],
+          summary: "Your juggling set: Claude ×1 (Work — signed in).",
+          start_here: "-users-dev-api",
+        };
+        localStorage.setItem("aij.theme", t);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+      },
+      { fixture: honestEmpty, theme },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Accounts" }).click();
+    await page.getByRole("button", { name: /Add account|Finish setting up/ }).first().click();
+    await page.getByTestId("install-continue").click();
+    await expect(page.getByTestId("proposal-teaser")).toBeVisible();
+    // The teaser buttons carry their own names.
+    await expect(page.getByTestId("use-recommended")).toHaveAccessibleName(
+      "Use recommended setup →",
+    );
+    // Customise exposes the checkbox list: list items, one per account.
+    await page.getByTestId("proposal-customise").click();
+    const block = page.getByTestId("proposal-block");
+    await expect(block).toBeVisible();
+    await expect(page.getByTestId("proposal-item")).toHaveCount(2);
+    const toggles = page.getByTestId("proposal-toggle");
+    await expect(toggles).toHaveCount(2);
+    // Descriptive labels — label AND rationale, not "import".
+    await expect(toggles.nth(0)).toHaveAccessibleName(
+      "Work: Signed in — import keeps history",
+    );
+    await expect(toggles.nth(1)).toHaveAccessibleName(
+      "Lab: Dormant — include when you want it",
+    );
+    await expect(page.getByTestId("accept-setup")).toHaveAccessibleName(
+      /Accept setup → \(1\)/,
+    );
+    // AJ-E806: one confirmatory re-scan after a settle beat — a load
+    // race (theme mid-application) doesn't survive it; a real violation
+    // reproduces deterministically and still fails the gate.
+    const confirmed = await scanSeriousWithConfirm(page);
+    expect(confirmed).toHaveLength(0);
+  });
+}

@@ -412,3 +412,28 @@ fn alias_and_pattern_merge_into_one_candidate() {
     assert_eq!(added.len(), 1);
     assert_eq!(added[0].origin, "shell-alias");
 }
+
+/// AJ-E304 Req.7 (the staging guardrail): the recommendation engine
+/// reads the inventory and proposes — ZERO storage writes happen (no
+/// account exists) until the accept click executes imports.
+#[test]
+fn recommendation_stages_without_writing() {
+    let work = tempfile::tempdir().unwrap();
+    let stub = claude_stub(work.path());
+    let state = app_state(work.path(), &stub);
+
+    let recommendation = commands::recommendation_for_impl(&state).unwrap();
+    assert!(!recommendation.summary.is_empty());
+    // Every item carries its one-line rationale (unexplained never ships).
+    for item in &recommendation.items {
+        assert!(!item.rationale.is_empty());
+    }
+    // ZERO accounts were created by the proposal itself.
+    let storage = state.storage.lock().unwrap();
+    let accounts = storage.accounts().list().unwrap();
+    assert!(
+        accounts.is_empty(),
+        "staging only — {} accounts appeared",
+        accounts.len()
+    );
+}
