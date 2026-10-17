@@ -376,6 +376,11 @@ export async function createAccount(
   plan: string | null,
 ): Promise<AccountInfo> {
   if (!hasBackend) {
+    // AJ-E301 test seam: a hanging create keeps the wizard "busy"
+    // (the close-guard visual).
+    if ((window as unknown as { __AIJ_CREATE_HANG__?: boolean }).__AIJ_CREATE_HANG__) {
+      return new Promise<AccountInfo>(() => {});
+    }
     return {
       id: `claude-${label.toLowerCase().replace(/\s+/g, "-")}`,
       provider: harness,
@@ -2221,4 +2226,75 @@ export async function validationMatrix(): Promise<ValidationCellData[]> {
     );
   }
   return invoke<ValidationCellData[]>("validation_matrix");
+}
+
+/** AJ-E301: extracts the CURATED message from any command rejection —
+ * coded errors carry `user_message`; JS-side causes fall back to
+ * their string. The UI never renders a raw OS string. */
+export function errorText(cause: unknown): string {
+  if (cause !== null && typeof cause === "object" && "user_message" in cause) {
+    const wire = cause as { user_message?: unknown };
+    return typeof wire.user_message === "string" && wire.user_message.length > 0
+      ? wire.user_message
+      : "Something went wrong — try again.";
+  }
+  const text = String(cause);
+  return text === "[object Object]" ? "Something went wrong — try again." : text;
+}
+
+/** True when the coded rejection says a retry can succeed. */
+export function errorRetryable(cause: unknown): boolean {
+  return (
+    cause !== null &&
+    typeof cause === "object" &&
+    "retryable" in cause &&
+    (cause as { retryable?: unknown }).retryable === true
+  );
+}
+
+/** AJ-E301: one Step-0 install-gate row. */
+export interface ProviderInstallData {
+  provider: string;
+  display_name: string;
+  install_url: string;
+  /** installed | not_installed | unverified | probe_failed */
+  status: string;
+  version?: string | null;
+  binary?: string | null;
+  notes: string[];
+}
+
+/** The no-backend Step-0 default (preview mode shows an installed
+ * Claude + a missing second Provider — both gate states visible). */
+const DEFAULT_PROVIDER_INSTALLS: ProviderInstallData[] = [
+  {
+    provider: "claude-code",
+    display_name: "Claude Code",
+    install_url: "https://claude.com/download",
+    status: "installed",
+    version: "2.1.296",
+    binary: "/usr/local/bin/claude",
+    notes: [],
+  },
+  {
+    provider: "codex",
+    display_name: "Codex",
+    install_url: "https://developers.openai.com/codex",
+    status: "not_installed",
+    version: null,
+    binary: null,
+    notes: [],
+  },
+];
+
+/** AJ-E301 Req.2/3: the per-Provider install probe (Step 0). A
+ * missing binary is a ROW, never an error. */
+export async function providersDiscover(): Promise<ProviderInstallData[]> {
+  if (!hasBackend) {
+    return (
+      (window as unknown as { __AIJ_PROVIDER_INSTALLS__?: ProviderInstallData[] })
+        .__AIJ_PROVIDER_INSTALLS__ ?? DEFAULT_PROVIDER_INSTALLS
+    );
+  }
+  return invoke<ProviderInstallData[]>("providers_discover");
 }

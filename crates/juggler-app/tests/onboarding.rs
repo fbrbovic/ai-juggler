@@ -195,3 +195,91 @@ fn snapshot(root: &Path) -> Vec<(String, u64)> {
     out.sort();
     out
 }
+
+/// AJ-E301: the Step-0 install gate reads the adapters' own
+/// `discover()` — an installed CLI renders "installed" with its
+/// version, a Provider whose binary is missing renders
+/// `not_installed` (a ROW, never an error), and a version outside
+/// `verified_against` renders `unverified`. The wire carries exactly
+/// what the gate needs: status + version + install page.
+/// A stub that answers `--version` (the discover probe) like a real
+/// CLI would.
+fn version_stub(dir: &Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.join("version-stub");
+    std::fs::write(
+        &path,
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo '2.1.296'; exit 0; fi\nexit 0\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+#[test]
+fn providers_discover_renders_installed_and_missing_rows() {
+    let work = tempfile::tempdir().unwrap();
+    let stub = version_stub(work.path());
+    let mut registry = AdapterRegistry::new();
+    registry.register(Arc::new(ClaudeCodeAdapter::with_bin(&stub)));
+    // A Provider whose binary does NOT exist: the no-binary fixture
+    // (the wizard must gate BEFORE any account exists).
+    registry.register(Arc::new(juggler_adapters::FakeHarnessAdapter::new(
+        work.path().join("missing-harness"),
+    )));
+    let state =
+        Arc::new(AppState::init_with_registry(work.path().join("app-data-2"), registry).unwrap());
+
+    let rows = commands::providers_discover_impl(&state).unwrap();
+    assert!(rows.len() >= 2, "one row per registered Provider: {rows:?}");
+
+    let claude = rows
+        .iter()
+        .find(|row| row.provider == CLAUDE_CODE_ID)
+        .expect("claude row present");
+    assert_eq!(claude.status, "installed", "stub binary found");
+    assert!(claude.binary.is_some());
+    assert_eq!(claude.display_name, "Claude Code");
+    assert_eq!(claude.install_url, "https://claude.com/download");
+
+    let missing = rows
+        .iter()
+        .find(|row| row.provider == "fake")
+        .expect("fake row present (recorded, never skipped)");
+    assert_eq!(missing.status, "not_installed", "the gate's dead-end state");
+    assert!(missing.version.is_none());
+
+    // Every row carries display metadata — the wizard never guesses.
+    for row in &rows {
+        assert!(!row.display_name.is_empty());
+        assert!(!row.install_url.is_empty());
+    }
+}
+
+/// AJ-E301 Req.4: command rejections serialize as the CODED wire —
+/// `{code, retryable, user_message}` — so the UI can render curated
+/// copy and a retry affordance instead of a raw OS string.
+#[test]
+fn errors_carry_code_retryable_and_user_message() {
+    let work = tempfile::tempdir().unwrap();
+    let stub = claude_stub(work.path());
+    let state = app_state(work.path(), &stub);
+
+    // An unknown-harness rejection codes as non-retryable.
+    let error = commands::create_account(&state, "made-up-cli", "X", None).unwrap_err();
+    let wire = serde_json::to_value(error.wire()).unwrap();
+    assert_eq!(wire["code"], "unknown_harness");
+    assert_eq!(wire["retryable"], false);
+    assert!(
+        wire["user_message"]
+            .as_str()
+            .unwrap()
+            .contains("made-up-cli"),
+        "user-facing, not a raw OS string"
+    );
+
+    // The wire form is what crosses the bridge.
+    let serialized = serde_json::to_value(&error).unwrap();
+    assert_eq!(serialized["code"], "unknown_harness");
+    assert!(serialized["user_message"].is_string());
+}

@@ -16,8 +16,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   switchBackPlan,
   switchBackExecute,
-  type SwitchBackPlanData,
-} from "../lib/bridge";
+  type SwitchBackPlanData, errorText,} from "../lib/bridge";
 
 type Phase =
   | { kind: "plan" }
@@ -57,7 +56,7 @@ export function SwitchBackFlow({
         if (alive) setPhase({ kind: "review", plan });
       })
       .catch((cause) => {
-        if (alive) setPhase({ kind: "failed", message: String(cause) });
+        if (alive) setPhase({ kind: "failed", message: errorText(cause) });
       });
     return () => {
       alive = false;
@@ -117,7 +116,7 @@ export function SwitchBackFlow({
       );
       setPhase({ kind: "done", sessionId: result.session_id });
     } catch (cause) {
-      setPhase({ kind: "failed", message: String(cause) });
+      setPhase({ kind: "failed", message: errorText(cause) });
     }
   };
 

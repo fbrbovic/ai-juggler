@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { PortInventoryInfo, PortRowInfo } from "../lib/bridge";
 import { Button } from "./primitives";
+import { errorText } from "../lib/bridge";
 
 /**
  * AJ-E505: the port occupancy map — "users think in ports, so the
@@ -104,7 +105,7 @@ export function PortInventoryList(props: { bridge?: PortsBridge }) {
         }
       })
       .catch((cause: unknown) => {
-        if (alive) setError(String(cause));
+        if (alive) setError(errorText(cause));
       });
     return () => {
       alive = false;

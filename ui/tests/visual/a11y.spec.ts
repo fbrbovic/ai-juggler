@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import { allStatuses, type FixtureSet } from "./fixtures";
+import { allStatuses, honestEmpty, type FixtureSet } from "./fixtures";
 
 /**
  * AJ-E402 quality gate: axe-core reports 0 critical/serious violations on
@@ -1176,5 +1176,98 @@ for (const theme of ["dark", "light"] as const) {
       expect(still).toHaveLength(0);
     }
     expect(serious).toHaveLength(0);
+  });
+}
+
+/**
+ * AJ-E301 a11y gate: the wizard dialog — role=dialog + aria-modal +
+ * labelled, axe 0 critical/serious on Step 0 in both themes, the
+ * keyboard walkthrough (Tab cycles inside the trap, the not-installed
+ * row opens install help, Esc closes only when idle), and focus lands
+ * on the primary button after a step change.
+ */
+for (const theme of ["dark", "light"] as const) {
+  test(`wizard step0 — dialog semantics, axe 0, keyboard — ${theme}`, async ({ page }) => {
+    await page.addInitScript(
+      ({ fixture, installs, t0, theme: t }) => {
+        const w = window as unknown as Record<string, unknown>;
+        w.__AIJ_FIXTURE__ = fixture;
+        w.__AIJ_PROVIDER_INSTALLS__ = installs;
+        localStorage.setItem("aij.theme", t);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+        Date.now = () => t0;
+      },
+      {
+        fixture: honestEmpty,
+        theme,
+        t0: 1_728_800_000_000,
+        installs: [
+          {
+            provider: "claude-code",
+            display_name: "Claude Code",
+            install_url: "https://claude.com/download",
+            status: "not_installed",
+            version: null,
+            binary: null,
+            notes: [],
+          },
+          {
+            provider: "codex",
+            display_name: "Codex",
+            install_url: "https://developers.openai.com/codex",
+            status: "installed",
+            version: "0.9.4",
+            binary: "/opt/homebrew/bin/codex",
+            notes: [],
+          },
+        ],
+      },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Accounts" }).click();
+    await page.getByRole("button", { name: /Add account|Finish setting up/ }).first().click();
+    const dialog = page.getByTestId("onboarding-wizard");
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toHaveAttribute("role", "dialog");
+    await expect(dialog).toHaveAttribute("aria-modal", "true");
+
+    // The gate: Continue disabled with the missing provider; the row
+    // opens install help keyboard-first.
+    await expect(page.getByTestId("install-continue")).toBeDisabled();
+    await page.locator("[data-testid='provider-row'] button").first().focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("install-help")).toContainText("Install Claude Code →");
+
+    const scan = await new AxeBuilder({ page })
+      .include("[data-testid='onboarding-wizard']")
+      .analyze();
+    const serious = scan.violations.filter((v) =>
+      ["serious", "critical"].includes(v.impact ?? ""),
+    );
+    if (serious.length > 0) {
+      await page.waitForTimeout(400);
+      const recheck = await new AxeBuilder({ page })
+        .include("[data-testid='onboarding-wizard']")
+        .analyze();
+      const still = recheck.violations.filter((v) =>
+        ["serious", "critical"].includes(v.impact ?? ""),
+      );
+      expect(still).toHaveLength(0);
+    }
+    expect(serious).toHaveLength(0);
+
+    // Tab stays inside the dialog (the trap): after several tabs the
+    // focused element is still a descendant.
+    for (let i = 0; i < 12; i += 1) {
+      await page.keyboard.press("Tab");
+    }
+    await expect(dialog.locator(":focus")).toHaveCount(1);
+
+    // Esc closes when idle.
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
   });
 }

@@ -20,8 +20,7 @@ import {
   type LaunchRecipeInfo,
   redactionPolicyGet,
   redactionPolicySetOverride,
-  type RedactionInfoData,
-} from "../lib/bridge";
+  type RedactionInfoData, errorText,} from "../lib/bridge";
 
 /**
  * Profiles screen (M1-3): accounts with isolated state + one-click profile
@@ -53,7 +52,7 @@ export function ProfilesScreen({
       setAccounts(accountRows);
       setProfiles(profileRows);
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }, []);
 
@@ -75,7 +74,7 @@ export function ProfilesScreen({
         `${recipe.account_label} · ${recipe.name}`,
       );
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   };
 
@@ -135,6 +134,7 @@ export function ProfilesScreen({
 
       {addAccount && (
         <OnboardingWizard
+          provider="claude-code"
           onClose={() => setAddAccount(false)}
           onAccountCreated={() => void refresh()}
           openLoginTerminal={openTerminal}
@@ -168,6 +168,12 @@ export function ProfilesScreen({
 }
 
 function EmptyAccounts({ onAdd }: { onAdd: () => void }) {
+  // AJ-E301 Req.6: re-entry after dismissal — with zero accounts the
+  // wizard is re-offered with its own copy, never buried behind a
+  // generic "add".
+  const dismissed =
+    typeof window !== "undefined" &&
+    localStorage.getItem("aij.onboarding.dismissed") === "1";
   return (
     <Card className="flex flex-col items-center justify-center gap-3 py-14">
       <span className="flex size-11 items-center justify-center rounded-xl border border-accent/20 bg-accent-soft text-accent-hi">
@@ -177,8 +183,8 @@ function EmptyAccounts({ onAdd }: { onAdd: () => void }) {
         No accounts yet. Add your first harness login — AI Juggler keeps its
         state fully isolated from any existing install.
       </p>
-      <Button variant="primary" size="sm" onClick={onAdd}>
-        Add account
+      <Button variant="primary" size="sm" onClick={onAdd} data-testid="finish-setup">
+        {dismissed ? "Finish setting up AI Juggler" : "Add account"}
       </Button>
     </Card>
   );
@@ -410,7 +416,7 @@ function NewProfileModal({
       await createProfile(account.id, name.trim(), model.trim() || null, cwd.trim() || null);
       onCreated();
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
       setBusy(false);
     }
   };
@@ -474,7 +480,7 @@ function LoginModal({
       onClose();
     } catch (cause) {
       setStarting(false);
-      window.alert(`Could not start the login terminal: ${String(cause)}`);
+      window.alert(`Could not start the login terminal: ${errorText(cause)}`);
     }
   };
 

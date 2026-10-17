@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Card, Chip } from "./primitives";
 import type { InstanceInfo } from "../lib/bridge";
+import { errorText } from "../lib/bridge";
 
 /**
  * "Go to instance…" (AJ-E414 Req.4): summoned by the global hotkey
@@ -115,7 +116,7 @@ export function GoToPalette({
         setCaptureError(null);
         onHotkeyChange(combo)
           .then(() => setCapturing(false))
-          .catch((cause: unknown) => setCaptureError(String(cause)));
+          .catch((cause: unknown) => setCaptureError(errorText(cause)));
       }
       return;
     }

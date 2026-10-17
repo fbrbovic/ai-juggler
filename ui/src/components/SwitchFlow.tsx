@@ -19,8 +19,7 @@ import {
   switchExecute,
   switchUndo,
   redactionPolicySetGlobal,
-  type PreflightInfoData,
-} from "../lib/bridge";
+  type PreflightInfoData, errorText,} from "../lib/bridge";
 
 /** The plain-words picker options (same words as Settings). */
 const REDACTION_OPTIONS = [
@@ -214,7 +213,7 @@ export function SwitchFlow({
         }
       })
       .catch((cause) => {
-        if (alive) setPhase({ kind: "failed", message: String(cause) });
+        if (alive) setPhase({ kind: "failed", message: errorText(cause) });
       });
     return () => {
       alive = false;
@@ -317,7 +316,7 @@ export function SwitchFlow({
       }
       setPhase({ kind: "done", sessionId: result.session_id });
     } catch (cause) {
-      setPhase({ kind: "failed", message: String(cause) });
+      setPhase({ kind: "failed", message: errorText(cause) });
     }
   };
 
@@ -743,7 +742,7 @@ export function SwitchUndoToast({
       const result = await switchUndo(edgeId);
       onUndone(result.session_id);
     } catch (cause) {
-      setState({ kind: "failed", message: String(cause) });
+      setState({ kind: "failed", message: errorText(cause) });
     }
   };
 

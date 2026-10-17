@@ -22,7 +22,7 @@ import type {
 import { renewalLabel } from "../lib/renewal";
 import { QuotaBar, formatCountdown, quotaTierTag } from "./primitives";
 import { TwoClocks, WindowRing } from "./QuotaRings";
-import { accountSetFee, quotaDisplay, switchTargets, type QuotaDisplayData, type SwitchBackSuggestionData, type SwitchTargetData } from "../lib/bridge";
+import { accountSetFee, quotaDisplay, switchTargets, type QuotaDisplayData, type SwitchBackSuggestionData, type SwitchTargetData, errorText,} from "../lib/bridge";
 import { formatBytes, stateChip } from "./indicator";
 import { SwitchGraph } from "./SwitchGraph";
 import { SwitchTargetRows } from "./SwitchTargetRows";
@@ -720,7 +720,7 @@ function InstanceOverview(props: PanelProps) {
                     setFocusOutcome(await props.focusBridge(session.id));
                   } catch (cause) {
                     setFocusOutcome({
-                      outcome: `Focus failed: ${String(cause)}`,
+                      outcome: `Focus failed: ${errorText(cause)}`,
                       permission_missing: false,
                       window_title: null,
                     });
@@ -2150,7 +2150,7 @@ function QualityTab(props: PanelProps) {
         }
       })
       .catch((cause: unknown) => {
-        if (alive) setLoadError(String(cause));
+        if (alive) setLoadError(errorText(cause));
       });
     // AJ-E410 completes E409 Req.6: CPU/RAM now come from the process
     // collector's 2 s ring (labelled Measured, footnote `2s sampling`).
@@ -2411,7 +2411,7 @@ function ProcessesTab(props: PanelProps & { readOnly?: boolean }) {
           }
         })
         .catch((cause: unknown) => {
-          if (alive) setError(String(cause));
+          if (alive) setError(errorText(cause));
         });
     };
     load();

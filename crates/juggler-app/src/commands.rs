@@ -11154,3 +11154,139 @@ pub fn validation_dogfood_record_impl(
         .map_err(AppError::Core)?;
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// AJ-E301: the wizard's Step-0 install gate — one row per Provider
+// from the adapters' own `discover()`, probed in PARALLEL off the UI
+// thread; a missing binary is caught before any account is created.
+
+/// Vendor display metadata for one Provider (names + install pages;
+/// no binary knowledge — that is `discover()`'s job).
+fn provider_display(provider: &str) -> (String, &'static str) {
+    let name = match provider {
+        "claude-code" => "Claude Code".to_owned(),
+        "codex" => "Codex".to_owned(),
+        "zcode" => "ZCode".to_owned(),
+        "fake" | "fake-desktop" => "Fake harness (test)".to_owned(),
+        other => other.to_owned(),
+    };
+    let url = match provider {
+        "claude-code" => "https://claude.com/download",
+        "codex" => "https://developers.openai.com/codex",
+        "zcode" => "https://z.ai",
+        _ => "about:blank",
+    };
+    (name, url)
+}
+
+/// One Step-0 row (AJ-E301 Req.2): `Installed vX.Y` / `Not installed`
+/// / `Installed (vX, unverified)`.
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize)]
+pub struct ProviderInstallInfo {
+    /// Provider id (the wizard's `provider` parameter).
+    pub provider: String,
+    /// Display name ("Claude Code").
+    pub display_name: String,
+    /// Vendor install page.
+    pub install_url: String,
+    /// `installed` | `not_installed` | `unverified` | `probe_failed`.
+    pub status: String,
+    /// The reported version, when a binary was found.
+    pub version: Option<String>,
+    /// Resolved binary path, when found.
+    pub binary: Option<String>,
+    /// Discovery notes (drift details), verbatim.
+    pub notes: Vec<String>,
+}
+
+/// AJ-E301: probes every registered Provider in parallel (thread per
+/// adapter — `--version` subprocesses never touch the UI thread; the
+/// 2s-per-provider hard cap is the subprocess timeout inside each
+/// adapter's `discover()`).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] on registry failures (never for a
+/// missing binary — that is a ROW, not an error).
+#[tauri::command]
+pub fn providers_discover(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> AppResult<Vec<ProviderInstallInfo>> {
+    providers_discover_impl(state.inner())
+}
+
+/// Core implementation shared with integration tests (the no-binary
+/// Step-0 fixture).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] per the command docs.
+pub fn providers_discover_impl(state: &Arc<AppState>) -> AppResult<Vec<ProviderInstallInfo>> {
+    // Tauri dispatches commands off the UI thread; the per-adapter
+    // probes additionally run on their OWN threads (parallel, one
+    // subprocess each — the ≤800 ms p95 budget for 3 Providers).
+    {
+        let registry = &state.registry;
+        let ids = registry.ids();
+        let reports: Vec<juggler_adapter::discovery::DiscoveryReport> =
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = ids
+                    .iter()
+                    .map(|id| {
+                        let adapter = registry.get(id);
+                        scope.spawn(move || {
+                            adapter.map_or_else(
+                                || juggler_adapter::discovery::DiscoveryReport {
+                                    adapter: id.clone(),
+                                    install: juggler_adapter::discovery::InstallStatus::NotFound,
+                                    verification:
+                                        juggler_adapter::discovery::VerificationStatus::Unverified,
+                                    binary: None,
+                                    notes: Vec::new(),
+                                },
+                                |adapter| adapter.discover(),
+                            )
+                        })
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .filter_map(|handle| handle.join().ok())
+                    .collect()
+            });
+        Ok(reports
+            .into_iter()
+            .map(|report| {
+                let (display_name, install_url) = provider_display(report.adapter.as_str());
+                let (status, version) = match &report.install {
+                    juggler_adapter::discovery::InstallStatus::Installed { version } => {
+                        let verified = matches!(
+                            report.verification,
+                            juggler_adapter::discovery::VerificationStatus::Verified
+                        );
+                        (
+                            if verified { "installed" } else { "unverified" },
+                            Some(version.clone()),
+                        )
+                    }
+                    juggler_adapter::discovery::InstallStatus::NotFound => ("not_installed", None),
+                    juggler_adapter::discovery::InstallStatus::Failed { .. } => {
+                        ("probe_failed", None)
+                    }
+                };
+                ProviderInstallInfo {
+                    provider: report.adapter.to_string(),
+                    display_name: display_name.clone(),
+                    install_url: install_url.to_owned(),
+                    status: status.to_owned(),
+                    version,
+                    binary: report
+                        .binary
+                        .as_ref()
+                        .map(|path| path.to_string_lossy().into_owned()),
+                    notes: report.notes,
+                }
+            })
+            .collect())
+    }
+}

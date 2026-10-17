@@ -5,7 +5,7 @@ import { GoToPalette } from "./components/GoToPalette";
 import { PortWarningSheet } from "./components/PortMap";
 import { RecoverySummaryDialog } from "./components/RecoverySummaryDialog";
 import { CleanupCentre, focusCleanupFilter } from "./screens/CleanupCentre";
-import { launchPortWarning, type PortWarningInfo } from "./lib/bridge";
+import { launchPortWarning, type PortWarningInfo, errorText,} from "./lib/bridge";
 import {
   IconFleet,
   IconJuggler,
@@ -659,7 +659,7 @@ export default function App() {
                   const terminal = await terminalSpawnLogin(account.id);
                   openLoginTerminal(terminal.id, `Sign in · ${account.label}`);
                 } catch (cause) {
-                  window.alert(`Could not start sign-in: ${String(cause)}`);
+                  window.alert(`Could not start sign-in: ${errorText(cause)}`);
                 }
               }}
               onSkip={() => {
@@ -799,6 +799,7 @@ export default function App() {
 
       {wizard && (
         <OnboardingWizard
+          provider="claude-code"
           onClose={() => {
             localStorage.setItem("aij.onboarding.dismissed", "1");
             setWizard(false);
