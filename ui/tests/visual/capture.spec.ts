@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking", "28-switch", "29-door", "30-switchback", "31-redaction", "32-graph"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking", "28-switch", "29-door", "30-switchback", "31-redaction", "32-graph", "33-beta"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -3220,6 +3220,140 @@ for (const theme of THEMES) {
       await expect(hatched.first()).toContainText("Not yet validated");
       await page.screenshot({
         path: resolve(GALLERY, `32-graph/badges-${vp.name}-${theme}.png`),
+      });
+    });
+  }
+}
+
+/**
+ * AJ-E210 gallery 33 — the Beta validation matrix (Settings → Beta,
+ * disclosure only): the researched table (all pairs open beta debt),
+ * a failed live cell's lowered-ceiling disclosure, a validated pair
+ * graduating its badge, and one unvalidated badge in situ on the
+ * wizard — across 1280×800 + 800×600 × light+dark. The table is the
+ * same one the switch badges derive from (one source, no drift).
+ */
+const MATRIX_FAILED: import("../src/lib/bridge").ValidationCellData[] = [
+  {
+    from: "claude-code", to: "claude-code", mechanism: "transplant",
+    researched_ceiling: "F1", advertised: "F0", badge: "F0 · Beta",
+    validated: false, mechanism_green: true, ci_green: true,
+    dogfood: {
+      at: "2026-10-16", project_shape: "monorepo", verdict: "fail",
+      source_sha256: "aa", target_sha256: "bb", note: "S-F4: rules ring lost",
+    },
+    status: "Live cell FAILED 2026-10-16 — S-F4: rules ring lost; ceiling lowered one level",
+    notes: [],
+  },
+];
+
+const MATRIX_MIXED: import("../src/lib/bridge").ValidationCellData[] = [
+  {
+    from: "claude-code", to: "claude-code", mechanism: "transplant",
+    researched_ceiling: "F1", advertised: "F1", badge: "F1 · Validated",
+    validated: true, mechanism_green: true, ci_green: true,
+    dogfood: {
+      at: "2026-10-17", project_shape: "tiny", verdict: "pass",
+      source_sha256: "aa", target_sha256: "bb",
+      note: "target answered the pre-switch question",
+    },
+    status: "Validated — live cell passed 2026-10-17 (tiny shape)",
+    notes: [],
+  },
+  {
+    from: "claude-code", to: "codex", mechanism: "replay",
+    researched_ceiling: "F1", advertised: "F1", badge: "F1 · Beta",
+    validated: false, mechanism_green: true, ci_green: false, dogfood: null,
+    status: "Real-adapter fixtures not landed · live dogfood pending — open beta debt",
+    notes: ["codex target adapter not landed"],
+  },
+];
+
+for (const theme of THEMES) {
+  for (const vp of SWITCH_VP) {
+    const openProfiles = async (
+      page: import("@playwright/test").Page,
+      matrix?: unknown[],
+    ) => {
+      await page.addInitScript(
+        ({ fixture, matrix: table, t0, theme: themeName }) => {
+          const w = window as unknown as Record<string, unknown>;
+          w.__AIJ_FIXTURE__ = fixture;
+          if (table !== undefined) w.__AIJ_VALIDATION_MATRIX__ = table;
+          localStorage.setItem("aij.theme", themeName);
+          localStorage.setItem("aij.onboarding.dismissed", "1");
+          sessionStorage.setItem("aij.ready.skipped", "1");
+          Date.now = () => t0;
+        },
+        { fixture: allStatuses, matrix, t0: T0, theme },
+      );
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await page.getByRole("button", { name: "Accounts" }).click();
+      await expect(page.getByTestId("beta-matrix")).toBeVisible();
+    };
+
+    test(`beta — matrix, all pairs open debt — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openProfiles(page);
+      await expect(page.getByTestId("beta-matrix-summary")).toContainText(
+        "All 11 provider pairs ship in beta",
+      );
+      await expect(page.getByTestId("beta-matrix-row").first()).toContainText(
+        "Beta — not yet validated",
+      );
+      await page.screenshot({
+        path: resolve(GALLERY, `33-beta/matrix-default-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`beta — failed cell lowers the ceiling — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openProfiles(page, MATRIX_FAILED);
+      await expect(page.getByTestId("beta-matrix-row").first()).toContainText(
+        "lowered from F1 — a live cell failed",
+      );
+      await page.screenshot({
+        path: resolve(GALLERY, `33-beta/matrix-failed-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`beta — validated pair graduates — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openProfiles(page, MATRIX_MIXED);
+      await expect(page.getByTestId("beta-matrix-summary")).toContainText(
+        "1 of 2 pairs validated",
+      );
+      await expect(page.getByTestId("beta-matrix-row").first()).toContainText("Validated ✓");
+      await page.screenshot({
+        path: resolve(GALLERY, `33-beta/matrix-validated-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`beta — unvalidated badge in situ on the wizard — ${vp.name} — ${theme}`, async ({ page }) => {
+      await page.addInitScript(
+        ({ fixture, door, t0, theme: themeName }) => {
+          const w = window as unknown as Record<string, unknown>;
+          w.__AIJ_FIXTURE__ = fixture;
+          w.__AIJ_SWITCH_PREFLIGHT__ = door;
+          localStorage.setItem("aij.theme", themeName);
+          localStorage.setItem("aij.onboarding.dismissed", "1");
+          sessionStorage.setItem("aij.ready.skipped", "1");
+          Date.now = () => t0;
+        },
+        { fixture: allStatuses, door: SWITCH_WIZARD_FIXTURE, t0: T0, theme },
+      );
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await page.getByRole("tab", { name: "Sessions" }).click();
+      await page.getByRole("button", { name: /Work Max/ }).first().click();
+      await page.getByTestId("handover-section")
+        .locator("button[data-row]:not(:disabled)")
+        .first()
+        .click();
+      await expect(page.getByTestId("switch-wizard")).toBeVisible();
+      await expect(page.getByTestId("switch-wizard")).toContainText("· beta");
+      await page.screenshot({
+        path: resolve(GALLERY, `33-beta/badge-in-situ-${vp.name}-${theme}.png`),
       });
     });
   }

@@ -4,6 +4,7 @@ import { renewalLabel, renewalRowVisible } from "../lib/renewal";
 import { Field, Input, Modal } from "../components/form";
 import { IconProfiles, IconTerminal } from "../components/icons";
 import { OnboardingWizard } from "./OnboardingWizard";
+import { BetaMatrix } from "../components/BetaMatrix";
 import {
   accountLoginCommand,
   accountLoginState,
@@ -103,6 +104,11 @@ export function ProfilesScreen({
           {error}
         </Card>
       )}
+
+      {/* AJ-E210: the Beta validation matrix (Settings → Beta,
+          disclosure only) — the same table the switch badges derive
+          from, so "which pairs are proven" is never a guess. */}
+      <BetaMatrix />
 
       {accounts.length === 0 ? (
         <EmptyAccounts onAdd={() => setAddAccount(true)} />

@@ -272,3 +272,178 @@ fn compact_boundary_marks_the_bundle_compacted() {
     let clean = format!("{}\n", line("u1", None, "sess-c", "/w/compact"));
     assert!(!claude_transcript::parse_transcript(clean.as_bytes()).has_compact_boundary());
 }
+
+/// H-F4 (AJ-E210): a compacted source labels the bundle F2 with the
+/// compact-boundary cap recorded — and the raw source bytes stay
+/// hash-identical through the bundle read.
+#[test]
+fn hf4_compacted_source_labels_f2_and_bytes_stay_identical() {
+    let work = tempfile::tempdir().unwrap();
+    let config = work.path().join("a");
+    let dir = config.join("projects").join("-w-compact-hf4");
+    std::fs::create_dir_all(&dir).unwrap();
+    let main_path = dir.join("sess-c4.jsonl");
+    std::fs::write(
+        &main_path,
+        format!(
+            "{}\n{}\n{{\"type\":\"system\",\"subtype\":\"compact_boundary\",\"cwd\":\"/w/compact-hf4\"}}\n{}\n",
+            line("u1", None, "sess-c4", "/w/compact-hf4"),
+            line("u2", Some("u1"), "sess-c4", "/w/compact-hf4"),
+            line("u3", Some("u2"), "sess-c4", "/w/compact-hf4"),
+        ),
+    )
+    .unwrap();
+    let before = dir_hashes(&dir);
+
+    let bundle = adapter()
+        .bundle_session(&TranscriptRef {
+            path: main_path.clone(),
+            native_id: Some("sess-c4".to_owned()),
+        })
+        .unwrap();
+    assert_eq!(bundle.manifest.fidelity.level, "F2", "compacted caps at F2");
+    assert!(
+        bundle
+            .manifest
+            .fidelity
+            .caps_applied
+            .contains(&"compact-boundary".to_owned())
+    );
+    assert!(
+        bundle
+            .manifest
+            .fidelity
+            .caps_applied
+            .contains(&"unvalidated-pair".to_owned()),
+        "still unvalidated until a live cell"
+    );
+
+    // Raw bytes identical (copy-never-move).
+    assert_eq!(before, dir_hashes(&dir));
+}
+
+/// H-F7 (AJ-E210): the golden path runs PTY-INDEPENDENT end to end —
+/// bundle → install → the installed transcript parses and preserves
+/// the turn tree. Nothing here touches a terminal; it is the CI
+/// shape of the ship gate.
+#[test]
+fn hf7_golden_path_is_pty_independent_end_to_end() {
+    let work = tempfile::tempdir().unwrap();
+    let config_a = work.path().join("a");
+    let config_b = work.path().join("b");
+    let main = seed_sibling_tree(&config_a, "/w/golden", "sess-golden");
+    let before_a = dir_hashes(main.parent().unwrap());
+
+    let support = adapter();
+    let bundle = support
+        .bundle_session(&TranscriptRef {
+            path: main.clone(),
+            native_id: Some("sess-golden".to_owned()),
+        })
+        .unwrap();
+    let outcome = support
+        .install_bundle(&bundle, &account(&config_b, "acc-b"))
+        .unwrap();
+    assert!(!outcome.forked, "clean target, no collision");
+
+    // The installed main parses whole (no torn line) and keeps the
+    // uuid tree; the sibling set travelled with it.
+    let installed_dir = outcome.reference.path.parent().unwrap();
+    let installed_main = std::fs::read(&outcome.reference.path).unwrap();
+    let uuids = juggler_adapter::handover::uuid_set(&installed_main);
+    for expected in ["u1", "u2"] {
+        assert!(uuids.contains(expected), "tree kept: {expected}");
+    }
+    let parsed_installed = claude_transcript::parse_transcript(&installed_main);
+    assert!(
+        !parsed_installed.messages.is_empty(),
+        "installed transcript parses whole"
+    );
+    assert_eq!(parsed_installed.lines_malformed, 0, "no torn line");
+    assert_eq!(
+        bundle.files.len(),
+        std::fs::read_dir(installed_dir).unwrap().count(),
+        "sibling set installed 1:1"
+    );
+    // Source bytes identical both sides.
+    assert_eq!(before_a, dir_hashes(main.parent().unwrap()));
+}
+
+/// H-F8 (AJ-E210): the A→B→A chain over the adapter — bundle A →
+/// install B → bundle B → return to A (the id collides with A's own
+/// session, so the return forks a fresh id). The uuid TREE survives
+/// the whole chain with ZERO duplicate uuids inside any transcript,
+/// and both sides stay resumable (neither source ever modified).
+#[test]
+fn hf8_a_to_b_to_a_chain_preserves_tree_with_no_duplicate_uuids() {
+    let work = tempfile::tempdir().unwrap();
+    let config_a = work.path().join("a");
+    let config_b = work.path().join("b");
+    let main = seed_sibling_tree(&config_a, "/w/chain", "sess-chain");
+    let before_a = dir_hashes(main.parent().unwrap());
+    let support = adapter();
+
+    // A → B.
+    let bundle_ab = support
+        .bundle_session(&TranscriptRef {
+            path: main.clone(),
+            native_id: Some("sess-chain".to_owned()),
+        })
+        .unwrap();
+    let installed_b = support
+        .install_bundle(&bundle_ab, &account(&config_b, "acc-b"))
+        .unwrap();
+
+    // B progresses one turn (the away work).
+    {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&installed_b.reference.path)
+            .unwrap();
+        writeln!(
+            file,
+            "{}",
+            line("b1", Some("u2"), "sess-chain", "/w/chain").replace("\"user\"", "\"assistant\"")
+        )
+        .unwrap();
+    }
+    let before_b = dir_hashes(installed_b.reference.path.parent().unwrap());
+
+    // B → A (the return): the id exists on A, so the return forks.
+    let bundle_ba = support
+        .bundle_session(&TranscriptRef {
+            path: installed_b.reference.path.clone(),
+            native_id: installed_b.reference.native_id.clone(),
+        })
+        .unwrap();
+    let returned = support
+        .install_bundle(&bundle_ba, &account(&config_a, "acc-a"))
+        .unwrap();
+    assert!(returned.forked, "the return forks a fresh id on A");
+
+    // The chain's tree: u1, u2 (base) + b1 (away) all present in the
+    // returned transcript; every uuid appears EXACTLY once (the
+    // dedupe-first-wins contract — zero duplicate uuids).
+    let returned_bytes = std::fs::read(&returned.reference.path).unwrap();
+    let text = String::from_utf8_lossy(&returned_bytes).into_owned();
+    for expected in ["u1", "u2", "b1"] {
+        let count = text.matches(&format!("\"uuid\":\"{expected}\"")).count()
+            + text.matches(&format!("\"uuid\": \"{expected}\"")).count();
+        assert_eq!(count, 1, "{expected} exactly once in the returned tree");
+    }
+
+    // Both originals stay byte-identical (copy-never-move both
+    // legs). The return ADDS its forked session files to A's dir —
+    // the originals themselves must be untouched, so compare the
+    // original names only.
+    let after_a: Vec<_> = dir_hashes(main.parent().unwrap())
+        .into_iter()
+        .filter(|(name, _)| before_a.iter().any(|(n, _)| n == name))
+        .collect();
+    assert_eq!(before_a, after_a, "A's original files untouched");
+    assert_eq!(
+        before_b,
+        dir_hashes(installed_b.reference.path.parent().unwrap())
+    );
+}

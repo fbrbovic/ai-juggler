@@ -152,7 +152,7 @@ Goal: the founding pain point solved — two Claude accounts in parallel, one cl
 | M4-4 | T3 transcript replay | Full-conversation rendering → target priming per Provider; fidelity labeling in UI | Cross-Provider switch carries complete conversation content (verified by fixture assertions on the primed context) |
 | M4-5 | T4 packs | Generate / preview / edit / export / import | Pack import creates a primed session in any managed Provider; format versioned |
 | M4-6 | Project context sync | Rules-file conversion (AGENTS.md ↔ CLAUDE.md ↔ `.zcode/AGENTS.md`), memory/todo sync; diff preview; apply on click | Conversion golden tests; zero un-previewed writes (guardrail test) |
-| M4-7 | Handover wizard + **Gate V4** | Wizard (tier + quota headroom per target); `docs/qa/gate-M4.md` | Dogfood criterion: A→B→A round trip preserves continuity; quality audit #5; user confirmation |
+| M4-7 | Handover wizard + **Gate V4** | Wizard (tier + quota headroom per target); `docs/qa/gate-M4.md`; per-pair validation gate: `docs/qa/gate-E2-validation.md` (AJ-E210, regenerate with `just e2-gate`) | Dogfood criterion: A→B→A round trip preserves continuity; quality audit #5; user confirmation |
 
 ---
 
