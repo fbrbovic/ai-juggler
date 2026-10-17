@@ -70,7 +70,6 @@ test("flow (a): first install ≤ 5 primary clicks, 0 typed, funnel complete", a
         start_here: "/Users/you/dev-api",
       };
       localStorage.setItem("aij.theme", "dark");
-      localStorage.setItem("aij.onboarding.dismissed", "1");
       sessionStorage.setItem("aij.ready.skipped", "1");
       // The funnel log + the typed-input recorder (both test-only).
       const log: string[] = [];
@@ -89,9 +88,9 @@ test("flow (a): first install ≤ 5 primary clicks, 0 typed, funnel complete", a
   );
   await page.emulateMedia({ reducedMotion: "reduce", colorScheme: "dark" });
   await page.setViewportSize({ width: 1280, height: 800 });
+  // The FIRST-RUN wizard (unlocked — the Accounts entry is flow (d),
+  // locked, since AJ-E306): it opens itself on a clean first run.
   await page.goto("/");
-  await page.getByRole("button", { name: "Accounts" }).click();
-  await page.getByRole("button", { name: /Add account|Finish setting up/ }).first().click();
   await expect(page.getByTestId("onboarding-wizard")).toBeVisible();
 
   let primaryClicks = 0;

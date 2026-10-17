@@ -10,7 +10,7 @@
  * `funnelStep` directly.
  */
 
-export type FunnelFlow = "a-first-install" | "b-new-project";
+export type FunnelFlow = "a-first-install" | "b-new-project" | "c-add-provider";
 export type FunnelStep = string;
 
 const seen = new Map<string, string[]>();

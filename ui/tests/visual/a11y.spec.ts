@@ -1194,7 +1194,6 @@ for (const theme of ["dark", "light"] as const) {
         w.__AIJ_FIXTURE__ = fixture;
         w.__AIJ_PROVIDER_INSTALLS__ = installs;
         localStorage.setItem("aij.theme", t);
-        localStorage.setItem("aij.onboarding.dismissed", "1");
         sessionStorage.setItem("aij.ready.skipped", "1");
         Date.now = () => t0;
       },
@@ -1226,9 +1225,9 @@ for (const theme of ["dark", "light"] as const) {
     );
     await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
     await page.setViewportSize({ width: 1280, height: 800 });
+    // First-run wizard — the gate only lives on this path now (the
+    // Accounts entry is flow (d)'s LOCKED wizard since AJ-E306).
     await page.goto("/");
-    await page.getByRole("button", { name: "Accounts" }).click();
-    await page.getByRole("button", { name: /Add account|Finish setting up/ }).first().click();
     const dialog = page.getByTestId("onboarding-wizard");
     await expect(dialog).toBeVisible();
     await expect(dialog).toHaveAttribute("role", "dialog");
@@ -1336,16 +1335,14 @@ for (const theme of ["dark", "light"] as const) {
           cancelled: false,
         };
         localStorage.setItem("aij.theme", t);
-        localStorage.setItem("aij.onboarding.dismissed", "1");
         sessionStorage.setItem("aij.ready.skipped", "1");
       },
       { fixture: honestEmpty, theme },
     );
     await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
     await page.setViewportSize({ width: 1280, height: 800 });
+    // First-run wizard (Accounts is flow (d)'s locked entry now).
     await page.goto("/");
-    await page.getByRole("button", { name: "Accounts" }).click();
-    await page.getByRole("button", { name: /Add account|Finish setting up/ }).first().click();
     await page.getByTestId("install-continue").click();
     const cards = page.getByTestId("candidate-cards");
     await expect(cards).toBeVisible();
@@ -1440,16 +1437,15 @@ for (const theme of ["dark", "light"] as const) {
           start_here: "-users-dev-api",
         };
         localStorage.setItem("aij.theme", t);
-        localStorage.setItem("aij.onboarding.dismissed", "1");
         sessionStorage.setItem("aij.ready.skipped", "1");
       },
       { fixture: honestEmpty, theme },
     );
     await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
     await page.setViewportSize({ width: 1280, height: 800 });
+    // First-run wizard (the Accounts entry is flow (d)'s LOCKED path
+    // since AJ-E306 — no gate there to continue through).
     await page.goto("/");
-    await page.getByRole("button", { name: "Accounts" }).click();
-    await page.getByRole("button", { name: /Add account|Finish setting up/ }).first().click();
     await page.getByTestId("install-continue").click();
     await expect(page.getByTestId("proposal-teaser")).toBeVisible();
     // The teaser buttons carry their own names.
@@ -1566,16 +1562,15 @@ for (const theme of ["dark", "light"] as const) {
           start_here: "/Users/you/dev-api",
         };
         localStorage.setItem("aij.theme", t);
-        localStorage.setItem("aij.onboarding.dismissed", "1");
         sessionStorage.setItem("aij.ready.skipped", "1");
       },
       { fixture: honestEmpty, theme },
     );
     await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
     await page.setViewportSize({ width: 1280, height: 800 });
+    // First-run wizard (the Accounts entry is flow (d)'s LOCKED
+    // path since AJ-E306 — no Step-0 gate to scan there).
     await page.goto("/");
-    await page.getByRole("button", { name: "Accounts" }).click();
-    await page.getByRole("button", { name: /Add account|Finish setting up/ }).first().click();
     await expect(page.getByTestId("wizard-step-install")).toBeVisible();
     expect(await scanSeriousWithConfirm(page)).toHaveLength(0);
     await page.getByTestId("install-continue").click();
@@ -1592,5 +1587,106 @@ for (const theme of ["dark", "light"] as const) {
     }
     await expect(page.getByTestId("summary-exits")).toBeVisible();
     expect(await scanSeriousWithConfirm(page)).toHaveLength(0);
+  });
+}
+
+/**
+ * AJ-E306 a11y gates: the launch sheet traps focus and returns it on
+ * close; both new surfaces scan axe-clean (0 critical/serious) —
+ * confirmatory re-scan per AJ-E806 (D-16).
+ */
+for (const theme of ["dark", "light"] as const) {
+  test(`launch sheet — focus trap, return focus, axe 0 — ${theme}`, async ({ page }) => {
+    await page.addInitScript(
+      ({ fixture, theme: t }) => {
+        const w = window as unknown as Record<string, unknown>;
+        w.__AIJ_FIXTURE__ = fixture;
+        localStorage.setItem("aij.theme", t);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+      },
+      { fixture: allStatuses, theme },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+    await expect(page.getByRole("tab", { name: "Sessions" })).toBeVisible();
+    // The summoning button is where focus must RETURN.
+    const summon = page.getByRole("button", { name: /^New$/ }).first();
+    await summon.click();
+    await expect(page.getByTestId("new-session-sheet")).toBeVisible();
+    const confirmed = await scanSeriousWithConfirm(page);
+    expect(confirmed).toHaveLength(0);
+    // The trap: many Tabs keep focus inside the dialog.
+    for (let tab = 0; tab < 12; tab += 1) {
+      await page.keyboard.press("Tab");
+    }
+    const focusedInside = await page.evaluate(() => {
+      const sheet = document.querySelector("[data-testid='new-session-sheet']");
+      return sheet !== null && sheet.contains(document.activeElement);
+    });
+    expect(focusedInside).toBe(true);
+    // Esc cancels cleanly and focus returns to the summoner.
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("new-session-sheet")).toHaveCount(0);
+    await expect(summon).toBeFocused();
+  });
+
+  test(`Add Provider sheet — axe 0, cards reachable by keyboard — ${theme}`, async ({ page }) => {
+    await page.addInitScript(
+      ({ fixture, installs, theme: t }) => {
+        const w = window as unknown as Record<string, unknown>;
+        w.__AIJ_FIXTURE__ = fixture;
+        w.__AIJ_PROVIDER_INSTALLS__ = installs;
+        localStorage.setItem("aij.theme", t);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+      },
+      {
+        fixture: honestEmpty,
+        theme,
+        installs: [
+          {
+            provider: "claude-code",
+            display_name: "Claude Code",
+            install_url: "https://claude.com/download",
+            status: "installed",
+            version: "2.1.296",
+            binary: "/usr/local/bin/claude",
+            notes: [],
+            verified_against: ["2.1.x"],
+            kind: "terminal",
+            single_instance_note: null,
+          },
+          {
+            provider: "codex",
+            display_name: "Codex",
+            install_url: "https://developers.openai.com/codex",
+            status: "not_installed",
+            version: null,
+            binary: null,
+            notes: [],
+            verified_against: [],
+            kind: "terminal",
+            single_instance_note: null,
+          },
+        ],
+      },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Accounts" }).click();
+    await page.getByTestId("add-provider").click();
+    await expect(page.getByTestId("provider-cards")).toBeVisible();
+    const confirmed = await scanSeriousWithConfirm(page);
+    expect(confirmed).toHaveLength(0);
+    // Keyboard operable: focusing a card's action and pressing Enter
+    // runs it (the wizard opens) — cards are real buttons, not
+    // click-only divs.
+    await page.locator("button[data-testid='provider-choose']").focus();
+    await expect(page.locator("button[data-testid='provider-choose']")).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("onboarding-wizard")).toBeVisible();
   });
 }

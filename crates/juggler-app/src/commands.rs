@@ -293,6 +293,10 @@ pub struct WindowDisplay {
     pub burned_tokens: u64,
     /// Burn in vendor credits, when the provider bills credits.
     pub burned_credits: Option<f64>,
+    /// Headroom in tokens (cap − burned), ONLY when the cap is
+    /// known — the admission verdict's input (AJ-E306); unknown
+    /// stays None, never a fabricated number.
+    pub headroom_tokens: Option<f64>,
 }
 
 /// AJ-E610: the subscription clock's rendered state — a calendar-style
@@ -417,7 +421,7 @@ pub fn quota_display_inner(
     let stale_note_ms =
         last_measured.filter(|ts| now_ms.saturating_sub(*ts) > quota::STALE_AFTER_MS);
 
-    let window_display = |reading: &quota::WindowReading| WindowDisplay {
+    let window_display = |reading: &quota::WindowReading, cap: QuotaCap| WindowDisplay {
         state: match reading.state {
             QuotaState::Unknown => "unknown".to_owned(),
             QuotaState::Learning => "learning".to_owned(),
@@ -440,6 +444,17 @@ pub fn quota_display_inner(
             .saturating_add(reading.burn.tokens.cache_write)
             .saturating_add(reading.burn.tokens.reasoning),
         burned_credits: (reading.burn.credits > 0.0).then_some(reading.burn.credits),
+        headroom_tokens: cap.tokens.map(|tokens| {
+            #[allow(clippy::cast_precision_loss)]
+            let room = tokens as f64;
+            #[allow(clippy::cast_precision_loss)]
+            let burned = reading.burn.tokens.input as f64
+                + reading.burn.tokens.output as f64
+                + reading.burn.tokens.cache_read as f64
+                + reading.burn.tokens.cache_write as f64
+                + reading.burn.tokens.reasoning as f64;
+            (room - burned).max(0.0)
+        }),
     };
 
     // The forecast runs on the unit the provider bills (ZCode credits).
@@ -536,13 +551,22 @@ pub fn quota_display_inner(
         "codex" if plan.as_deref() == Some("pro") => (
             None,
             Some("Pro plans have no five-hour limit — weekly only".to_owned()),
-            Some(window_display(&evaluation.weekly)),
+            Some(window_display(
+                &evaluation.weekly,
+                cap(WindowKind::Weekly { anchor_ms: anchor }),
+            )),
             None,
         ),
         _ => (
-            Some(window_display(&evaluation.five_hour)),
+            Some(window_display(
+                &evaluation.five_hour,
+                cap(WindowKind::FiveHour),
+            )),
             None,
-            Some(window_display(&evaluation.weekly)),
+            Some(window_display(
+                &evaluation.weekly,
+                cap(WindowKind::Weekly { anchor_ms: anchor }),
+            )),
             None,
         ),
     };
@@ -581,6 +605,11 @@ pub struct RankedRowInfo {
     pub tte_min: Option<f64>,
     /// True for the top row (badged "Suggested").
     pub suggested: bool,
+    /// The launch admission verdict (`ok|tight|no`, SPEC §5.2) for
+    /// this account on the requested project — None when headroom or
+    /// burn is unknown (rendered as "headroom unknown", never a
+    /// guess). Warns; never blocks (AJ-E306 Req.7).
+    pub admission: Option<String>,
 }
 
 /// The display's forecast TTE, when the pill can show one.
@@ -696,6 +725,10 @@ fn rank_candidates_for(
     let mut candidates: Vec<juggler_core::ranking::Candidate> = Vec::new();
     let mut tte_by_account: std::collections::BTreeMap<String, Option<f64>> =
         std::collections::BTreeMap::new();
+    // AJ-E306: the per-account admission verdict (SPEC §5.2) — warn,
+    // never block; None when headroom or burn is unknown.
+    let mut admission_by_account: std::collections::BTreeMap<String, Option<String>> =
+        std::collections::BTreeMap::new();
     let dogfood = dogfood_cells_of(&storage);
     for account in &accounts {
         let display = quota_display_inner(&storage, account, now);
@@ -748,6 +781,24 @@ fn rank_candidates_for(
             .unwrap_or_default();
         let session_ids: Vec<&str> = project_sessions.iter().map(String::as_str).collect();
         let median_burn = juggler_core::quota_forecast::median_session_burn(&events, &session_ids);
+        let headroom_tokens = [display.five_hour.as_ref(), display.weekly.as_ref()]
+            .into_iter()
+            .flatten()
+            .filter_map(|window| window.headroom_tokens)
+            .reduce(f64::min);
+        admission_by_account.insert(
+            account.id.as_str().to_owned(),
+            juggler_core::quota_forecast::admission_verdict(median_burn, headroom_tokens).map(
+                |verdict| {
+                    match verdict {
+                        juggler_core::quota_forecast::AdmissionVerdict::Ok => "ok",
+                        juggler_core::quota_forecast::AdmissionVerdict::Tight => "tight",
+                        juggler_core::quota_forecast::AdmissionVerdict::No => "no",
+                    }
+                    .to_owned()
+                },
+            ),
+        );
         let catalog = pricing_catalog(&storage);
         let projected_usd = median_burn.and_then(|tokens| {
             let counts = juggler_core::model::TokenCounts {
@@ -815,6 +866,7 @@ fn rank_candidates_for(
         .enumerate()
         .map(|(index, row)| {
             let tte = tte_by_account.get(&row.account).copied().flatten();
+            let admission = admission_by_account.get(&row.account).cloned().flatten();
             RankedRowInfo {
                 account: row.account,
                 score: row.score,
@@ -829,6 +881,7 @@ fn rank_candidates_for(
                 },
                 tte_min: tte,
                 suggested: index == 0 && row.score.is_some(),
+                admission,
             }
         })
         .collect())
@@ -11218,6 +11271,14 @@ pub struct ProviderInstallInfo {
     pub binary: Option<String>,
     /// Discovery notes (drift details), verbatim.
     pub notes: Vec<String>,
+    /// AJ-E306 flow (c): the verified version range(s) — the card's
+    /// badge; empty renders "unverified" honestly.
+    pub verified_against: Vec<String>,
+    /// `terminal` or `desktop` (the kind badge, Req.3).
+    pub kind: String,
+    /// The single-instance desktop limit, stated BEFORE selection
+    /// (Req.3) — the adapter's isolation claim verbatim.
+    pub single_instance_note: Option<String>,
 }
 
 /// AJ-E301: probes every registered Provider in parallel (thread per
@@ -11295,6 +11356,25 @@ pub fn providers_discover_impl(state: &Arc<AppState>) -> AppResult<Vec<ProviderI
                         ("probe_failed", None)
                     }
                 };
+                let adapter_meta = registry.get(&juggler_core::model::HarnessId::new(
+                    report.adapter.as_str(),
+                ));
+                let (verified_against, kind, single_instance_note) = match adapter_meta {
+                    Some(adapter) => (
+                        adapter
+                            .verified_against()
+                            .iter()
+                            .map(|v| (*v).to_owned())
+                            .collect(),
+                        if adapter.desktop_isolation_label().is_some() {
+                            "desktop".to_owned()
+                        } else {
+                            "terminal".to_owned()
+                        },
+                        adapter.desktop_isolation_label().map(str::to_owned),
+                    ),
+                    None => (Vec::new(), "terminal".to_owned(), None),
+                };
                 ProviderInstallInfo {
                     provider: report.adapter.to_string(),
                     display_name: display_name.clone(),
@@ -11306,6 +11386,9 @@ pub fn providers_discover_impl(state: &Arc<AppState>) -> AppResult<Vec<ProviderI
                         .as_ref()
                         .map(|path| path.to_string_lossy().into_owned()),
                     notes: report.notes,
+                    verified_against,
+                    kind,
+                    single_instance_note,
                 }
             })
             .collect())

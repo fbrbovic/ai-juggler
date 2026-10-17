@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking", "28-switch", "29-door", "30-switchback", "31-redaction", "32-graph", "33-beta", "34-wizard", "35-candidates", "36-recommend", "37-flows"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking", "28-switch", "29-door", "30-switchback", "31-redaction", "32-graph", "33-beta", "34-wizard", "35-candidates", "36-recommend", "37-flows", "38-flows-cde"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -148,7 +148,6 @@ for (const theme of THEMES) {
         ({ fixture, theme }) => {
           (window as never as { __AIJ_FIXTURE__: unknown }).__AIJ_FIXTURE__ = fixture;
           localStorage.setItem("aij.theme", theme);
-          localStorage.setItem("aij.onboarding.dismissed", "1");
           sessionStorage.setItem("aij.ready.skipped", "1");
         },
         { fixture: honestEmpty, theme },
@@ -156,8 +155,6 @@ for (const theme of THEMES) {
       await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
       await page.setViewportSize({ width: vp.width, height: vp.height });
       await page.goto("/");
-      await page.getByRole("button", { name: "Accounts" }).click();
-      await page.getByRole("button", { name: /Add account|Finish setting up/ }).first().click();
       // AJ-E301: Step 0 (the install gate) now precedes the scan —
       // the preview default has Claude installed, so Continue is
       // enabled and advances; the not-installed state is captured in
@@ -3390,7 +3387,6 @@ const openWizardStep0 = async (
       w.__AIJ_FIXTURE__ = fixture;
       w.__AIJ_PROVIDER_INSTALLS__ = rows;
       localStorage.setItem("aij.theme", themeName);
-      localStorage.setItem("aij.onboarding.dismissed", "1");
       sessionStorage.setItem("aij.ready.skipped", "1");
     },
     { fixture: honestEmpty, installs, theme },
@@ -3398,8 +3394,6 @@ const openWizardStep0 = async (
   await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme as "dark" | "light" });
   await page.setViewportSize({ width: vp.width, height: vp.height });
   await page.goto("/");
-  await page.getByRole("button", { name: "Accounts" }).click();
-  await page.getByRole("button", { name: /Add account|Finish setting up/ }).first().click();
   await expect(page.getByTestId("wizard-step-install")).toBeVisible();
 };
 
@@ -3473,7 +3467,6 @@ for (const theme of THEMES) {
         // createAccount hangs → the wizard stays "busy" in identity.
         w.__AIJ_CREATE_HANG__ = true;
         localStorage.setItem("aij.theme", themeName);
-        localStorage.setItem("aij.onboarding.dismissed", "1");
         sessionStorage.setItem("aij.ready.skipped", "1");
       },
       {
@@ -3495,8 +3488,6 @@ for (const theme of THEMES) {
     await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme as "dark" | "light" });
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto("/");
-    await page.getByRole("button", { name: "Accounts" }).click();
-    await page.getByRole("button", { name: /Add account|Finish setting up/ }).first().click();
     await page.getByTestId("install-continue").click();
     await page.getByRole("button", { name: /fresh account/ }).click();
     await page.getByPlaceholder("e.g. Work, Personal, Side project").fill("Work");
@@ -3546,7 +3537,6 @@ for (const theme of THEMES) {
         w.__AIJ_PROVIDER_INSTALLS__ = installs;
         if (scan !== undefined) w.__AIJ_SCAN_REPORT__ = scan;
         localStorage.setItem("aij.theme", themeName);
-        localStorage.setItem("aij.onboarding.dismissed", "1");
         sessionStorage.setItem("aij.ready.skipped", "1");
       },
       {
@@ -3569,8 +3559,6 @@ for (const theme of THEMES) {
     await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme as "dark" | "light" });
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto("/");
-    await page.getByRole("button", { name: "Accounts" }).click();
-    await page.getByRole("button", { name: /Add account|Finish setting up/ }).first().click();
     await page.getByTestId("install-continue").click();
   };
 
@@ -3675,7 +3663,6 @@ for (const theme of THEMES) {
             cancelled: false,
           };
           localStorage.setItem("aij.theme", themeName);
-          localStorage.setItem("aij.onboarding.dismissed", "1");
           sessionStorage.setItem("aij.ready.skipped", "1");
         },
         { fixture: honestEmpty, installs, theme },
@@ -3683,8 +3670,6 @@ for (const theme of THEMES) {
       await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme as "dark" | "light" });
       await page.setViewportSize({ width: vp.width, height: vp.height });
       await page.goto("/");
-      await page.getByRole("button", { name: "Accounts" }).click();
-      await page.getByRole("button", { name: /Add account|Finish setting up/ }).first().click();
       await page.getByTestId("install-continue").click();
       await expect(page.getByTestId("candidate-cards").first()).toBeVisible();
       await expect(page.getByTestId("candidate-cards").first()).toContainText("Likely: Work");
@@ -3721,7 +3706,6 @@ for (const theme of THEMES) {
             cancelled: false,
           };
           localStorage.setItem("aij.theme", themeName);
-          localStorage.setItem("aij.onboarding.dismissed", "1");
           sessionStorage.setItem("aij.ready.skipped", "1");
         },
         {
@@ -3733,8 +3717,6 @@ for (const theme of THEMES) {
       await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme as "dark" | "light" });
       await page.setViewportSize({ width: vp.width, height: vp.height });
       await page.goto("/");
-      await page.getByRole("button", { name: "Accounts" }).click();
-      await page.getByRole("button", { name: /Add account|Finish setting up/ }).first().click();
       await page.getByTestId("install-continue").click();
       const card = page.getByTestId("candidate-card").first();
       await expect(card).toBeVisible();
@@ -3851,7 +3833,6 @@ const openProposalDetect = async (
       w.__AIJ_RECOMMENDATION__ = rec;
       Object.assign(w, extra);
       localStorage.setItem("aij.theme", themeName);
-      localStorage.setItem("aij.onboarding.dismissed", "1");
       sessionStorage.setItem("aij.ready.skipped", "1");
     },
     { fixture: honestEmpty, rec, theme, extra: extraWindows },
@@ -3859,8 +3840,6 @@ const openProposalDetect = async (
   await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme as "dark" | "light" });
   await page.setViewportSize({ width: vp.width, height: vp.height });
   await page.goto("/");
-  await page.getByRole("button", { name: "Accounts" }).click();
-  await page.getByRole("button", { name: /Add account|Finish setting up/ }).first().click();
   await page.getByTestId("install-continue").click();
   await expect(page.getByTestId("proposal-teaser")).toBeVisible();
 };
@@ -4025,16 +4004,15 @@ const openFirstInstall = async (
         start_here: "/Users/you/dev-api",
       };
       localStorage.setItem("aij.theme", themeName);
-      localStorage.setItem("aij.onboarding.dismissed", "1");
       sessionStorage.setItem("aij.ready.skipped", "1");
     },
     { fixture: honestEmpty, theme },
   );
   await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme as "dark" | "light" });
   await page.setViewportSize({ width: vp.width, height: vp.height });
+  // The first-run wizard opens itself (the Accounts entry is the
+  // LOCKED flow (d) since AJ-E306 — no Step-0 gate there).
   await page.goto("/");
-  await page.getByRole("button", { name: "Accounts" }).click();
-  await page.getByRole("button", { name: /Add account|Finish setting up/ }).first().click();
   await expect(page.getByTestId("wizard-step-install")).toBeVisible();
 };
 
@@ -4114,16 +4092,14 @@ for (const theme of THEMES) {
           };
           w.__AIJ_RECOMMENDATION__ = { items: [], summary: "", start_here: null };
           localStorage.setItem("aij.theme", themeName);
-          localStorage.setItem("aij.onboarding.dismissed", "1");
           sessionStorage.setItem("aij.ready.skipped", "1");
         },
         { fixture: honestEmpty, theme },
       );
       await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme as "dark" | "light" });
       await page.setViewportSize({ width: vp.width, height: vp.height });
+      // First-run wizard (unlocked — the picker must show here).
       await page.goto("/");
-      await page.getByRole("button", { name: "Accounts" }).click();
-      await page.getByRole("button", { name: /Add account|Finish setting up/ }).first().click();
       await page.getByTestId("install-continue").click();
       await expect(page.getByTestId("zero-found")).toBeVisible();
       await expect(page.getByTestId("zero-found")).toContainText("Create your first account");
@@ -4197,6 +4173,221 @@ for (const theme of THEMES) {
       await expect(page.getByTestId("onboarding-wizard")).toBeVisible();
       await page.screenshot({
         path: resolve(GALLERY, `37-flows/b-detour-${vp.name}-${theme}.png`),
+        fullPage: true,
+      });
+    });
+  }
+}
+
+/**
+ * AJ-E306 gallery 38 — flows (c)/(d)/(e): the Provider cards
+ * (installed / not-installed / unverified / desktop), and the launch
+ * sheet's verdict states (OK / Tight / No, logged-out row, unknown
+ * headroom) — 1280×800 + 390×844 × light+dark.
+ */
+const CDE_VP = [
+  { name: "1280x800", width: 1280, height: 800 },
+  { name: "390x844", width: 390, height: 844 },
+] as const;
+
+const E306_INSTALLS = [
+  {
+    provider: "claude-code",
+    display_name: "Claude Code",
+    install_url: "https://claude.com/download",
+    status: "installed",
+    version: "2.1.296",
+    binary: "/usr/local/bin/claude",
+    notes: [],
+    verified_against: ["2.0.x", "2.1.x"],
+    kind: "terminal",
+    single_instance_note: null,
+  },
+  {
+    provider: "fake-desktop",
+    display_name: "Fake Desktop",
+    install_url: "https://example.com/fake",
+    status: "installed",
+    version: "0.4.1",
+    binary: null,
+    notes: [],
+    verified_against: [],
+    kind: "desktop",
+    single_instance_note: "Single-account app — Juggler tracks, cannot isolate",
+  },
+  {
+    provider: "codex",
+    display_name: "Codex",
+    install_url: "https://developers.openai.com/codex",
+    status: "unverified",
+    version: "0.11.0",
+    binary: "/opt/homebrew/bin/codex",
+    notes: [],
+    verified_against: [],
+    kind: "terminal",
+    single_instance_note: null,
+  },
+  {
+    provider: "gemini",
+    display_name: "Gemini CLI",
+    install_url: "https://gemini.google.com/cli",
+    status: "not_installed",
+    version: null,
+    binary: null,
+    notes: [],
+    verified_against: [],
+    kind: "terminal",
+    single_instance_note: null,
+  },
+];
+
+for (const theme of THEMES) {
+  for (const vp of CDE_VP) {
+    test(`flow c — provider cards, 4 states — ${vp.name} — ${theme}`, async ({ page }) => {
+      await page.addInitScript(
+        ({ fixture, installs, theme: t }) => {
+          const w = window as unknown as Record<string, unknown>;
+          w.__AIJ_FIXTURE__ = fixture;
+          w.__AIJ_PROVIDER_INSTALLS__ = installs;
+          localStorage.setItem("aij.theme", t);
+          localStorage.setItem("aij.onboarding.dismissed", "1");
+          sessionStorage.setItem("aij.ready.skipped", "1");
+        },
+        { fixture: honestEmpty, installs: E306_INSTALLS, theme },
+      );
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme as "dark" | "light" });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await page.getByRole("button", { name: "Accounts" }).click();
+      await page.getByTestId("add-provider").click();
+      const cards = page.getByTestId("provider-cards");
+      await expect(cards).toBeVisible();
+      await expect(cards).toContainText("Verified against 2.0.x, 2.1.x");
+      await expect(cards).toContainText("Unverified — features may drift");
+      await expect(cards).toContainText("one Instance at a time");
+      await expect(cards).toContainText("Install Gemini CLI →");
+      await page.screenshot({
+        path: resolve(GALLERY, `38-flows-cde/c-provider-cards-${vp.name}-${theme}.png`),
+        fullPage: true,
+      });
+    });
+
+    test(`flow e — launch sheet: verdicts + logged-out + unknown — ${vp.name} — ${theme}`, async ({
+      page,
+    }) => {
+      // Personal is signed OUT here — the logged-out row state.
+      const withLoggedOut = {
+        ...allStatuses,
+        accounts: allStatuses.accounts.map((account) =>
+          account.label === "Personal"
+            ? { ...account, login_state: "logged_out" }
+            : account,
+        ),
+      };
+      await page.addInitScript(
+        ({ fixture, ranking, theme: t }) => {
+          const w = window as unknown as Record<string, unknown>;
+          w.__AIJ_FIXTURE__ = fixture;
+          w.__AIJ_RANKING__ = ranking;
+          localStorage.setItem("aij.theme", t);
+          localStorage.setItem("aij.onboarding.dismissed", "1");
+          sessionStorage.setItem("aij.ready.skipped", "1");
+        },
+        {
+          fixture: withLoggedOut,
+          theme,
+          ranking: [
+            {
+              account: "claude-work",
+              score: 0.9,
+              top_factors: [],
+              factors: [],
+              headroom_unknown: false,
+              confidence: "Measured",
+              suggested: true,
+              admission: "ok",
+            },
+            {
+              account: "claude-personal",
+              score: 0.5,
+              top_factors: [],
+              factors: [],
+              headroom_unknown: true,
+              confidence: "Estimate",
+              suggested: false,
+            },
+          ],
+        },
+      );
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme as "dark" | "light" });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await expect(page.getByRole("tab", { name: "Sessions" })).toBeVisible();
+      await page.getByRole("button", { name: /^New$/ }).first().click();
+      await expect(page.getByTestId("new-session-sheet")).toBeVisible();
+      await page
+        .getByRole("button", { name: /ai-juggler.*prior sessions/s })
+        .click();
+      const pre = page.getByTestId("launch-preselected");
+      await expect(pre).toContainText("OK — inside headroom");
+      await page.screenshot({
+        path: resolve(GALLERY, `38-flows-cde/e-launch-ok-${vp.name}-${theme}.png`),
+        fullPage: true,
+      });
+      await page
+        .getByRole("button", { name: "Customise ▸" })
+        .click();
+      await expect(page.getByTestId("sign-in-first")).toBeVisible();
+      await expect(page.getByTestId("launch-sheet-accounts")).toContainText(
+        "headroom unknown",
+      );
+      await page.screenshot({
+        path: resolve(GALLERY, `38-flows-cde/e-launch-expanded-${vp.name}-${theme}.png`),
+        fullPage: true,
+      });
+    });
+
+    test(`flow e — Tight and No verdicts — ${vp.name} — ${theme}`, async ({ page }) => {
+      await page.addInitScript(
+        ({ fixture, ranking, theme: t }) => {
+          const w = window as unknown as Record<string, unknown>;
+          w.__AIJ_FIXTURE__ = fixture;
+          w.__AIJ_RANKING__ = ranking;
+          localStorage.setItem("aij.theme", t);
+          localStorage.setItem("aij.onboarding.dismissed", "1");
+          sessionStorage.setItem("aij.ready.skipped", "1");
+        },
+        {
+          fixture: allStatuses,
+          theme,
+          ranking: [
+            {
+              account: "claude-work",
+              score: 0.9,
+              top_factors: [],
+              factors: [],
+              headroom_unknown: false,
+              confidence: "Measured",
+              suggested: true,
+              admission: "tight",
+            },
+          ],
+        },
+      );
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme as "dark" | "light" });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await page.getByRole("button", { name: /^New$/ }).first().click();
+      await page
+        .getByRole("button", { name: /ai-juggler.*prior sessions/s })
+        .click();
+      await expect(page.getByTestId("launch-preselected")).toContainText(
+        "Tight — projected burn nears",
+      );
+      // Tight NEVER blocks: Launch stays enabled.
+      await expect(page.getByTestId("launch-now")).toBeEnabled();
+      await page.screenshot({
+        path: resolve(GALLERY, `38-flows-cde/e-launch-tight-${vp.name}-${theme}.png`),
         fullPage: true,
       });
     });

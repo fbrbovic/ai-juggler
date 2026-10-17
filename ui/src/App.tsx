@@ -881,6 +881,7 @@ export default function App() {
           projects={projects}
           accounts={accounts}
           initialDirectory={newSessionDir}
+          openLoginTerminal={openLoginTerminal}
           onClose={() => {
             setNewSession(false);
             setNewSessionDir(null);

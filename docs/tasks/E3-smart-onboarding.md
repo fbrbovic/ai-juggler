@@ -214,7 +214,7 @@ Start-here suggestion — the juggling anchor is flow (b)'s
 job (ADR-0007). Trap: persisting wizard state must not
 persist any credential-adjacent field; labels/plans only.
 
-### AJ-E306 Flows (c) add Provider, (d) add Account, (e) add Instance | Status: TODO | Priority P0 | Effort L | Depends: AJ-E301, AJ-E303
+### AJ-E306 Flows (c) add Provider, (d) add Account, (e) add Instance | Status: DONE-EVIDENCED | Priority P0 | Effort L | Depends: AJ-E301, AJ-E303
 **Goal**:
 Three distinct daily flows on the parameterised wizard:
 (c) add a tool, (d) add a login to a known tool, (e) launch
@@ -677,3 +677,38 @@ one E806-class theme-boot race converted to the sanctioned
 confirm-rescan verdict (recorded). The time-to-first-Instance p50
 metric is AJ-E309's dogfood funnel output — this seam is its
 instrument (recorded PARTIAL-BY-DESIGN).
+**Status report (2026-10-17, AJ-E306)**: DONE-EVIDENCED — evidence
+`docs/qa/evidence/AJ-E306/manifest.md`. Flow (c) is the new
+AddProviderSheet: one card per adapter with install state, the
+verified-range badge (the wire now carries `verified_against` off the
+adapter trait), a Terminal/Desktop kind badge, and the
+single-instance desktop limit stated BEFORE selection;
+not-installed cards link [Install →] and are never selectable.
+Choosing a card runs the wizard LOCKED to that Provider (Req.2: its
+detect scan IS the Provider-scoped step — the proposal is [Import
+found], the fresh-account link is [Add fresh]; the AJ-E305 sign-ins
+queue and Summary exits run unchanged). Flow (d) is the same lock:
+Accounts → [Add account] mounts at detect with NO Step-0 gate and
+NO zero-found re-picker — a single [Create your first Claude Code
+account] with the label PRE-FILLED; 3 primary clicks end to end
+(already-managed sources render the disabled "Already in AI
+Juggler" card — [Open it] lands with AJ-E307's provenance). Flow
+(e) reshapes NewSessionModal into the launch sheet: the recommended
+Launch settings ride preselected (the pure pickRecipe rule) with
+the SPEC §5.2 admission verdict inline as WORDS — the verdict is
+newly wired end-to-end (`WindowDisplay.headroom_tokens` →
+`RankedRowInfo.admission` via core's pure `admission_verdict`,
+Rust-pinned ok/None/no) — Tight/No explain and NEVER block (Launch
+stays enabled, gallery-asserted); logged-out rows carry [Sign in
+first] (one tap spawns the vendor terminal, the sheet STAYS);
+unknown headroom renders "headroom unknown", never a % (regression
+test); Launch settings collapse under [Customise ▸]; ⌘↩ launches;
+Esc cancels; a focus trap with return-focus was added and pinned.
+Click-count contracts: c=4 ≤ 4, d=3 ≤ 3, e=2 ≤ 2
+(flows-cde.spec.ts, counted numerically + the funnel seam); the
+Profile-noun law asserted (/\bProfile\b/ absent, "Launch settings"
+present). vitest 281/281 (+9 across two new files); Playwright
+502/502 (gallery 38-flows-cde = 24 captures; a11y +4); ranking 5/5;
+verify green; clippy 0. PARTIAL-BY-DESIGN (recorded): the
+concurrent two-Instance fake-harness e2e rides the real-backend
+dogfood windows (E7/E10); every UI precondition is pinned here.

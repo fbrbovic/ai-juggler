@@ -276,3 +276,108 @@ fn reset_queue_notifies_once_marks_stale_never_launches() {
     let _ = alerts_tick_inner(&state, Some(12));
     assert_eq!(before, sessions_digest(&state), "no launch ever fired");
 }
+
+#[test]
+fn admission_verdict_rides_the_ranked_rows_e306() {
+    // AJ-E306 Req.7: the SPEC §5.2 verdict rides the wire — a real
+    // verdict when cap + burn are known; None (rendered "headroom
+    // unknown") when either input is missing. Never a guess.
+    let dir = tempfile::tempdir().unwrap();
+
+    // Unknown cap ⇒ unknown headroom ⇒ admission None.
+    let bare = app_state(dir.path());
+    seed(&bare, dir.path());
+    let rows = ranking_rows_inner(&bare, None).unwrap();
+    let acc_a = rows.iter().find(|row| row.account == "acc-a").unwrap();
+    assert_eq!(acc_a.admission, None, "unknown headroom stays unknown");
+
+    // Confirmed cap (10k) + a project session that burned 2k ⇒ OK.
+    // (Its own tempdir — a second seed into one store violates the
+    // accounts unique constraint.)
+    let known_dir = tempfile::tempdir().unwrap();
+    let known = app_state(known_dir.path());
+    seed(&known, dir.path());
+    {
+        let storage = known.storage.lock().unwrap();
+        // The verdict is a PROJECT-launch gate: a session on proj-x
+        // carries the burn the median is taken over.
+        storage
+            .sessions()
+            .insert(&SessionRecord {
+                id: SessionId::new("sess-b"),
+                conversation: None,
+                profile: ProfileId::new("rec-a"),
+                machine: juggler_core::model::MachineId::new("this-mac"),
+                kind: juggler_core::model::InstanceKind::Terminal,
+                project: Some(juggler_core::model::ProjectId::new("proj-x")),
+                cwd: known_dir.path().to_path_buf(),
+                status: SessionStatus::Finished,
+                started_at: Timestamp::now(),
+                last_activity: None,
+                usage: Default::default(),
+                attention: None,
+                running: None,
+                transcript_ref: None,
+                window: None,
+            })
+            .unwrap();
+        storage
+            .app_settings()
+            .set(
+                &juggler_core::storage::cap_settings_key(
+                    "acc-a",
+                    juggler_core::quota::WindowKind::FiveHour,
+                ),
+                "tokens=10000",
+            )
+            .unwrap();
+        storage
+            .usage()
+            .insert_events(&[juggler_core::quota::UsageEvent {
+                account: "acc-a".into(),
+                session: Some("sess-b".into()),
+                ts: Timestamp::now().millis() - 1_000,
+                model: None,
+                tokens: juggler_core::model::TokenCounts {
+                    output: 2_000,
+                    ..Default::default()
+                },
+                credits: None,
+                usd_est: None,
+                confidence: juggler_core::model::Confidence::Measured,
+                msg_uuid: None,
+                source: juggler_core::quota::UsageSource::Transcript,
+            }])
+            .unwrap();
+    }
+    let rows = ranking_rows_inner(
+        &known,
+        Some(juggler_core::model::ProjectId::new("proj-x").to_string()),
+    )
+    .unwrap();
+    let acc_a = rows.iter().find(|row| row.account == "acc-a").unwrap();
+    assert_eq!(acc_a.admission.as_deref(), Some("ok"));
+
+    // Same burn, an 800-token cap ⇒ the burn exceeds headroom ⇒ No
+    // (warns on the wire — blocking is a UI decision it never makes).
+    {
+        let storage = known.storage.lock().unwrap();
+        storage
+            .app_settings()
+            .set(
+                &juggler_core::storage::cap_settings_key(
+                    "acc-a",
+                    juggler_core::quota::WindowKind::FiveHour,
+                ),
+                "tokens=800",
+            )
+            .unwrap();
+    }
+    let rows = ranking_rows_inner(
+        &known,
+        Some(juggler_core::model::ProjectId::new("proj-x").to_string()),
+    )
+    .unwrap();
+    let acc_a = rows.iter().find(|row| row.account == "acc-a").unwrap();
+    assert_eq!(acc_a.admission.as_deref(), Some("no"));
+}

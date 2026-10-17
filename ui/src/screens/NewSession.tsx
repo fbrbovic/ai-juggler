@@ -1,12 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Card, Chip } from "../components/primitives";
 import { IconProjects, IconTerminal } from "../components/icons";
 import { QuotaChip } from "../components/QuotaRings";
 import { RankedRows } from "../components/RankedRows";
+import { pickRecipe } from "./NewProjectSheet";
 import {
   hasLiveBackend,
   launchSession,
   pickDirectory,
+  terminalSpawnLogin,
   quotaDisplayAll,
   rankingRows,
   type RankedRowData,
@@ -26,18 +28,54 @@ export function NewSessionModal({
   initialDirectory,
   onClose,
   onLaunched,
+  openLoginTerminal,
 }: {
   projects: ProjectInfo[];
   accounts: AccountInfo[];
   initialDirectory: string | null;
   onClose: () => void;
   onLaunched: (sessionId: string, title: string) => void;
+  /** AJ-E306 Req.8: the Sign-in-first detour opens the vendor login
+   * terminal beside this sheet — the sheet stays and waits. */
+  openLoginTerminal?: (id: string, title: string) => void;
 }) {
   const [directory, setDirectory] = useState<string | null>(initialDirectory);
   const [profiles, setProfiles] = useState<LaunchRecipeInfo[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  // AJ-E306 flow (e): Launch settings collapsed under Customise ▸ —
+  // the recommended "Main" rides preselected; ⌘↩ launches it.
+  const [customiseOpen, setCustomiseOpen] = useState(false);
+  const sheetRef = useRef<HTMLDivElement | null>(null);
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+
+  // AJ-E306 a11y: the sheet traps focus and returns it on close (Esc
+  // cancels cleanly — the overlay already handles it).
+  useEffect(() => {
+    restoreFocusRef.current = document.activeElement as HTMLElement | null;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Tab") return;
+      const focusables = sheetRef.current?.querySelectorAll<HTMLElement>(
+        "button:not(:disabled), a[href], input, [tabindex]:not([tabindex='-1'])",
+      );
+      if (focusables === undefined || focusables.length === 0) return;
+      const first = focusables[0]!;
+      const last = focusables[focusables.length - 1]!;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      restoreFocusRef.current?.focus?.();
+    };
+  }, []);
 
   useEffect(() => {
     void import("../lib/bridge").then((bridge) =>
@@ -81,6 +119,26 @@ export function NewSessionModal({
     };
   }, []);
 
+  // AJ-E306 flow (e): the admission verdict per account (SPEC §5.2)
+  // rides the ranked rows — Ok/Tight/No inline, unknown as TEXT.
+  const verdictByAccount = useMemo(() => {
+    const map = new Map<string, { admission?: "ok" | "tight" | "no"; unknown: boolean }>();
+    for (const row of ranked) {
+      map.set(row.account, { admission: row.admission, unknown: row.headroom_unknown });
+    }
+    return map;
+  }, [ranked]);
+
+  const project = useMemo(
+    () => projects.find((row) => row.root === directory) ?? null,
+    [projects, directory],
+  );
+  const preselected = useMemo(
+    () =>
+      profiles !== null ? pickRecipe(profiles, project, Object.values(quotaByAccount)) : null,
+    [profiles, project, quotaByAccount],
+  );
+
   const recents = useMemo(
     () =>
       [...projects]
@@ -90,6 +148,19 @@ export function NewSessionModal({
         .slice(0, 6),
     [projects],
   );
+
+  // ⌘↩ launches the preselected Launch settings (flow (e) HIG).
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !busy && preselected) {
+        event.preventDefault();
+        void launch(preselected);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy, preselected, directory]);
 
   const launch = async (recipe: LaunchRecipeInfo) => {
     setBusy(true);
@@ -110,6 +181,11 @@ export function NewSessionModal({
 
   return (
     <div
+      ref={sheetRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label="New session"
+      data-testid="new-session-sheet"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6 backdrop-blur-sm"
       onKeyDown={(event) => event.key === "Escape" && onClose()}
     >
@@ -197,7 +273,8 @@ export function NewSessionModal({
             </button>
           </div>
 
-          {/* Step 2 — who */}
+          {/* Step 2 — who (AJ-E306 flow (e)): the recommended Launch
+              settings preselected; the full list under Customise ▸. */}
           <p className="mt-5 text-[11px] uppercase tracking-wider text-muted">
             {ranked.length > 0 && (
               <RankedRows
@@ -208,42 +285,115 @@ export function NewSessionModal({
             )}
             Which account?
           </p>
-          <div className="mt-2 flex flex-col gap-1.5">
-            {(profiles ?? []).map((recipe) => {
-              const login = loginByAccount.get(recipe.account_id) ?? "logged_out";
-              const ready = login === "logged_in";
-              return (
-                <button
-                  key={recipe.id}
-                  type="button"
-                  disabled={busy || !ready}
-                  onClick={() => void launch(recipe)}
-                  className={
-                    "flex items-center gap-2 rounded-xl border px-3 py-2.5 text-left text-xs transition-colors " +
-                    (ready
-                      ? "border-hairline hover:border-accent/40 hover:bg-surface disabled:opacity-50"
-                      : "border-hairline/50 opacity-50")
-                  }
-                >
+          <div className="mt-2 flex flex-col gap-1.5" data-testid="launch-sheet-accounts">
+            {profiles !== null && profiles.length > 0 && preselected !== null && !customiseOpen && (
+              <div
+                className="flex flex-col gap-1.5 rounded-xl border border-accent/30 bg-accent-soft px-3 py-2.5"
+                data-testid="launch-preselected"
+              >
+                <div className="flex flex-wrap items-center gap-2 text-xs">
                   <IconTerminal width={13} height={13} />
-                  <span className="font-medium">{recipe.account_label}</span>
-                  <QuotaChip display={quotaByAccount[recipe.account_id]} />
+                  <span className="font-medium">{preselected.account_label}</span>
+                  <QuotaChip display={quotaByAccount[preselected.account_id]} />
                   <span className="text-muted">·</span>
-                  <span className="text-muted">{recipe.name}</span>
-                  {recipe.model && (
-                    <span className="ml-auto font-mono text-[10px] text-muted">
-                      {recipe.model}
-                    </span>
+                  <span className="text-muted">Launch settings: {preselected.name}</span>
+                  {preselected.model && (
+                    <span className="font-mono text-[10px] text-muted">{preselected.model}</span>
                   )}
-                  {!ready && (
-                    <Chip tone="neutral">needs sign-in (Ready home)</Chip>
+                  <VerdictChip verdict={verdictByAccount.get(preselected.account_id)} />
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    disabled={busy || loginByAccount.get(preselected.account_id) !== "logged_in"}
+                    onClick={() => void launch(preselected)}
+                    data-testid="launch-now"
+                  >
+                    Launch →
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setCustomiseOpen(true)}
+                    aria-expanded={customiseOpen}
+                  >
+                    Customise ▸
+                  </Button>
+                  {loginByAccount.get(preselected.account_id) !== "logged_in" && (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={async () => {
+                        const terminal = await terminalSpawnLogin(preselected.account_id);
+                        openLoginTerminal?.(terminal.id, `Sign in · ${preselected.account_label}`);
+                      }}
+                    >
+                      Sign in first
+                    </Button>
                   )}
-                </button>
-              );
-            })}
+                </div>
+              </div>
+            )}
+            {customiseOpen && (
+              <button
+                type="button"
+                onClick={() => setCustomiseOpen(false)}
+                className="self-start text-[11px] text-muted underline-offset-2 hover:text-ink hover:underline"
+                aria-expanded={customiseOpen}
+              >
+                Customise ▾ (hide Launch settings)
+              </button>
+            )}
+            {(customiseOpen || preselected === null) &&
+              (profiles ?? []).map((recipe) => {
+                const login = loginByAccount.get(recipe.account_id) ?? "logged_out";
+                const ready = login === "logged_in";
+                return (
+                  <div
+                    key={recipe.id}
+                    className={
+                      "flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2.5 text-left text-xs " +
+                      (ready ? "border-hairline" : "border-hairline/50 opacity-75")
+                    }
+                  >
+                    <IconTerminal width={13} height={13} />
+                    <span className="font-medium">{recipe.account_label}</span>
+                    <QuotaChip display={quotaByAccount[recipe.account_id]} />
+                    <span className="text-muted">·</span>
+                    <span className="text-muted">Launch settings: {recipe.name}</span>
+                    <VerdictChip verdict={verdictByAccount.get(recipe.account_id)} />
+                    <span className="flex-1" />
+                    {ready ? (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={busy}
+                        onClick={() => void launch(recipe)}
+                      >
+                        Launch →
+                      </Button>
+                    ) : (
+                      // Req.8: disabled with its reason + the one-tap
+                      // detour that RETURNS (the sheet never closes).
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={async () => {
+                          const terminal = await terminalSpawnLogin(recipe.account_id);
+                          openLoginTerminal?.(terminal.id, `Sign in · ${recipe.account_label}`);
+                        }}
+                        data-testid="sign-in-first"
+                      >
+                        Sign in first
+                      </Button>
+                    )}
+                  </div>
+                );
+              })}
             {profiles !== null && profiles.length === 0 && (
               <p className="py-3 text-center text-xs text-muted">
-                No profiles yet — add an account first (Accounts, top right).
+                No launch settings yet — add an account first (Accounts, top right).
               </p>
             )}
             {profiles === null && (
@@ -270,3 +420,34 @@ export function NewSessionModal({
 }
 
 void hasLiveBackend;
+
+/**
+ * AJ-E306 Req.7/8: the admission verdict as words — never a bare
+ * colour, never a fabricated percentage. Tight/No explain and NEVER
+ * block the launch click; unknown headroom says so in text.
+ */
+function VerdictChip({
+  verdict,
+}: {
+  verdict?: { admission?: "ok" | "tight" | "no"; unknown: boolean };
+}): JSX.Element {
+  if (verdict === undefined) {
+    return <Chip tone="neutral">headroom unknown</Chip>;
+  }
+  if (verdict.admission === "tight") {
+    return (
+      <Chip tone="neutral" >
+        Tight — projected burn nears this account's headroom
+      </Chip>
+    );
+  }
+  if (verdict.admission === "no") {
+    return (
+      <Chip tone="neutral">No — projected burn exceeds headroom (you can still launch)</Chip>
+    );
+  }
+  if (verdict.admission === "ok") {
+    return <Chip tone="neutral">OK — inside headroom</Chip>;
+  }
+  return <Chip tone="neutral">headroom unknown</Chip>;
+}
