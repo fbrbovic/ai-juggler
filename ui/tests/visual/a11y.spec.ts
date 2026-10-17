@@ -762,7 +762,8 @@ for (const theme of ["dark", "light"] as const) {
     await page.getByRole("tab", { name: "Sessions" }).click();
     await page.getByRole("button", { name: /Work Max/ }).first().click();
     await page.getByTestId("handover-section")
-      .locator("button[title*='Experimental']")
+      // AJ-E209: the ranked, badged row is the switch entry point.
+      .locator("button[data-row]:not(:disabled)")
       .first()
       .click();
     await expect(page.getByTestId("switch-flow")).toBeVisible();
@@ -835,7 +836,8 @@ for (const theme of ["dark", "light"] as const) {
     await page.getByRole("tab", { name: "Sessions" }).click();
     await page.getByRole("button", { name: /Work Max/ }).first().click();
     await page.getByTestId("handover-section")
-      .locator("button[title*='Experimental']")
+      // AJ-E209: the ranked, badged row is the switch entry point.
+      .locator("button[data-row]:not(:disabled)")
       .first()
       .click();
     await expect(page.getByTestId("switch-oneclick")).toBeVisible();
@@ -980,7 +982,8 @@ for (const theme of ["dark", "light"] as const) {
     await page.getByRole("tab", { name: "Sessions" }).click();
     await page.getByRole("button", { name: /Work Max/ }).first().click();
     await page.getByTestId("handover-section")
-      .locator("button[title*='Experimental']")
+      // AJ-E209: the ranked, badged row is the switch entry point.
+      .locator("button[data-row]:not(:disabled)")
       .first()
       .click();
     // The wizard renders the chooser on its carried/confirm steps —
@@ -1013,7 +1016,8 @@ for (const theme of ["dark", "light"] as const) {
     await page.getByRole("tab", { name: "Sessions" }).click();
     await page.getByRole("button", { name: /Work Max/ }).first().click();
     await page.getByTestId("handover-section")
-      .locator("button[title*='Experimental']")
+      // AJ-E209: the ranked, badged row is the switch entry point.
+      .locator("button[data-row]:not(:disabled)")
       .first()
       .click();
     await page.getByTestId("switch-continue").click();
@@ -1031,5 +1035,94 @@ for (const theme of ["dark", "light"] as const) {
       throw new Error(`axe violations on the redaction surfaces (${theme}):\n${summary}`);
     }
     expect(all).toHaveLength(0);
+  });
+}
+
+/**
+ * AJ-E209 a11y gate: the ranked + badged switch entry and the Switch
+ * Graph — axe 0 critical/serious on both surfaces (scoped includes,
+ * the E806 confirmatory re-scan pattern), every graph node and failed
+ * edge reachable + operable keyboard-only, arrows labelled, and the
+ * badge state legible as TEXT (never colour-only, WCAG 2.2 / D-11).
+ */
+for (const theme of ["dark", "light"] as const) {
+  test(`switch targets + graph — axe 0 critical/serious + keyboard — ${theme}`, async ({ page }) => {
+    await page.addInitScript(
+      ({ fixture, t0, theme: t }) => {
+        const w = window as unknown as Record<string, unknown>;
+        w.__AIJ_FIXTURE__ = fixture;
+        w.__AIJ_SWITCH_GRAPH__ = [
+          {
+            title: "Login refactor",
+            epochs: [
+              { id: "ep-a", provider: "claude-code", account_label: "Work Max", kind: "terminal", resumable: true, session_id: "sess-1" },
+              { id: "ep-b", provider: "codex", account_label: "Personal", kind: "terminal", resumable: true, session_id: "sess-2" },
+            ],
+            edges: [
+              { from: "ep-a", to: "ep-b", label: "transplant F1 · 12:04", switch_back: false },
+              {
+                from: "ep-b",
+                to: null,
+                label: "transplant F1 · target launch failed",
+                failed_reason: "S-F6: target window closed mid-launch",
+                switch_back: false,
+              },
+            ],
+            collapsed: 1,
+            hop_note: "3 switches so far ≈41k tokens",
+          },
+        ];
+        localStorage.setItem("aij.theme", t);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+        Date.now = () => t0;
+      },
+      { fixture: allStatuses, t0: T0, theme },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+    await page.getByRole("tab", { name: "Sessions" }).click();
+    await page.getByRole("button", { name: /Work Max/ }).first().click();
+
+    // The ranked entry: scoped scan (the rows + their explanations).
+    await expect(page.getByTestId("switch-target-rows")).toBeVisible();
+    const rowsScan = await new AxeBuilder({ page })
+      .include("[data-testid='handover-section']")
+      .analyze();
+
+    // The graph: scoped scan on the project panel.
+    await page.getByRole("tab", { name: "Projects" }).click();
+    await page.getByRole("button", { name: /ai-juggler/ }).first().click();
+    await expect(page.getByTestId("switch-graph")).toBeVisible();
+    const graphScan = await new AxeBuilder({ page })
+      .include("[data-testid='project-switch-graph-card']")
+      .analyze();
+
+    const all = [rowsScan, graphScan]
+      .flatMap((result) => result.violations)
+      .filter((violation) => ["serious", "critical"].includes(violation.impact ?? ""));
+    if (all.length > 0) {
+      await page.waitForTimeout(400);
+      const recheck = await new AxeBuilder({ page })
+        .include("[data-testid='project-switch-graph-card']")
+        .analyze();
+      const still = recheck.violations.filter((v) =>
+        ["serious", "critical"].includes(v.impact ?? ""),
+      );
+      expect.soft(still, `axe violations survive the re-scan (${theme})`).toHaveLength(0);
+    }
+    expect(all).toHaveLength(0);
+
+    // Keyboard-only: the failed edge is a reachable, labelled button
+    // and opens its §9 reason; nodes follow by ↑/↓ roving focus.
+    const failedEdge = page.getByTestId("switch-graph-failed-edge");
+    await failedEdge.focus();
+    await failedEdge.press("Enter");
+    await expect(page.getByTestId("switch-graph-failed-detail")).toContainText("S-F6");
+    const nodes = page.getByTestId("switch-graph-node");
+    await nodes.first().focus();
+    await nodes.first().press("ArrowDown");
+    await expect(nodes.nth(1)).toBeFocused();
   });
 }

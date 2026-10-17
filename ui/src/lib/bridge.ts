@@ -1964,3 +1964,189 @@ export async function redactionPolicySetOverride(
   }
   await invoke("redaction_policy_set_override", { provider, policy });
 }
+
+/** AJ-E209: one ranked, badged switch destination (the handover
+ * section's rows — §Q6 extended with switch cost + return bonus).
+ * Suggest-only: the click is the user's. */
+export interface SwitchTargetData {
+  recipe_id: string;
+  account_id: string;
+  account_label: string;
+  /** Ordered-pair badge wire name ("F1 · Beta" — never "lossless"
+   * below F4; cross-Provider always carries Beta, D-04/D-11). */
+  badge: string;
+  /** Validated state (false until E210's fixtures flip cells). */
+  validated: boolean;
+  cross_provider: boolean;
+  /** The pair's Drop list (the badge's honest companion). */
+  drops: string[];
+  score?: number;
+  filtered_reason?: string;
+  top_factors: string[];
+  factors: [string, number][];
+  confidence: string;
+  tte_min?: number;
+  suggested: boolean;
+}
+
+/** The no-backend switch-targets default (preview mode shows a
+ * realistic ranked, badged set; fixtures override wholesale). */
+const DEFAULT_SWITCH_TARGETS: SwitchTargetData[] = [
+  {
+    recipe_id: "recipe-work-max",
+    account_id: "acct-work",
+    account_label: "Work Max",
+    badge: "F1 · Beta",
+    validated: false,
+    cross_provider: true,
+    drops: ["todo list", "subagent state"],
+    score: 0.62,
+    top_factors: ["80% headroom", "usual account for this repo"],
+    factors: [["80% headroom", 0.36], ["usual account for this repo", 0.2], ["fidelity 1 · Beta", 0.15], ["≈$0.12 replay", 0.07], ["quiet", 0.1]],
+    confidence: "Computed",
+    tte_min: 262,
+    suggested: true,
+  },
+  {
+    recipe_id: "recipe-personal",
+    account_id: "acct-personal",
+    account_label: "Personal",
+    badge: "F1 · Beta",
+    validated: false,
+    cross_provider: true,
+    drops: ["todo list", "subagent state"],
+    score: 0.41,
+    top_factors: ["35% headroom", "quiet"],
+    factors: [["35% headroom", 0.16], ["quiet", 0.1], ["fidelity 1 · Beta", 0.15]],
+    confidence: "Estimate",
+    tte_min: 95,
+    suggested: false,
+  },
+  {
+    recipe_id: "recipe-lab",
+    account_id: "acct-lab",
+    account_label: "Lab",
+    badge: "F2 · Beta",
+    validated: false,
+    cross_provider: true,
+    drops: ["rewind history", "subagent state"],
+    filtered_reason: "exhausted — resets in 3h",
+    top_factors: [],
+    factors: [],
+    confidence: "Measured",
+    suggested: false,
+  },
+];
+
+/** AJ-E209 Req.1/3: the ranked + badged destinations for one source
+ * session. Read-only — ranking suggests, the user clicks. */
+export async function switchTargets(sessionId: string): Promise<SwitchTargetData[]> {
+  if (!hasBackend) {
+    return (
+      (window as unknown as { __AIJ_SWITCH_TARGETS__?: SwitchTargetData[] })
+        .__AIJ_SWITCH_TARGETS__ ?? DEFAULT_SWITCH_TARGETS
+    );
+  }
+  return invoke<SwitchTargetData[]>("switch_targets", { sessionId });
+}
+
+/** AJ-E209: one epoch node on a Work's timeline. */
+export interface EpochNodeData {
+  id: string;
+  provider: string;
+  account_label: string;
+  kind: string;
+  /** A native session exists AND its transcript survives (the
+   * Resume action's honest gate). */
+  resumable: boolean;
+  session_id?: string | null;
+}
+
+/** AJ-E209: one labelled timeline edge. */
+export interface GraphEdgeData {
+  from: string;
+  to?: string | null;
+  /** "transplant F1 · 12:04" / "replay F1 · ≈41k tok" / "switch-back ↺". */
+  label: string;
+  failed_reason?: string | null;
+  switch_back: boolean;
+}
+
+/** AJ-E209: one Work item's timeline (epochs past the collapse cut). */
+export interface WorkGraphData {
+  title: string;
+  epochs: EpochNodeData[];
+  edges: GraphEdgeData[];
+  /** Older epochs collapsed away ("+n switches" — never unbounded). */
+  collapsed: number;
+  /** The S-F9 hop line (inform, never block). */
+  hop_note?: string | null;
+}
+
+/** The no-backend graph default (preview mode; fixtures override). */
+const DEFAULT_SWITCH_GRAPH: WorkGraphData[] = [
+  {
+    title: "Login refactor",
+    epochs: [
+      { id: "ep-1", provider: "claude-code", account_label: "Work Max", kind: "terminal", resumable: true, session_id: "sess-a" },
+      { id: "ep-2", provider: "codex", account_label: "Personal", kind: "terminal", resumable: true, session_id: "sess-b" },
+      { id: "ep-3", provider: "claude-code", account_label: "Work Max", kind: "terminal", resumable: true, session_id: "sess-c" },
+    ],
+    edges: [
+      { from: "ep-1", to: "ep-2", label: "transplant F1 · 12:04", switch_back: false },
+      { from: "ep-2", to: "ep-3", label: "switch-back ↺ · F1", switch_back: true },
+    ],
+    collapsed: 2,
+    hop_note: "3 switches so far ≈41k tokens",
+  },
+];
+
+/** AJ-E209 Req.4: the per-Work Switch Graph timelines for one
+ * project. Read-only. */
+export async function switchGraphOverview(projectId: string): Promise<WorkGraphData[]> {
+  if (!hasBackend) {
+    return (
+      (window as unknown as { __AIJ_SWITCH_GRAPH__?: WorkGraphData[] })
+        .__AIJ_SWITCH_GRAPH__ ?? DEFAULT_SWITCH_GRAPH
+    );
+  }
+  return invoke<WorkGraphData[]>("switch_graph_overview", { projectId });
+}
+
+/** AJ-E209 Req.5: resumes an epoch's native session (the graph's
+ * Resume action — the user's click, never automatic). */
+export async function epochResume(epochId: string): Promise<LaunchResult> {
+  if (!hasBackend) {
+    const seams = window as unknown as {
+      __AIJ_EPOCH_RESUME_CALLS__?: string[];
+      __AIJ_EPOCH_RESUME_FAIL__?: string;
+    };
+    // The guardrail seam: resume is observable so tests can prove it
+    // fires ONLY from the click.
+    seams.__AIJ_EPOCH_RESUME_CALLS__ = [...(seams.__AIJ_EPOCH_RESUME_CALLS__ ?? []), epochId];
+    if (seams.__AIJ_EPOCH_RESUME_FAIL__ !== undefined) {
+      return Promise.reject(seams.__AIJ_EPOCH_RESUME_FAIL__);
+    }
+    return { session_id: `sess-resume-${Date.now()}`, pid: 0 };
+  }
+  return invoke<LaunchResult>("epoch_resume", { epochId });
+}
+
+/** AJ-E209 Req.5: exports an epoch's pack through the AJ-E208 GLOBAL
+ * redaction policy — returns the pack directory for the toast. */
+export async function packExport(epochId: string): Promise<string> {
+  if (!hasBackend) {
+    const seams = window as unknown as {
+      __AIJ_PACK_EXPORT_CALLS__?: string[];
+      __AIJ_PACK_EXPORT_FAIL__?: string;
+    };
+    // The guardrail seam: exports are observable so tests can prove
+    // they fire ONLY from the click.
+    seams.__AIJ_PACK_EXPORT_CALLS__ = [...(seams.__AIJ_PACK_EXPORT_CALLS__ ?? []), epochId];
+    if (seams.__AIJ_PACK_EXPORT_FAIL__ !== undefined) {
+      return Promise.reject(seams.__AIJ_PACK_EXPORT_FAIL__);
+    }
+    return `~/Library/Application Support/AI Juggler/exports/pack-preview-${Date.now()}`;
+  }
+  return invoke<string>("pack_export", { epochId });
+}

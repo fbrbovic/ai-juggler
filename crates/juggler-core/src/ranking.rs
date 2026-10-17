@@ -29,6 +29,7 @@ pub const ESTIMATED_HEADROOM_DISCOUNT: f64 = 0.85;
 /// One ranking input row (the caller assembles it from storage +
 /// adapters; the maths here stays pure).
 #[derive(Clone, PartialEq, Debug, Default)]
+#[allow(clippy::struct_excessive_bools)] // the bool set IS §Q6's literal hard filters + extension
 pub struct Candidate {
     /// Account id.
     pub account: String,
@@ -55,7 +56,20 @@ pub struct Candidate {
     pub active_sessions: u32,
     /// The soft cap spreading load (`calm = 1 − active/soft_cap`).
     pub soft_cap: u32,
+    /// AJ-E209 §Q6 extension: this target is a RETURNABLE original
+    /// (an open excursion leads back to it) — earns the return-
+    /// likelihood bonus when the source resets soon.
+    pub returnable: bool,
+    /// AJ-E209 §Q6 extension: the SOURCE account's minutes-to-
+    /// exhaustion (`None` = unknown ⇒ no bonus).
+    pub source_resets_min: Option<f64>,
 }
+
+/// The return-likelihood bonus (§Q6 extension, pass2/02 §7): a
+/// small documented addition on top of the published formula —
+/// never enough to outweigh a real factor gap, and hard-filtered
+/// rows never reach scoring.
+pub const RETURN_BONUS: f64 = 0.05;
 
 /// One ranked (or filtered) output row.
 #[derive(Clone, PartialEq, Debug)]
@@ -150,11 +164,19 @@ pub fn rank(candidates: &[Candidate]) -> Vec<RankedRow> {
         let affinity = candidate.affinity.clamp(0.0, 1.0);
         let fidelity = candidate.fidelity.clamp(0.0, 1.0);
 
-        let score = W_HEADROOM * headroom_input
+        let mut score = W_HEADROOM * headroom_input
             + W_AFFINITY * affinity
             + W_FIDELITY * fidelity
             + W_COST_FIT * cost_fit
             + W_CALM * calm;
+        // AJ-E209 §Q6 extension: the return-likelihood bonus rides
+        // AFTER the published formula (documented, capped, and only
+        // for survivors — hard filters never reach scoring).
+        let returnable_now =
+            candidate.returnable && candidate.source_resets_min.is_some_and(|tte| tte < 60.0);
+        if returnable_now {
+            score += RETURN_BONUS;
+        }
 
         let mut factors = vec![
             (headroom_words, W_HEADROOM * headroom_input),
@@ -184,6 +206,14 @@ pub fn rank(candidates: &[Candidate]) -> Vec<RankedRow> {
                     format!("{} active", candidate.active_sessions)
                 },
                 W_CALM * calm,
+            ),
+            (
+                if returnable_now {
+                    "returnable — your source resets soon".to_owned()
+                } else {
+                    "not a return target".to_owned()
+                },
+                if returnable_now { RETURN_BONUS } else { 0.0 },
             ),
         ];
         factors.sort_by(|(_, a), (_, b)| b.total_cmp(a));

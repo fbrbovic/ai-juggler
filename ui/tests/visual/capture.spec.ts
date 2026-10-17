@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking", "28-switch", "29-door", "30-switchback", "31-redaction"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking", "28-switch", "29-door", "30-switchback", "31-redaction", "32-graph"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -2447,7 +2447,8 @@ for (const theme of THEMES) {
       await page.getByRole("tab", { name: "Sessions" }).click();
       await page.getByRole("button", { name: /Work Max/ }).first().click();
       await page.getByTestId("handover-section")
-        .locator("button[title*='Experimental']")
+        // AJ-E209: the ranked, badged row is the switch entry point.
+        .locator("button[data-row]:not(:disabled)")
         .first()
         .click();
       await expect(page.getByTestId("switch-flow")).toBeVisible();
@@ -2632,7 +2633,8 @@ for (const theme of THEMES) {
       await page.getByRole("tab", { name: "Sessions" }).click();
       await page.getByRole("button", { name: /Work Max/ }).first().click();
       await page.getByTestId("handover-section")
-        .locator("button[title*='Experimental']")
+        // AJ-E209: the ranked, badged row is the switch entry point.
+        .locator("button[data-row]:not(:disabled)")
         .first()
         .click();
       await expect(page.getByTestId("switch-flow")).toBeVisible();
@@ -2869,7 +2871,8 @@ for (const theme of THEMES) {
       await page.getByRole("tab", { name: "Sessions" }).click();
       await page.getByRole("button", { name: /Work Max/ }).first().click();
       await page.getByTestId("handover-section")
-        .locator("button[title*='Experimental']")
+        // AJ-E209: the ranked, badged row is the switch entry point.
+        .locator("button[data-row]:not(:disabled)")
         .first()
         .click();
       await expect(page.getByTestId("switch-flow")).toBeVisible();
@@ -2959,6 +2962,264 @@ for (const theme of THEMES) {
       await expect(page.getByTestId("switch-confirm")).toBeEnabled();
       await page.screenshot({
         path: resolve(GALLERY, `31-redaction/ask-${vp.name}-${theme}.png`),
+      });
+    });
+  }
+}
+
+/**
+ * AJ-E209 gallery 32 — the ranked + badged switch entry and the
+ * Switch Graph: ranked destinations with explanations + the Why
+ * expander, the badge set (unvalidated hatched vs validated solid),
+ * the graph's linear A→B→A travel, fork/merge shapes, the failed
+ * edge with its §9 reason, the collapsed "+n switches" pill, and the
+ * node menu (Resume / Switch from here / Export pack) — across
+ * 1280×800 + 800×600 × light+dark. Suggest-only everywhere: every
+ * action shot is pre-click, never mid-execution.
+ */
+const GRAPH_LINEAR = [
+  {
+    title: "Login refactor",
+    epochs: [
+      { id: "ep-a", provider: "claude-code", account_label: "Work Max", kind: "terminal", resumable: true, session_id: "sess-1" },
+      { id: "ep-b", provider: "codex", account_label: "Personal", kind: "terminal", resumable: true, session_id: "sess-2" },
+      { id: "ep-a2", provider: "claude-code", account_label: "Work Max", kind: "terminal", resumable: true, session_id: "sess-3" },
+    ],
+    edges: [
+      { from: "ep-a", to: "ep-b", label: "transplant F1 · 12:04", switch_back: false },
+      { from: "ep-b", to: "ep-a2", label: "switch-back ↺ · F1", switch_back: true },
+    ],
+    collapsed: 2,
+    hop_note: "3 switches so far ≈41k tokens",
+  },
+];
+
+const GRAPH_FORK_MERGE = [
+  {
+    title: "Payments fix",
+    epochs: [
+      { id: "ep-s", provider: "claude-code", account_label: "Work Max", kind: "terminal", resumable: true, session_id: "sess-s" },
+      { id: "ep-l", provider: "codex", account_label: "Personal", kind: "terminal", resumable: false, session_id: null },
+      { id: "ep-r", provider: "zcode", account_label: "Lab", kind: "terminal", resumable: true, session_id: "sess-r" },
+      { id: "ep-m", provider: "claude-code", account_label: "Work Max", kind: "terminal", resumable: true, session_id: "sess-m" },
+    ],
+    edges: [
+      { from: "ep-s", to: "ep-l", label: "replay F1 · ≈41k tok", switch_back: false },
+      { from: "ep-s", to: "ep-r", label: "transplant F1 · 15:12", switch_back: false },
+      { from: "ep-l", to: "ep-m", label: "switch-back ↺ · F1", switch_back: true },
+      { from: "ep-r", to: "ep-m", label: "pack F1 · 16:40", switch_back: false },
+    ],
+    collapsed: 0,
+    hop_note: null,
+  },
+];
+
+const GRAPH_FAILED = [
+  {
+    title: "Migration script",
+    epochs: [
+      { id: "ep-src", provider: "claude-code", account_label: "Work Max", kind: "terminal", resumable: true, session_id: "sess-src" },
+      { id: "ep-dst", provider: "codex", account_label: "Personal", kind: "terminal", resumable: true, session_id: "sess-dst" },
+    ],
+    edges: [
+      {
+        from: "ep-src",
+        to: null,
+        label: "transplant F1 · target launch failed",
+        failed_reason: "S-F6: target window closed mid-launch",
+        switch_back: false,
+      },
+      { from: "ep-src", to: "ep-dst", label: "transplant F1 · 18:02 (retry)", switch_back: false },
+    ],
+    collapsed: 0,
+    hop_note: null,
+  },
+];
+
+const BADGE_SET_TARGETS = [
+  {
+    recipe_id: "r-validated",
+    account_id: "a-1",
+    account_label: "Work Max",
+    badge: "F4 · Validated",
+    validated: true,
+    cross_provider: false,
+    drops: [],
+    score: 0.71,
+    top_factors: ["80% headroom", "usual account for this repo"],
+    factors: [["80% headroom", 0.36], ["usual account for this repo", 0.2]],
+    confidence: "Measured",
+    tte_min: 262,
+    suggested: true,
+  },
+  {
+    recipe_id: "r-beta",
+    account_id: "a-2",
+    account_label: "Personal",
+    badge: "F1 · Beta",
+    validated: false,
+    cross_provider: true,
+    drops: ["todo list", "subagent state"],
+    score: 0.44,
+    top_factors: ["35% headroom", "quiet"],
+    factors: [["35% headroom", 0.16], ["quiet", 0.1]],
+    confidence: "Computed",
+    tte_min: 95,
+    suggested: false,
+  },
+  {
+    recipe_id: "r-filtered",
+    account_id: "a-3",
+    account_label: "Lab",
+    badge: "F0 · Beta",
+    validated: false,
+    cross_provider: true,
+    drops: ["rewind history"],
+    filtered_reason: "logged out",
+    top_factors: [],
+    factors: [],
+    confidence: "Estimate",
+    suggested: false,
+  },
+];
+
+const openGraphProject = async (
+  page: import("@playwright/test").Page,
+  graph: unknown[],
+  theme: string,
+) => {
+  await page.addInitScript(
+    ({ fixture, workGraph, t0, theme: themeName }) => {
+      const w = window as unknown as Record<string, unknown>;
+      w.__AIJ_FIXTURE__ = fixture;
+      w.__AIJ_SWITCH_GRAPH__ = workGraph;
+      localStorage.setItem("aij.theme", themeName);
+      localStorage.setItem("aij.onboarding.dismissed", "1");
+      sessionStorage.setItem("aij.ready.skipped", "1");
+      Date.now = () => t0;
+    },
+    { fixture: allStatuses, workGraph: graph, t0: T0, theme },
+  );
+};
+
+for (const theme of THEMES) {
+  for (const vp of SWITCH_VP) {
+    test(`graph — ranked targets with explanations — ${vp.name} — ${theme}`, async ({ page }) => {
+      await page.addInitScript(
+        ({ fixture, targets, t0 }) => {
+          const w = window as unknown as Record<string, unknown>;
+          w.__AIJ_FIXTURE__ = fixture;
+          w.__AIJ_SWITCH_TARGETS__ = targets;
+          localStorage.setItem("aij.theme", theme);
+          localStorage.setItem("aij.onboarding.dismissed", "1");
+          sessionStorage.setItem("aij.ready.skipped", "1");
+          Date.now = () => t0;
+        },
+        { fixture: allStatuses, targets: BADGE_SET_TARGETS, t0: T0 },
+      );
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await page.getByRole("tab", { name: "Sessions" }).click();
+      await page.getByRole("button", { name: /Work Max/ }).first().click();
+      await expect(page.getByTestId("switch-target-rows")).toBeVisible();
+      await page.screenshot({
+        path: resolve(GALLERY, `32-graph/targets-${vp.name}-${theme}.png`),
+      });
+      // The Why expander: every input incl. switch cost.
+      await page.getByRole("button", { name: "Why this order?" }).click();
+      await page.screenshot({
+        path: resolve(GALLERY, `32-graph/targets-why-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`graph — linear A→B→A + hop note — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openGraphProject(page, GRAPH_LINEAR, theme);
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await page.getByRole("tab", { name: "Projects" }).click();
+      await page.getByRole("button", { name: /ai-juggler/ }).first().click();
+      await expect(page.getByTestId("switch-graph")).toBeVisible();
+      await expect(page.getByTestId("switch-graph-hop-note")).toContainText("3 switches");
+      await expect(page.getByTestId("switch-graph-collapse")).toContainText("+2 switches");
+      await page.screenshot({
+        path: resolve(GALLERY, `32-graph/linear-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`graph — fork + merge shapes — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openGraphProject(page, GRAPH_FORK_MERGE, theme);
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await page.getByRole("tab", { name: "Projects" }).click();
+      await page.getByRole("button", { name: /ai-juggler/ }).first().click();
+      await expect(page.getByTestId("switch-graph")).toBeVisible();
+      await expect(page.getByTestId("node-fork-chip").first()).toBeVisible();
+      await expect(page.getByTestId("node-merge-chip").first()).toBeVisible();
+      await page.screenshot({
+        path: resolve(GALLERY, `32-graph/fork-merge-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`graph — failed edge reason + recovery — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openGraphProject(page, GRAPH_FAILED, theme);
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await page.getByRole("tab", { name: "Projects" }).click();
+      await page.getByRole("button", { name: /ai-juggler/ }).first().click();
+      await expect(page.getByTestId("switch-graph-failed-edge")).toBeVisible();
+      await page.getByTestId("switch-graph-failed-edge").click();
+      await expect(page.getByTestId("switch-graph-failed-detail")).toContainText("S-F6");
+      await page.screenshot({
+        path: resolve(GALLERY, `32-graph/failed-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`graph — node menu (Resume / Export pack) — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openGraphProject(page, GRAPH_LINEAR, theme);
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await page.getByRole("tab", { name: "Projects" }).click();
+      await page.getByRole("button", { name: /ai-juggler/ }).first().click();
+      await expect(page.getByTestId("switch-graph")).toBeVisible();
+      await page.getByTestId("switch-graph-node").nth(1).click();
+      await expect(page.getByTestId("switch-graph-node-menu")).toBeVisible();
+      await expect(page.getByTestId("epoch-resume-button")).toBeEnabled();
+      await page.getByTestId("epoch-export-button").click();
+      await expect(page.getByTestId("pack-export-toast")).toBeVisible();
+      await page.screenshot({
+        path: resolve(GALLERY, `32-graph/node-menu-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`graph — badge set (validated vs beta) — ${vp.name} — ${theme}`, async ({ page }) => {
+      await page.addInitScript(
+        ({ fixture, targets, t0 }) => {
+          const w = window as unknown as Record<string, unknown>;
+          w.__AIJ_FIXTURE__ = fixture;
+          w.__AIJ_SWITCH_TARGETS__ = targets;
+          localStorage.setItem("aij.theme", theme);
+          localStorage.setItem("aij.onboarding.dismissed", "1");
+          sessionStorage.setItem("aij.ready.skipped", "1");
+          Date.now = () => t0;
+        },
+        { fixture: allStatuses, targets: BADGE_SET_TARGETS, t0: T0 },
+      );
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await page.getByRole("tab", { name: "Sessions" }).click();
+      await page.getByRole("button", { name: /Work Max/ }).first().click();
+      const solid = page.locator("[data-testid='fidelity-badge'][data-validated='true']");
+      const hatched = page.locator("[data-testid='fidelity-badge'][data-validated='false']");
+      await expect(solid).toContainText("F4 · Validated");
+      await expect(hatched.first()).toContainText("Not yet validated");
+      await page.screenshot({
+        path: resolve(GALLERY, `32-graph/badges-${vp.name}-${theme}.png`),
       });
     });
   }

@@ -35,6 +35,8 @@ fn candidate(account: &str, headroom: Option<f64>, confidence: Confidence) -> Ca
         projected_usd: Some(1.0),
         active_sessions: 0,
         soft_cap: 4,
+        returnable: false,
+        source_resets_min: None,
     }
 }
 
@@ -156,8 +158,16 @@ fn affinity_words_carry_the_wrong_billing_guard() {
             .any(|words| words.contains("usual account")),
         "the project-history share appears in words (Claude #87447 guard)"
     );
-    // The full five inputs feed the Why-this-order expander.
-    assert_eq!(usual.factors.len(), 5);
+    // The full inputs feed the Why-this-order expander — §Q6's five
+    // plus AJ-E209's return-likelihood factor.
+    assert_eq!(usual.factors.len(), 6);
+    assert!(
+        usual
+            .factors
+            .iter()
+            .any(|(words, _)| words.contains("return target")),
+        "the E209 return factor is explained in words"
+    );
 }
 
 /// The §Q5 fixture day: burn → 90% → exhausted → reset produces

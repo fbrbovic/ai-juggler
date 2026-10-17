@@ -217,6 +217,23 @@ fn atomic_write_round_trip_and_no_partial_state() {
 }
 
 #[test]
+fn diff_less_pack_writes_the_empty_marker() {
+    // AJ-E209 regression: `fs::write` creates no directories — a
+    // pack with NO staged diffs never materialised `diffs/` and the
+    // EMPTY marker write (then the whole export) failed with ENOENT.
+    let dir = tempfile::tempdir().unwrap();
+    let pack_path = dir.path().join("pack");
+    let mut input = fixture_input();
+    input.staged_files.clear();
+    let pack = generate_pack(&input, ConversationMode::Full);
+    write_pack(&pack_path, &pack).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(pack_path.join("diffs/EMPTY")).unwrap(),
+        "no uncommitted diff at freeze\n"
+    );
+}
+
+#[test]
 fn credential_guard_refuses_writes_and_preserves_prior_pack() {
     let dir = tempfile::tempdir().unwrap();
     let pack_path = dir.path().join("pack");

@@ -17,6 +17,7 @@ pub mod fidelity;
 pub mod manifest;
 pub mod pack;
 pub mod pipeline;
+pub mod ranking;
 pub mod reconcile;
 pub mod redaction;
 pub mod switch_back;

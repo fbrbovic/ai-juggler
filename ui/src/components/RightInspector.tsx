@@ -22,8 +22,10 @@ import type {
 import { renewalLabel } from "../lib/renewal";
 import { QuotaBar, formatCountdown, quotaTierTag } from "./primitives";
 import { TwoClocks, WindowRing } from "./QuotaRings";
-import { accountSetFee, quotaDisplay, type QuotaDisplayData, type SwitchBackSuggestionData } from "../lib/bridge";
+import { accountSetFee, quotaDisplay, switchTargets, type QuotaDisplayData, type SwitchBackSuggestionData, type SwitchTargetData } from "../lib/bridge";
 import { formatBytes, stateChip } from "./indicator";
+import { SwitchGraph } from "./SwitchGraph";
+import { SwitchTargetRows } from "./SwitchTargetRows";
 
 /**
  * RightInspector (AJ-E406, D-06): the one stable right-hand home. Six
@@ -566,6 +568,26 @@ function InstanceOverview(props: PanelProps) {
     window.addEventListener("aij:focus-handover", scroll);
     return () => window.removeEventListener("aij:focus-handover", scroll);
   }, []);
+  // AJ-E209: the ranked + badged switch destinations for the selected
+  // instance (§Q6 extended; suggest-only). Refetch when the instance
+  // or its live state changes — the ranker's inputs (quota, sessions)
+  // move with them.
+  const [switchTargets_, setSwitchTargets] = useState<SwitchTargetData[] | null>(null);
+  const instanceId = props.data.instance?.id ?? null;
+  useEffect(() => {
+    if (instanceId === null) return;
+    let alive = true;
+    switchTargets(instanceId)
+      .then((rows) => {
+        if (alive) setSwitchTargets(rows);
+      })
+      .catch(() => {
+        if (alive) setSwitchTargets([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [instanceId, props.data.instance?.status]);
   const { kind, data, sessions, accounts, profiles, terminalTitle } = props;
 
   if (kind === "instance" && data.instance) {
@@ -838,40 +860,27 @@ function InstanceOverview(props: PanelProps) {
           <p className="text-[11px] uppercase tracking-wider text-muted">
             Continue on another account
           </p>
-          {/* AJ-E204 (deep/09 D1): the honest interim label until
-              AJ-E210's fixtures prove the sibling-set transplant. */}
-          <p className="text-[10px] text-muted" data-testid="handover-fidelity-label">
-            F1 Transcript-only (experimental)
-          </p>
-          <div className="flex flex-wrap gap-1.5">
-            {profiles
-              .filter((recipe) => recipe.id !== session.launch_recipe_id)
-              .slice(0, 6)
-              .map((recipe) => {
-                const ready = accounts.find((a) => a.id === recipe.account_id)?.login_state === "logged_in";
-                return (
-                  <button
-                    key={recipe.id}
-                    type="button"
-                    disabled={!ready}
-                    onClick={() => props.onHandover(session.id, recipe.id, recipe.account_label)}
-                    title={ready ? "Experimental: copies the full transcript set to this account and resumes it — F1 Transcript-only until validated" : "Needs sign-in first (Ready home)"}
-                    className={
-                      "rounded-lg border px-2.5 py-1.5 text-[11px] transition-colors " +
-                      (ready
-                        ? "border-accent/30 bg-accent-soft text-accent-hi hover:border-accent/50"
-                        : "border-hairline/50 text-faint")
-                    }
-                  >
-                    {recipe.account_label}
-                    {!ready && " · sign in first"}
-                  </button>
-                );
-              })}
-            {profiles.filter((p) => p.id !== session.launch_recipe_id).length === 0 && (
-              <p className="text-[11px] text-faint">Add another account to juggle between them.</p>
-            )}
-          </div>
+          {/* AJ-E209 Req.1/3: the ranked, badged destinations —
+              §Q6 + switch cost + return bonus; every cross-Provider
+              row carries its ordered-pair badge and Drop list
+              (D-04/D-11). Suggest-only; the click opens the E205
+              flow. */}
+          {switchTargets_ === null ? (
+            <p className="text-[11px] text-faint" data-testid="handover-targets-loading">
+              Ranking destinations…
+            </p>
+          ) : switchTargets_.length === 0 ? (
+            <p className="text-[11px] text-faint" data-testid="handover-targets-empty">
+              Add another account to juggle between them.
+            </p>
+          ) : (
+            <SwitchTargetRows
+              targets={switchTargets_}
+              onPick={(target) =>
+                props.onHandover(session.id, target.recipe_id, target.account_label)
+              }
+            />
+          )}
         </div>
         )}
       </div>
@@ -1790,6 +1799,13 @@ function ProjectOverview(props: PanelProps) {
           </Card>
         </>
       )}
+      {/* AJ-E209 Req.4/5: the per-Work Switch Graph — how the work
+          travelled across accounts, with per-node Resume / Switch
+          from here / Export pack and failed-edge recovery. */}
+      <Card className="flex flex-col gap-2 p-4" data-testid="project-switch-graph-card">
+        <p className="text-[11px] uppercase tracking-wider text-muted">How this work travelled</p>
+        <SwitchGraph projectId={project.id} onOpenSession={props.onOpenSession} />
+      </Card>
     </div>
   );
 }

@@ -553,7 +553,7 @@ must cost the same as the first.
 **Research basis**: decision-log D-14 (`decision-log.md:139-150`); pass2/02 §4 `redactions` (line 276); deep/09 §H5.4 (lines 203-208), F-H-08; `docs/SPEC.md:310`.
 **Handover note**: Trap: deep/09 defaults (local off / export on) are superseded by D-14 — do not implement them as imposed defaults; they may only appear as the options the user picks from. "Ask each time" must still record counts in the manifest.
 
-### AJ-E209 Beta fidelity badges, explainable ranking, and Switch Graph UI | Status: TODO | Priority P0 | Effort L | Depends: AJ-E203, AJ-E206, AJ-E207
+### AJ-E209 Beta fidelity badges, explainable ranking, and Switch Graph UI | Status: DONE-EVIDENCED | Priority P0 | Effort L | Depends: AJ-E203, AJ-E206, AJ-E207
 **Goal**: Every switch surface shows its honest beta fidelity badge, an explainable destination ranking, and the per-Work Switch Graph timeline, so "available in beta" is never mistaken for "lossless" (D-04/D-11).
 **User story**: As a developer picking where to continue, I want ranked destinations that explain themselves and a timeline of how my work travelled, so I can choose and retrace without guessing.
 **Requirements**:
@@ -589,6 +589,33 @@ must cost the same as the first.
 **Files to touch**: `crates/juggler-adapters/tests/claude_transcript.rs`, `crates/juggler-adapters/tests/fixtures/claude-code/`, `crates/juggler-handover/tests/validation_matrix.rs` (new), `crates/juggler-adapters/src/fake.rs`, `docs/qa/gate-E2-validation.md` (new), `docs/plan/EPICS.md` (M4 gate link only).
 **Research basis**: decision-log D-04 (`decision-log.md:39-48`); pass2/02 §10 (lines 512-540); deep/09 §H8-H9 (lines 281-315), D4; `docs/SPEC.md:434-442` testing strategy.
 **Handover note**: D-04 means do not block the beta on this gate — block only the *label graduation*. Trap: pass 2 ran no live dogfood and proved no Codex/ZCode binary behaviour (pass2/00 §6); every such claim here starts unproven. If a vendor format changes weekly, add a version-tagged fixture — never loosen an assertion to make CI green.
+
+---
+---
+
+**Status report (2026-10-16, AJ-E209)**: DONE-EVIDENCED — evidence
+`docs/qa/evidence/AJ-E209/manifest.md`. The badge is a per-ordered-pair
+WIRE string (`pair_badge` → "F1 · Beta"), never a global claim:
+cross-Provider rows always carry badge + Drop list (D-11), and the copy
+lint fails on "lossless" anywhere in a switch surface. Ranking is §Q6
+(E611) + the switch extensions: real pair fidelity in the 0.15 slot,
+priced replay cost into costFit (cross-Provider only), +0.05 return
+bonus when a returnable original's source resets <60 min (post-formula,
+never folded into weights), and the S-F9 hop note ("3 switches so far
+≈N tokens", amber, inform-only). Rows explain themselves (top factors +
+confidence + TTE + Why expander incl. switch cost); filtered rows stay
+visible with their reason; suggest-only — the click opens the E205 flow.
+The Project panel renders the Switch Graph per Work (provider-marked
+epoch nodes with the honest resumable gate, labelled arrows, ↺
+switch-backs, fork/merge text chips, failed edges trailing their source
+with the §9 reason + source-safe recovery, "+n switches" collapse, empty
+state); node menu = Resume (⌘R) / Switch from here / Export pack (E208
+GLOBAL policy — unset blocks; Strip leaves zero canary bytes, pinned).
+Found + fixed on the way: no-diff packs never wrote (`diffs/EMPTY`
+ENOENT, regression test added); a text-faint-on-surface contrast miss
+(3.09:1) in the graph card caught by the new a11y scan and fixed.
+vitest 245/245, playwright 386/386 (gallery 32). Live A→B→A→C→B dogfood
+PENDING E210's per-pair cells (stub round trip green end-to-end).
 
 ---
 
