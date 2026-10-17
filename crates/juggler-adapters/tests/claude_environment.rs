@@ -18,7 +18,8 @@ use juggler_adapter::HarnessAdapter;
 use juggler_adapter::environment::{InstallOrigin, LoginProbe};
 use juggler_adapters::ClaudeCodeAdapter;
 use juggler_adapters::claude_environment::{
-    MAX_IMPORT_BYTES, import_with_cap, scan_claude_environment,
+    MAX_IMPORT_BYTES, import_claude_config, import_with_cap, import_settings_only,
+    inspect_source, scan_claude_environment,
 };
 
 fn logged_in_probe(path: &Path) -> LoginProbe {
@@ -317,4 +318,140 @@ fn scan_finds_other_manager_tools_profile_roots() {
     );
     // Manager-tool entries rank after the vendor default and home patterns.
     assert_eq!(found.len(), 2, "home has no other setups: {found:?}");
+}
+
+// ---- AJ-E307: inspection, degraded import, session-scoped cleanup ----
+
+#[test]
+fn inspect_source_reports_breakdown_and_skips_cache_e307() {
+    let work = tempfile::tempdir().unwrap();
+    let home = work.path().join("home");
+    let source = existing_setup(&home, ".claude-work");
+    let inspect =
+        inspect_source(&source, &|_| LoginProbe::LoggedOut).unwrap();
+    assert!(inspect.is_config, "fixture is a config dir");
+    assert!(!inspect.already_managed);
+    assert_eq!(inspect.ceiling_bytes, MAX_IMPORT_BYTES);
+    // The breakdown names the top-level entries that WILL copy;
+    // rebuildable cache dirs (shell-snapshots/, statsig/) never list.
+    let names: Vec<&str> = inspect.folders.iter().map(|(n, _)| n.as_str()).collect();
+    assert!(names.contains(&"projects/"), "breakdown: {inspect:?}");
+    assert!(names.contains(&"settings.json"), "breakdown: {inspect:?}");
+    assert!(!names.iter().any(|n| n.starts_with("shell-snapshots")));
+    // projects/ carries the transcript's bytes; settings.json its own.
+    let projects = inspect
+        .folders
+        .iter()
+        .find(|(n, _)| n == "projects/")
+        .unwrap();
+    assert!(projects.1 > 0);
+    let total: u64 = inspect.folders.iter().map(|(_, b)| b).sum();
+    assert!(total <= inspect.total_bytes);
+}
+
+#[test]
+fn settings_only_import_skips_history_and_flags_degraded_e307() {
+    let work = tempfile::tempdir().unwrap();
+    let home = work.path().join("home");
+    let source = existing_setup(&home, ".claude-big");
+    let dest = work.path().join("managed");
+    let outcome =
+        import_settings_only(&source, &dest, &|_| LoginProbe::LoggedOut)
+            .unwrap();
+    assert!(outcome.degraded);
+    // Settings came; history did not.
+    assert!(dest.join("settings.json").is_file());
+    assert!(!dest.join("projects").exists(), "no transcript files");
+    let skipped_history = outcome
+        .skipped
+        .iter()
+        .find(|s| s.starts_with("projects/"))
+        .expect("the skip names what stayed behind");
+    assert!(skipped_history.contains("history — skipped at your choice"));
+    // The full import WOULD have brought projects/ (the choice was real).
+    let full = import_claude_config(
+        &source,
+        &work.path().join("managed-full"),
+        &|_| LoginProbe::LoggedOut,
+    )
+    .unwrap();
+    assert!(!full.degraded);
+    assert!(full.files_copied > outcome.files_copied);
+}
+
+#[test]
+#[cfg(unix)]
+fn partial_failure_cleans_up_this_sessions_dir_e307() {
+    // Injected copy failure: a source file whose permissions deny the
+    // read (owner included — the bits apply to the owner on Unix).
+    // Collect passes (metadata only), the copy fails MID-loop, and
+    // cleanup removes this session's partial managed dir.
+    let work = tempfile::tempdir().unwrap();
+    let home = work.path().join("home");
+    let source = existing_setup(&home, ".claude-fail");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(
+        source.join("projects/-users-dev-app/session-1.jsonl"),
+        std::fs::Permissions::from_mode(0o000),
+    )
+    .unwrap();
+    let dest = work.path().join("managed");
+    let err =
+        import_claude_config(&source, &dest, &|_| LoginProbe::LoggedOut)
+            .unwrap_err();
+    assert!(
+        err.to_string().contains("partial import was removed"),
+        "error carries the recovery copy: {err}"
+    );
+    // Nothing at dest — orphans never accumulate silently.
+    assert!(!dest.exists());
+    // Restoring the mode keeps the fixture tidy for tempdir cleanup.
+    let _ = std::fs::set_permissions(
+        source.join("projects/-users-dev-app/session-1.jsonl"),
+        std::fs::Permissions::from_mode(0o644),
+    );
+}
+
+#[test]
+fn source_immutability_full_and_degraded_e307() {
+    // Req: quality gate — tree snapshot (path+size) before/after must
+    // be byte-identical; the import never writes into the source.
+    let work = tempfile::tempdir().unwrap();
+    let home = work.path().join("home");
+    let source = existing_setup(&home, ".claude-immutable");
+    let before = snapshot_tree(&source);
+    import_claude_config(
+        &source,
+        &work.path().join("m1"),
+        &|_| LoginProbe::LoggedOut,
+    )
+    .unwrap();
+    import_settings_only(&source, &work.path().join("m2"), &|_| {
+        LoginProbe::LoggedOut
+    })
+    .unwrap();
+    inspect_source(&source, &|_| LoginProbe::LoggedOut).unwrap();
+    assert_eq!(before, snapshot_tree(&source), "source is read-only to imports");
+}
+
+fn snapshot_tree(dir: &Path) -> Vec<(String, u64)> {
+    let mut out = Vec::new();
+    fn walk(base: &Path, dir: &Path, out: &mut Vec<(String, u64)>) {
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let rel = entry
+                .path()
+                .strip_prefix(base)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            if entry.path().is_dir() {
+                walk(base, &entry.path(), out);
+            } else {
+                out.push((rel, entry.metadata().unwrap().len()));
+            }
+        }
+    }
+    walk(dir, dir, &mut out);
+    out.sort();
+    out
 }

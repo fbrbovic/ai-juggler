@@ -96,6 +96,11 @@ pub struct ImportOutcome {
     /// When login did not carry over, the plain-language reason and what
     /// the user should do (e.g. macOS keychain path-locking).
     pub login_note: Option<String>,
+    /// AJ-E307 Req.3: per-top-level-entry bytes, largest first — the
+    /// Confirm-source breakdown (and the Summary's copy receipt).
+    pub folders: Vec<(String, u64)>,
+    /// True when this was the settings-only degraded import (Req.4).
+    pub degraded: bool,
 }
 
 /// The vendor's own web sign-in page for this harness, when one exists.
