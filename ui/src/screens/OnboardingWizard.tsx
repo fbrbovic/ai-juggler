@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Card, Chip } from "../components/primitives";
 import { IconJuggler, IconProfiles, IconTerminal } from "../components/icons";
+import { funnelStep } from "../lib/funnel";
 import {
   accountImport,
   accountLoginCommand,
@@ -33,8 +34,31 @@ const PLANS: { id: string | null; label: string; hint: string }[] = [
   { id: "max-20x", label: "Max 20×", hint: "extreme parallel work" },
 ];
 
-const STEPS = ["install", "detect", "identity", "login", "summary"] as const;
+const STEPS = [
+  "install",
+  "detect",
+  "identity",
+  "login",
+  "signins",
+  "summary",
+] as const;
 type Step = (typeof STEPS)[number];
+
+/**
+ * AJ-E305: flow (a) shows FOUR step dots (gate → scan → sign-ins →
+ * ready); the manual single-account path folds its confirm into the
+ * scan phase. Internal steps stay distinct; the dots are a phase
+ * map, not a step list.
+ */
+const STEP_DOT: Record<Step, number> = {
+  install: 0,
+  detect: 1,
+  identity: 1,
+  login: 2,
+  signins: 2,
+  summary: 3,
+};
+const DOT_LABELS = ["Gate", "Scan", "Sign-ins", "Ready"];
 
 function humanBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -423,6 +447,8 @@ export function OnboardingWizard({
   onClose,
   onAccountCreated,
   openLoginTerminal,
+  onLaunchFirstSession,
+  onAddAnother,
 }: {
   /** The Provider this run sets up (AJ-E301 Req.1 — explicit at every
    * call site: first-run, Accounts → Add account, summary loop-back). */
@@ -430,6 +456,11 @@ export function OnboardingWizard({
   onClose: () => void;
   onAccountCreated: () => void;
   openLoginTerminal: (id: string, title: string) => void;
+  /** AJ-E305 Req.4: [Launch first session →] on the set Summary —
+   * opens the launch sheet with the Start-here project preselected. */
+  onLaunchFirstSession?: (startHere: string | null) => void;
+  /** AJ-E305 Req.4: [Add another account] on the set Summary. */
+  onAddAnother?: () => void;
 }) {
   const [step, setStep] = useState<Step>("install");
   const [installs, setInstalls] = useState<ProviderInstallData[] | null>(null);
@@ -450,6 +481,23 @@ export function OnboardingWizard({
   const [setSummary, setSetSummary] = useState<
     { label: string; state: "done" | "failed"; error?: string }[] | null
   >(null);
+  // AJ-E305 Req.3: the queued sign-ins after a set accept — one card
+  // per created/imported Account that still needs the vendor login.
+  const [signinQueue, setSigninQueue] = useState<
+    | {
+        accountId: string;
+        label: string;
+        provider: string;
+        loginNote: string | null;
+      }[]
+    | null
+  >(null);
+  const [signinIndex, setSigninIndex] = useState(0);
+  const [signinCommand, setSigninCommand] = useState("");
+  const [signinCopied, setSigninCopied] = useState(false);
+  // AJ-E305 Req.2: the zero-found collapse may re-target this run at
+  // another installed Provider (the picker writes the override).
+  const [providerOverride, setProviderOverride] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [importing, setImporting] = useState<DiscoveredInfo | null>(null);
@@ -468,6 +516,8 @@ export function OnboardingWizard({
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const primaryRef = useRef<HTMLButtonElement | null>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
+
+  const activeProvider = providerOverride ?? provider;
 
   // Step 0 probes the Providers (off the UI thread; a missing binary
   // is a row, not an error).
@@ -536,9 +586,14 @@ export function OnboardingWizard({
   }, [proposalOpen, acceptRun, choices]);
 
   // Accept executes the chosen set SEQUENTIALLY with per-item
-  // progress; a failed item degrades ITSELF only (Req.6).
+  // progress; a failed item degrades ITSELF only (Req.6). Accounts
+  // that still need the vendor login queue for the sign-ins step
+  // (AJ-E305 Req.3) — Skip there never blocks the Summary.
   const acceptTheSetup = async () => {
     if (!recommendation) return;
+    // The accept IS the identity confirmation on the set path — the
+    // labels arrived pre-filled from inference and commit here.
+    funnelStep("a-first-install", "confirm");
     const picked = recommendation.items
       .map((item, index) => ({ item, index }))
       .filter(({ index }) => choices[index]);
@@ -546,14 +601,37 @@ export function OnboardingWizard({
       picked.map(({ item }) => ({ label: item.label, state: "pending" as const })),
     );
     const results: { label: string; state: "done" | "failed"; error?: string }[] = [];
+    const queue: {
+      accountId: string;
+      label: string;
+      provider: string;
+      loginNote: string | null;
+    }[] = [];
     for (const { item } of picked) {
       try {
         if (item.action === "import" && item.path) {
-          await accountImport(item.provider, item.path, item.label, null);
+          const imported = await accountImport(item.provider, item.path, item.label, null);
+          results.push({ label: item.label, state: "done" });
+          if (imported.login !== "logged_in") {
+            queue.push({
+              accountId: imported.account.id,
+              label: imported.account.label,
+              provider: item.provider,
+              loginNote: imported.login_note,
+            });
+          }
         } else {
-          await createAccount(item.provider, item.label, null);
+          const created = await createAccount(item.provider, item.label, null);
+          results.push({ label: item.label, state: "done" });
+          if (created.login_state !== "logged_in") {
+            queue.push({
+              accountId: created.id,
+              label: created.label,
+              provider: item.provider,
+              loginNote: null,
+            });
+          }
         }
-        results.push({ label: item.label, state: "done" });
       } catch (cause) {
         results.push({ label: item.label, state: "failed", error: errorText(cause) });
       }
@@ -570,8 +648,70 @@ export function OnboardingWizard({
     setImporting(null);
     setAccount(null);
     setSetSummary(results);
-    setStep("summary");
+    setSigninQueue(queue);
+    setSigninIndex(0);
+    goto(queue.length > 0 ? "signins" : "summary");
   };
+
+  // The current sign-in card's vendor command (fetched lazily).
+  const currentSignin = signinQueue !== null ? signinQueue[signinIndex] ?? null : null;
+  useEffect(() => {
+    if (step !== "signins" || currentSignin === null) return;
+    let cancelled = false;
+    setSigninCommand("");
+    void accountLoginCommand(currentSignin.accountId).then((found) => {
+      if (!cancelled) setSigninCommand(found);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [step, currentSignin]);
+
+  // A finished (or skipped-through) queue lands on the Summary — the
+  // queue itself never blocks it.
+  useEffect(() => {
+    if (step === "signins" && signinQueue !== null && signinIndex >= signinQueue.length) {
+      funnelStep("a-first-install", "summary");
+      setStep("summary");
+    }
+  }, [step, signinIndex, signinQueue]);
+  // AJ-E305 Req.8: wizard state survives an accidental close on the
+  // Confirm step — label/plan/selection restore on reopen. Labels and
+  // plans ONLY (never a credential-adjacent field).
+  const persistKey = `aij.wizard.state.${provider}`;
+  useEffect(() => {
+    try {
+      const saved = window.sessionStorage.getItem(persistKey);
+      if (saved === null) return;
+      const parsed = JSON.parse(saved) as {
+        label?: string;
+        plan?: string | null;
+        choices?: Record<number, boolean>;
+        edits?: Record<string, { purpose: string; plan: string | null }>;
+        ignored?: Record<string, boolean>;
+      };
+      if (typeof parsed.label === "string" && parsed.label.length > 0) setLabel(parsed.label);
+      if (parsed.plan !== undefined) setPlan(parsed.plan);
+      if (parsed.choices !== undefined) setChoices(parsed.choices);
+      if (parsed.edits !== undefined) setEdits(parsed.edits);
+      if (parsed.ignored !== undefined) setIgnored(parsed.ignored);
+      window.sessionStorage.removeItem(persistKey);
+    } catch {
+      // Corrupt state restores nothing — the wizard starts clean.
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    if (step !== "identity" && step !== "detect") return;
+    // Persist on the Confirm step only; anything past it commits.
+    if (step === "identity") {
+      window.sessionStorage.setItem(
+        persistKey,
+        JSON.stringify({ label, plan, choices, edits, ignored }),
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, label, plan, choices, edits, ignored]);
 
   // Focus trap + return-focus + Esc (idle only — a running setup
   // never dies by stray key).
@@ -611,9 +751,9 @@ export function OnboardingWizard({
   }, [step]);
 
   const gate = useMemo(() => {
-    const mine = installs?.find((row) => row.provider === provider) ?? null;
+    const mine = installs?.find((row) => row.provider === activeProvider) ?? null;
     return { mine, ready: mine !== null && mine.status !== "not_installed" };
-  }, [installs, provider]);
+  }, [installs, activeProvider]);
 
   const title = useMemo(() => {
     if (importing) return `Import “${importing.path.split("/").pop() || importing.path}”`;
@@ -625,15 +765,15 @@ export function OnboardingWizard({
     setError(null);
     try {
       if (importing) {
-        const result = await accountImport(provider, importing.path, label.trim(), plan);
+        const result = await accountImport(activeProvider, importing.path, label.trim(), plan);
         setImportResult(result);
         setAccount(result.account);
       } else {
-        const created = await createAccount(provider, label.trim(), plan);
+        const created = await createAccount(activeProvider, label.trim(), plan);
         setAccount(created);
       }
       setBusy(false);
-      setStep("login");
+      goto("login");
     } catch (cause) {
       setBusy(false);
       setRetryable(
@@ -662,7 +802,29 @@ export function OnboardingWizard({
   };
 
   const providerName =
-    installs?.find((row) => row.provider === provider)?.display_name ?? provider;
+    installs?.find((row) => row.provider === activeProvider)?.display_name ?? activeProvider;
+
+  // Forward transitions emit their funnel step (AJ-E305 quality
+  // gate); Back stays silent — the funnel records progress, not
+  // navigation noise.
+  const FUNNEL_BY_STEP: Record<Step, string> = {
+    install: "gate",
+    detect: "scan",
+    identity: "confirm",
+    login: "signins",
+    signins: "signins",
+    summary: "summary",
+  };
+  const goto = (next: Step) => {
+    funnelStep("a-first-install", FUNNEL_BY_STEP[next] ?? next);
+    setStep(next);
+  };
+
+  // The funnel starts at the gate — mount IS the first step.
+  useEffect(() => {
+    funnelStep("a-first-install", "gate");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6 backdrop-blur-sm">
@@ -680,13 +842,17 @@ export function OnboardingWizard({
             <IconJuggler width={18} height={18} />
           </span>
           <h3 className="text-sm font-semibold">{title}</h3>
-          <div className="ml-auto flex items-center gap-1.5">
-            {STEPS.map((s, i) => (
+          <div
+            role="group"
+            className="ml-auto flex items-center gap-1.5"
+            aria-label={`Step ${STEP_DOT[step] + 1} of 4: ${DOT_LABELS[STEP_DOT[step]]}`}
+          >
+            {DOT_LABELS.map((_, i) => (
               <span
-                key={s}
+                key={i}
                 className={
                   "h-1 rounded-full transition-all " +
-                  (STEPS.indexOf(step) >= i ? "w-5 bg-accent" : "w-2 bg-hairline")
+                  (STEP_DOT[step] >= i ? "w-5 bg-accent" : "w-2 bg-hairline")
                 }
               />
             ))}
@@ -757,7 +923,10 @@ export function OnboardingWizard({
                 </p>
               </div>
 
-              {recommendation !== null && acceptRun === null && setSummary === null && (
+              {recommendation !== null &&
+                recommendation.items.length > 0 &&
+                acceptRun === null &&
+                setSummary === null && (
                 <div
                   className="flex flex-col gap-2.5 rounded-xl border border-accent/30 bg-accent-soft px-4 py-3.5"
                   data-testid="proposal-teaser"
@@ -855,11 +1024,72 @@ export function OnboardingWizard({
                     <p className="text-[11px] text-faint">The check was stopped early.</p>
                   )}
                 </div>
-              ) : report.installs.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-hairline px-4 py-5 text-center">
-                  <p className="text-xs text-muted">
-                    No existing {providerName} setups found — we'll create a fresh one.
-                  </p>
+              ) : report.installs.length === 0 &&
+                (recommendation === null || recommendation.items.length === 0) ? (
+                <div
+                  className="flex flex-col gap-3 rounded-xl border border-hairline px-4 py-4"
+                  data-testid="zero-found"
+                >
+                  <div>
+                    <p className="text-sm font-medium">Create your first account</p>
+                    <p className="mt-1 text-xs leading-relaxed text-muted">
+                      Nothing to import — pick the Provider to start with. You can add more
+                      anytime.
+                    </p>
+                  </div>
+                  <ul className="flex flex-col gap-1.5">
+                    {[...(installs ?? [])]
+                      .sort((a, b) => Number(b.status !== "not_installed") - Number(a.status !== "not_installed"))
+                      .map((row) => {
+                        const ready = row.status !== "not_installed";
+                        return (
+                          <li key={row.provider} className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              disabled={!ready}
+                              aria-label={
+                                ready
+                                  ? `Create your first ${row.display_name} account`
+                                  : `${row.display_name} isn't installed`
+                              }
+                              onClick={() => {
+                                setProviderOverride(row.provider);
+                                setImporting(null);
+                                // Prefill only when nothing survived a
+                                // restore (Req.8 keeps the draft).
+                                setLabel((current) =>
+                                  current.trim().length > 0 ? current : "Main",
+                                );
+                                goto("identity");
+                              }}
+                              className={
+                                "flex min-w-0 flex-1 items-center gap-2 rounded-lg border px-3 py-2 text-left text-xs transition-colors " +
+                                (ready
+                                  ? "border-hairline hover:border-accent/40 hover:bg-surface"
+                                  : "cursor-not-allowed border-hairline/50 opacity-50")
+                              }
+                              data-testid="zero-found-provider"
+                              data-installed={ready ? "true" : "false"}
+                            >
+                              <span className="font-medium">{row.display_name}</span>
+                              <span className="text-[10px] text-muted">
+                                {ready ? `installed · ${row.version ?? ""}` : "not installed"}
+                              </span>
+                            </button>
+                            {!ready && row.install_url && (
+                              <a
+                                href={row.install_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="shrink-0 text-[11px] text-accent underline-offset-2 hover:underline"
+                              >
+                                Install {row.display_name} →
+                              </a>
+                            )}
+                          </li>
+                        );
+                      })}
+                  </ul>
                 </div>
               ) : (
                 <CandidateCards
@@ -879,7 +1109,7 @@ export function OnboardingWizard({
                   onImport={(found, purpose) => {
                     setImporting(found);
                     setLabel(purpose);
-                    setStep("identity");
+                    goto("identity");
                   }}
                   onIgnore={(path) =>
                     setIgnored((current) => ({ ...current, [path]: true }))
@@ -938,7 +1168,7 @@ export function OnboardingWizard({
                     onClick={() => {
                       setImporting(null);
                       setLabel("");
-                      setStep("identity");
+                      goto("identity");
                     }}
                     className="self-start text-xs text-muted underline-offset-2 hover:text-ink hover:underline"
                   >
@@ -1068,7 +1298,7 @@ export function OnboardingWizard({
                     </p>
                   </div>
 
-                  <div className="rounded-xl border border-hairline bg-canvas px-3 py-2.5 font-mono text-[11px] leading-relaxed text-live">
+                  <div className="rounded-xl border border-hairline bg-canvas px-3 py-2.5 font-mono text-[11px] leading-relaxed text-success">
                     {command || "…"}
                   </div>
 
@@ -1118,6 +1348,92 @@ export function OnboardingWizard({
             </div>
           )}
 
+          {/* ------------------------------------------------- signins */}
+          {step === "signins" && signinQueue !== null && (
+            <div className="flex flex-col gap-4" data-testid="signin-queue">
+              <div>
+                <p className="text-sm font-medium">
+                  Sign in{" "}
+                  {signinQueue.length > 1
+                    ? `(${signinIndex + 1} of ${signinQueue.length})`
+                    : "to finish setting up"}
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-muted">
+                  Each account signs in with the vendor's own login — AI Juggler never sees
+                  your credentials. Skipping is fine; you can sign in anytime from Accounts.
+                </p>
+              </div>
+              {currentSignin !== null && (
+                <div
+                  className="flex flex-col gap-3 rounded-xl border border-hairline bg-canvas px-4 py-3.5"
+                  data-testid="signin-card"
+                >
+                  <p className="text-xs">
+                    <span className="font-medium text-ink">{currentSignin.label}</span>
+                    <span className="text-muted">
+                      {" "}
+                      ·{" "}
+                      {installs?.find((row) => row.provider === currentSignin.provider)
+                        ?.display_name ?? currentSignin.provider}
+                    </span>
+                  </p>
+                  {currentSignin.loginNote && (
+                    <p className="text-[11px] leading-relaxed text-muted">
+                      {currentSignin.loginNote}
+                    </p>
+                  )}
+                  <div className="rounded-lg border border-hairline px-3 py-2 font-mono text-[11px] leading-relaxed text-success">
+                    {signinCommand || "…"}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      onClick={async () => {
+                        const terminal = await terminalSpawnLogin(currentSignin.accountId);
+                        openLoginTerminal(terminal.id, `Sign in · ${currentSignin.label}`);
+                      }}
+                    >
+                      <IconTerminal width={14} height={14} />
+                      Sign in
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => void loginOpenWeb(currentSignin.provider)}
+                    >
+                      Open vendor page
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={async () => {
+                        await navigator.clipboard.writeText(signinCommand);
+                        setSigninCopied(true);
+                        window.setTimeout(() => setSigninCopied(false), 1500);
+                      }}
+                    >
+                      {signinCopied ? "Copied" : "Copy command"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => setSigninIndex((index) => index + 1)}
+                      data-testid="signin-skip"
+                    >
+                      Skip for now
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {signinQueue.length > 1 && (
+                <p className="text-[11px] text-muted">
+                  {signinQueue.length - signinIndex} remaining — skip never blocks your setup.
+                </p>
+              )}
+            </div>
+          )}
+
           {/* -------------------------------------------------- summary */}
           {step === "summary" && setSummary !== null && (
             <div className="flex flex-col gap-4" data-testid="set-summary">
@@ -1144,10 +1460,43 @@ export function OnboardingWizard({
                   — your most recent project.
                 </p>
               )}
-              <p className="text-[11px] text-muted">
-                Launch your first Instance from <span className="text-ink">New session</span>, or
-                add another account anytime.
-              </p>
+              {/* AJ-E305 Req.4: the Summary exits — launch (with the
+                  Start-here project preselected), keep going, or done. */}
+              <div className="flex flex-wrap gap-2" data-testid="summary-exits">
+                <Button
+                  ref={primaryRef}
+                  size="sm"
+                  variant="primary"
+                  onClick={() => {
+                    window.sessionStorage.removeItem(persistKey);
+                    onAccountCreated();
+                    onLaunchFirstSession?.(recommendation?.start_here ?? null);
+                    onClose();
+                  }}
+                  data-testid="launch-first-session"
+                >
+                  Launch first session →
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    window.sessionStorage.removeItem(persistKey);
+                    onAccountCreated();
+                    onAddAnother?.();
+                  }}
+                  data-testid="add-another-account"
+                >
+                  Add another account
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => {
+                  window.sessionStorage.removeItem(persistKey);
+                  onAccountCreated();
+                  onClose();
+                }}>
+                  Done
+                </Button>
+              </div>
             </div>
           )}
           {step === "summary" && account && setSummary === null && (
@@ -1221,7 +1570,7 @@ export function OnboardingWizard({
                   ? `${gate.mine.display_name} isn't installed — install it first or continue without it`
                   : undefined
               }
-              onClick={() => setStep("detect")}
+              onClick={() => goto("detect")}
               data-testid="install-continue"
             >
               Continue with {gate.mine?.display_name ?? providerName}
@@ -1245,23 +1594,33 @@ export function OnboardingWizard({
               variant="primary"
               onClick={() => {
                 onAccountCreated();
-                setStep("summary");
+                goto("summary");
               }}
             >
               {loginState === "logged_in" ? "Continue" : "I'll sign in later"}
             </Button>
           )}
-          {step === "summary" && (
+          {step === "signins" && (
+            /* The queue's own [Skip for now] drives progression — the
+               footer stays out of the way (Skip never blocks Summary). */
+            <span className="text-[11px] text-muted">
+              {signinQueue !== null && currentSignin !== null
+                ? `${signinQueue.length - signinIndex} of ${signinQueue.length} to go`
+                : "…"}
+            </span>
+          )}
+          {step === "summary" && setSummary === null && (
             <Button
               ref={primaryRef}
               size="sm"
               variant="primary"
               onClick={() => {
+                window.sessionStorage.removeItem(persistKey);
                 onAccountCreated();
                 onClose();
               }}
             >
-              {setSummary !== null ? "Done" : loginState === "logged_in" ? "Continue" : "Done"}
+              {loginState === "logged_in" ? "Continue" : "Done"}
             </Button>
           )}
         </div>

@@ -141,7 +141,7 @@ it. Trap: "import everything found" without the Dormant-off
 rule recreates the clutter the maintainer banned
 ("thousands of options", `expected-worfklow.md:11`).
 
-### AJ-E305 Flows (a) first install and (b) new project within click budgets | Status: TODO | Priority P0 | Effort L | Depends: AJ-E304
+### AJ-E305 Flows (a) first install and (b) new project within click budgets | Status: DONE-EVIDENCED | Priority P0 | Effort L | Depends: AJ-E304
 **Goal**:
 Ship flow (a) first install at ≤ 5 clicks with 0 required typed
 fields, and flow (b) new project at ≤ 3 clicks, both on the
@@ -637,3 +637,43 @@ captures; a11y 2/2 after one real contrast fix — the ⌘↩ hint
 faint→muted; the light-theme first-scan contrast flash is the
 recorded AJ-E806 load-race class, confirmed clean by the re-scan
 protocol). Zero-found collapse is AJ-E305's state (its Req.2).
+**Status report (2026-10-17, AJ-E305)**: DONE-EVIDENCED — evidence
+`docs/qa/evidence/AJ-E305/manifest.md`. Flow (a) is now the tested
+contract `wizard-first-install.spec.ts`: gate → scan+proposal →
+accept (the pre-filled identity confirmation) → the NEW queued
+sign-ins step → Summary — walked end to end in exactly 4
+PRIMARY-button clicks (≤ 5) with a page-wide input-event recorder
+proving 0 typed fields. The sign-ins step queues one card per
+Account needing the vendor login ([Sign in] [Open vendor page]
+[Copy command] [Skip for now]); Skip advances and never blocks the
+Summary; the accept collects the queue from import/create login
+states. The zero-found state collapses to "Create your first
+account" with a Provider picker (installed first, others gated with
+install links — the dashed dead-end is gone); choosing one lands on
+Confirm with the label pre-filled. The Summary carries [Launch
+first session →] (opens the launch sheet with Start-here
+preselected — wired in BOTH wizard instances), [Add another
+account] (fresh remount), [Done]. Flow (b) is the new
+NewProjectSheet: recency tiles + native folder picker + drop, then
+the PURE preselect rule (last-used on dir → most headroom → most
+recent) with [Change] and [Start session →] — completed in 2
+clicks in `new-project.spec.ts` (≤ 3), summonable by ⌘N and the
+Projects rail's primary button; no Account detours INLINE into the
+add-account flow keeping the pending directory. Wizard state
+(label/plan/choices/edits) survives an accidental close on Confirm
+via sessionStorage (asserted free of path/token-shaped fields);
+idle close still needs no confirmation. A funnel seam
+(`aij:funnel` CustomEvents, string keys only) records every step of
+both flows with no gaps — AJ-E309's event store subscribes to it.
+Dots show the 4 phases (Gate/Scan/Sign-ins/Ready) in a role=group;
+tiles are arrow-key navigable (the a11y test completes flow (b)
+entirely by keyboard). vitest 272/272 (wizard 17/17, new
+new-project-sheet 6/6); Playwright 483/483 (gallery 37-flows = 54
+captures: the 5 (a)-screens + zero-found + both (b)-steps + the
+detour × 3 viewports × light+dark; +5 flow-gate tests) after two
+real a11y fixes (the dots' aria-label needed role=group; the
+sign-in command block text-live→text-success for AA on light) and
+one E806-class theme-boot race converted to the sanctioned
+confirm-rescan verdict (recorded). The time-to-first-Instance p50
+metric is AJ-E309's dogfood funnel output — this seam is its
+instrument (recorded PARTIAL-BY-DESIGN).

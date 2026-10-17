@@ -88,6 +88,7 @@ export function WorkflowRail({
   onSelectSession,
   onSelectProject,
   onNewSession,
+  onNewProject,
   header,
   footer,
   freshness = {},
@@ -106,6 +107,8 @@ export function WorkflowRail({
   onSelectSession: (id: string) => void;
   onSelectProject: (id: string) => void;
   onNewSession: () => void;
+  /** AJ-E305 flow (b): the Projects tab's primary action. */
+  onNewProject: () => void;
   header: (minimal: boolean) => ReactNode;
   footer: (minimal: boolean) => ReactNode;
   freshness?: Freshness;
@@ -254,16 +257,34 @@ export function WorkflowRail({
         )}
       </div>
 
-      {/* New session — the workflow's primary action lives in the navigator */}
+      {/* The workflow's primary action lives in the navigator — on the
+          Projects tab it's AJ-E305 flow (b), elsewhere New session. */}
       <div className="border-t border-hairline/60 p-2">
         <button
           type="button"
-          onClick={onNewSession}
-          title={minimal ? "New session (⌘N)" : undefined}
+          onClick={tab === "projects" ? onNewProject : onNewSession}
+          title={
+            minimal
+              ? tab === "projects"
+                ? "New project (⌘N)"
+                : "New session"
+              : undefined
+          }
+          data-testid={
+            tab === "projects" ? "rail-new-project" : "rail-new-session"
+          }
           className="flex w-full items-center justify-center gap-2 overflow-hidden rounded-lg border border-accent/30 bg-accent-soft px-3 py-[7px] text-[12px] font-medium text-accent-hi outline-none transition-colors hover:border-accent/50 hover:bg-accent/15 focus-visible:ring-1 focus-visible:ring-accent/60"
         >
-          <IconTerminal width={14} height={14} />
-          {!minimal && <span className="truncate">New session</span>}
+          {tab === "projects" ? (
+            <IconProjects width={14} height={14} />
+          ) : (
+            <IconTerminal width={14} height={14} />
+          )}
+          {!minimal && (
+            <span className="truncate">
+              {tab === "projects" ? "New project" : "New session"}
+            </span>
+          )}
         </button>
       </div>
 
