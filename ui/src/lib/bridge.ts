@@ -521,7 +521,11 @@ export async function accountLoginState(accountId: string): Promise<string> {
 
 export async function launchRecipesList(): Promise<LaunchRecipeInfo[]> {
   if (!hasBackend) {
-    return MOCK_PROFILES;
+    // AJ-E305 test seam: visual/flow specs inject the recipe set.
+    return (
+      (window as unknown as { __AIJ_RECIPES__?: LaunchRecipeInfo[] }).__AIJ_RECIPES__ ??
+      MOCK_PROFILES
+    );
   }
   return invoke<LaunchRecipeInfo[]>("launch_recipes_list");
 }

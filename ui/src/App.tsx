@@ -26,6 +26,7 @@ import { isHandoverShortcut, isStopShortcut } from "./lib/shortcuts";
 import { ProfilesScreen } from "./screens/Profiles";
 import { OnboardingWizard } from "./screens/OnboardingWizard";
 import { NewSessionModal } from "./screens/NewSession";
+import { NewProjectSheet } from "./screens/NewProjectSheet";
 import { ReadyHome } from "./screens/ReadyHome";
 import { SessionPanel } from "./screens/WorkPanels";
 import { CostMatrix } from "./components/CostMatrix";
@@ -170,6 +171,12 @@ export default function App() {
   const [goToOpen, setGoToOpen] = useState(false);
   const [goToHotkey, setGoToHotkey] = useState("Alt+Space");
   const [wizard, setWizard] = useState(false);
+  // AJ-E305: [Add another account] reopens the wizard fresh — the
+  // nonce remounts it (no stale step state).
+  const [wizardNonce, setWizardNonce] = useState(0);
+  // AJ-E305 flow (b): the New project sheet. Null = closed; a string
+  // pre-selects that directory (the Summary's Start here).
+  const [newProjectDir, setNewProjectDir] = useState<string | null>(null);
   // AJ-E510: the ONE-time crash-recovery summary — shown until
   // dismissed; a second relaunch (no new findings) shows nothing.
   const [recovery, setRecovery] = useState<
@@ -382,9 +389,9 @@ export default function App() {
 
 
   // ⌘B legacy: toggles minimal↔comfortable (the old collapse, kept for
-  // muscle memory). ⌘N starts a new session. Density cycle: Ctrl+D
-  // everywhere; Cmd+D only inside the Tauri app — the web preview must
-  // not swallow the browser bookmark shortcut (AJ-E403 Req.4).
+  // muscle memory). ⌘N starts a New project (AJ-E305 flow (b)). Density
+  // cycle: Ctrl+D everywhere; Cmd+D only inside the Tauri app — the web
+  // preview must not swallow the browser bookmark shortcut (AJ-E403 Req.4).
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "b") {
@@ -393,7 +400,7 @@ export default function App() {
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
-        setNewSession(true);
+        setNewProjectDir((current) => current ?? "");
       }
       // ⌘. stops the selected live Instance (AJ-E407 Actions); ⌘⇧H
       // focuses the hand-over section (RightInspector switches tabs).
@@ -499,6 +506,7 @@ export default function App() {
         }
         onSelectProject={selectProject}
         onNewSession={() => setNewSession(true)}
+        onNewProject={() => setNewProjectDir((current) => current ?? "")}
         freshness={freshness}
         now={now}
         header={(minimal) => (
@@ -617,6 +625,10 @@ export default function App() {
             <div className="h-full overflow-y-auto">
               <ProfilesScreen
                 openTerminal={openLoginTerminal}
+                onLaunchFirstSession={(startHere) => {
+                  setNewSession(true);
+                  setNewSessionDir(startHere);
+                }}
                 onInspectAccount={(id) => {
                   setGlobal(null);
                   setSelection({ kind: "account", id });
@@ -799,6 +811,7 @@ export default function App() {
 
       {wizard && (
         <OnboardingWizard
+          key={wizardNonce}
           provider="claude-code"
           onClose={() => {
             localStorage.setItem("aij.onboarding.dismissed", "1");
@@ -806,6 +819,16 @@ export default function App() {
           }}
           onAccountCreated={() => void refresh()}
           openLoginTerminal={openLoginTerminal}
+          onLaunchFirstSession={(startHere) => {
+            setWizard(false);
+            setNewSession(true);
+            setNewSessionDir(startHere);
+          }}
+          onAddAnother={() => {
+            setWizard(false);
+            setWizardNonce((nonce) => nonce + 1);
+            setWizard(true);
+          }}
         />
       )}
 
@@ -869,6 +892,25 @@ export default function App() {
             void refresh();
             selectSession(sessionId);
           }}
+        />
+      )}
+
+      {/* AJ-E305 flow (b): New project — 2 steps, ≤ 3 clicks, no
+          typed paths; an empty preset means "no directory yet". */}
+      {newProjectDir !== null && (
+        <NewProjectSheet
+          projects={projects}
+          accounts={accounts}
+          initialDirectory={newProjectDir === "" ? null : newProjectDir}
+          onClose={() => setNewProjectDir(null)}
+          onLaunched={(sessionId) => {
+            setNewProjectDir(null);
+            setTab("sessions");
+            void refresh();
+            selectSession(sessionId);
+          }}
+          openLoginTerminal={openLoginTerminal}
+          onAccountsChanged={() => void refresh()}
         />
       )}
     </div>

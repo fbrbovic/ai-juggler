@@ -1241,23 +1241,13 @@ for (const theme of ["dark", "light"] as const) {
     await page.keyboard.press("Enter");
     await expect(page.getByTestId("install-help")).toContainText("Install Claude Code →");
 
-    const scan = await new AxeBuilder({ page })
-      .include("[data-testid='onboarding-wizard']")
-      .analyze();
-    const serious = scan.violations.filter((v) =>
-      ["serious", "critical"].includes(v.impact ?? ""),
-    );
-    if (serious.length > 0) {
-      await page.waitForTimeout(400);
-      const recheck = await new AxeBuilder({ page })
-        .include("[data-testid='onboarding-wizard']")
-        .analyze();
-      const still = recheck.violations.filter((v) =>
-        ["serious", "critical"].includes(v.impact ?? ""),
-      );
-      expect(still).toHaveLength(0);
-    }
-    expect(serious).toHaveLength(0);
+    // AJ-E806 (recorded 2026-10-17): under suite load the FIRST scan
+    // can catch the theme class mid-application (dark ink on light
+    // canvas, 1.11:1) — it self-heals within the settle beat and the
+    // confirmatory re-scan is the verdict; a real violation
+    // reproduces deterministically and still fails.
+    const confirmed = await scanSeriousWithConfirm(page);
+    expect(confirmed).toHaveLength(0);
 
     // Tab stays inside the dialog (the trap): after several tabs the
     // focused element is still a descendant.
@@ -1488,5 +1478,119 @@ for (const theme of ["dark", "light"] as const) {
     // reproduces deterministically and still fails the gate.
     const confirmed = await scanSeriousWithConfirm(page);
     expect(confirmed).toHaveLength(0);
+  });
+}
+
+/**
+ * AJ-E305 a11y gate: flow (b) completes FULLY from the keyboard
+ * (⌘N → arrow keys over the tiles → Enter → Tab to Start session →
+ * Enter), and every step of flow (a) scans axe-clean
+ * (0 critical/serious) — D-16, confirmatory re-scan per AJ-E806.
+ */
+for (const theme of ["dark", "light"] as const) {
+  test(`flow (b) — full keyboard completion, axe 0 — ${theme}`, async ({ page }) => {
+    await page.addInitScript(
+      ({ fixture, theme: t }) => {
+        const w = window as unknown as Record<string, unknown>;
+        w.__AIJ_FIXTURE__ = fixture;
+        localStorage.setItem("aij.theme", t);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+      },
+      { fixture: allStatuses, theme },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+    await expect(page.getByRole("tab", { name: "Sessions" })).toBeVisible();
+    // Summon by keyboard alone.
+    await page.keyboard.press("Meta+n");
+    await expect(page.getByRole("heading", { name: "New project" })).toBeVisible();
+    const confirmed = await scanSeriousWithConfirm(page);
+    expect(confirmed).toHaveLength(0);
+    // Arrow keys move across the tiles with VISIBLE focus; Enter picks.
+    // Tile order (recency): ai-juggler, sacrificial, booknyx, Choose.
+    await page.getByRole("button", { name: /Choose folder/ }).focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect(page.getByRole("button", { name: /Work in booknyx/ })).toBeFocused();
+    await page.keyboard.press("ArrowLeft");
+    await expect(page.getByRole("button", { name: /Work in sacrificial/ })).toBeFocused();
+    await page.keyboard.press("ArrowLeft");
+    await expect(page.getByRole("button", { name: /Work in ai-juggler/ })).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("project-account")).toBeVisible();
+    // Tab reaches Start session →; Enter launches (preview mode's
+    // honest error proves the activation arrived).
+    await page.getByTestId("start-session").focus();
+    await expect(page.getByTestId("start-session")).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.getByText("Preview mode — no backend connected.")).toBeVisible();
+  });
+
+  test(`flow (a) — axe 0 on every step — ${theme}`, async ({ page }) => {
+    await page.addInitScript(
+      ({ fixture, theme: t }) => {
+        const w = window as unknown as Record<string, unknown>;
+        w.__AIJ_FIXTURE__ = fixture;
+        w.__AIJ_PROVIDER_INSTALLS__ = [
+          {
+            provider: "claude-code",
+            display_name: "Claude Code",
+            install_url: "https://claude.com/download",
+            status: "installed",
+            version: "2.1.296",
+            binary: "/usr/local/bin/claude",
+            notes: [],
+          },
+        ];
+        w.__AIJ_RECOMMENDATION__ = {
+          items: [
+            {
+              provider: "claude-code",
+              label: "Work",
+              action: "import",
+              rationale: "Signed in — import keeps history",
+              default_on: true,
+              path: "/Users/you/.claude-work",
+            },
+            {
+              provider: "claude-code",
+              label: "Side",
+              action: "import",
+              rationale: "Active — you'll sign in after import",
+              default_on: true,
+              path: "/Users/you/.claude-side",
+            },
+          ],
+          summary: "Your juggling set: Claude ×2 (Work — signed in; Side — needs sign-in).",
+          start_here: "/Users/you/dev-api",
+        };
+        localStorage.setItem("aij.theme", t);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+      },
+      { fixture: honestEmpty, theme },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Accounts" }).click();
+    await page.getByRole("button", { name: /Add account|Finish setting up/ }).first().click();
+    await expect(page.getByTestId("wizard-step-install")).toBeVisible();
+    expect(await scanSeriousWithConfirm(page)).toHaveLength(0);
+    await page.getByTestId("install-continue").click();
+    await expect(page.getByTestId("proposal-teaser")).toBeVisible();
+    expect(await scanSeriousWithConfirm(page)).toHaveLength(0);
+    await page.getByTestId("proposal-customise").click();
+    await expect(page.getByTestId("proposal-block")).toBeVisible();
+    expect(await scanSeriousWithConfirm(page)).toHaveLength(0);
+    await page.getByTestId("accept-setup").click();
+    await expect(page.getByTestId("signin-queue")).toBeVisible();
+    expect(await scanSeriousWithConfirm(page)).toHaveLength(0);
+    for (let card = 0; card < 2; card += 1) {
+      await page.getByTestId("signin-skip").click();
+    }
+    await expect(page.getByTestId("summary-exits")).toBeVisible();
+    expect(await scanSeriousWithConfirm(page)).toHaveLength(0);
   });
 }

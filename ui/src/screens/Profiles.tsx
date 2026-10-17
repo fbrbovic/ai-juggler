@@ -32,9 +32,13 @@ import {
 export function ProfilesScreen({
   openTerminal,
   onInspectAccount,
+  onLaunchFirstSession,
 }: {
   openTerminal: (id: string, title: string) => void;
   onInspectAccount?: (id: string) => void;
+  /** AJ-E305: the wizard's [Launch first session →] opens the launch
+   * sheet with the Start-here project preselected. */
+  onLaunchFirstSession?: (startHere: string | null) => void;
 }) {
   const [accounts, setAccounts] = useState<AccountInfo[] | null>(null);
   const [profiles, setProfiles] = useState<LaunchRecipeInfo[] | null>(null);
@@ -138,6 +142,15 @@ export function ProfilesScreen({
           onClose={() => setAddAccount(false)}
           onAccountCreated={() => void refresh()}
           openLoginTerminal={openTerminal}
+          onLaunchFirstSession={(startHere) => {
+            setAddAccount(false);
+            onLaunchFirstSession?.(startHere);
+          }}
+          onAddAnother={() => {
+            // Reopen fresh: unmount + remount resets the wizard.
+            setAddAccount(false);
+            window.setTimeout(() => setAddAccount(true), 0);
+          }}
         />
       )}
 

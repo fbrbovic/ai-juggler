@@ -476,6 +476,22 @@ describe("AJ-E304 the set-level proposal", () => {
     await act(async () => {
       fireEvent.click(container.querySelector("[data-testid='accept-setup']")!);
     });
+    // AJ-E305: accounts that still need the vendor login queue for
+    // the sign-ins step — the two successful imports (login
+    // logged_out) queue; the failed one contributes nothing.
+    await waitFor(() =>
+      expect(container.querySelector("[data-testid='signin-queue']")).not.toBeNull(),
+    );
+    expect(container.querySelector("[data-testid='signin-queue']")!.textContent).toContain(
+      "1 of 2",
+    );
+    // Skip never blocks the Summary (AJ-E305 Req.3).
+    await act(async () => {
+      fireEvent.click(container.querySelector("[data-testid='signin-skip']")!);
+    });
+    await act(async () => {
+      fireEvent.click(container.querySelector("[data-testid='signin-skip']")!);
+    });
     await waitFor(() =>
       expect(container.querySelector("[data-testid='set-summary']")).not.toBeNull(),
     );
@@ -500,5 +516,211 @@ describe("AJ-E304 the set-level proposal", () => {
     await openAtDetect();
     expect(importSpy).not.toHaveBeenCalled();
     importSpy.mockRestore();
+  });
+});
+
+describe("AJ-E305 flow (a) — first install in ≤5 primary clicks, 0 typed fields", () => {
+  const mountWith = (extra: {
+    onClose?: () => void;
+    onLaunchFirstSession?: (startHere: string | null) => void;
+    onAddAnother?: () => void;
+  }) =>
+    render(
+      <OnboardingWizard
+        provider="claude-code"
+        onClose={extra.onClose ?? (() => {})}
+        onAccountCreated={() => {}}
+        openLoginTerminal={() => {}}
+        onLaunchFirstSession={extra.onLaunchFirstSession}
+        onAddAnother={extra.onAddAnother}
+      />,
+    );
+
+  const openProposal = async (extra: {
+    onClose?: () => void;
+    onLaunchFirstSession?: (startHere: string | null) => void;
+    onAddAnother?: () => void;
+  } = {}) => {
+    w().__AIJ_PROVIDER_INSTALLS__ = INSTALLED;
+    w().__AIJ_RECOMMENDATION__ = {
+      items: [
+        { provider: "claude-code", label: "Work", action: "import", rationale: "Signed in — import keeps history", default_on: true, path: "/Users/you/.claude-work" },
+        { provider: "claude-code", label: "Side", action: "import", rationale: "Active — you'll sign in after import", default_on: true, path: "/Users/you/.claude-side" },
+      ],
+      summary: "Your juggling set: Claude ×2 (Work — signed in; Side — needs sign-in).",
+      start_here: "-users-dev-api",
+    };
+    const mounted = mountWith(extra);
+    await waitFor(() =>
+      expect(mounted.container.querySelector("[data-testid='install-continue']")).not.toBeNull(),
+    );
+    await act(async () => {
+      fireEvent.click(mounted.container.querySelector("[data-testid='install-continue']")!);
+    });
+    await waitFor(() =>
+      expect(mounted.container.querySelector("[data-testid='proposal-teaser']")).not.toBeNull(),
+    );
+    return mounted;
+  };
+
+  it("the primary path is 4 primary-button clicks, 0 typed fields, and ends on the three Summary exits", async () => {
+    const launch = vi.fn();
+    const close = vi.fn();
+    const addAnother = vi.fn();
+    const { container } = await openProposal({
+      onClose: close,
+      onLaunchFirstSession: launch,
+      onAddAnother: addAnother,
+    });
+    // Click 1 (primary): Use recommended setup →.
+    fireEvent.click(container.querySelector("[data-testid='use-recommended']")!);
+    await waitFor(() =>
+      expect(container.querySelector("[data-testid='accept-setup']")).not.toBeNull(),
+    );
+    // No typing anywhere on the path: the proposal carries labels;
+    // nothing requires an input.
+    // Click 2 (primary): Accept setup →.
+    await act(async () => {
+      fireEvent.click(container.querySelector("[data-testid='accept-setup']")!);
+    });
+    // The two logged_out imports queue for sign-ins (AJ-E305 Req.3).
+    await waitFor(() =>
+      expect(container.querySelector("[data-testid='signin-queue']")).not.toBeNull(),
+    );
+    expect(container.querySelector("[data-testid='signin-queue']")!.textContent).toContain(
+      "1 of 2",
+    );
+    // [Skip for now] per account — secondary, never blocks Summary.
+    await act(async () => {
+      fireEvent.click(container.querySelector("[data-testid='signin-skip']")!);
+    });
+    await act(async () => {
+      fireEvent.click(container.querySelector("[data-testid='signin-skip']")!);
+    });
+    await waitFor(() =>
+      expect(container.querySelector("[data-testid='summary-exits']")).not.toBeNull(),
+    );
+    // Click 3 (primary): Launch first session → carries Start here.
+    fireEvent.click(container.querySelector("[data-testid='launch-first-session']")!);
+    expect(launch).toHaveBeenCalledWith("-users-dev-api");
+    expect(close).toHaveBeenCalled();
+    expect(addAnother).not.toHaveBeenCalled();
+    // The remaining exits exist and route.
+    expect(container.querySelector("[data-testid='add-another-account']")).not.toBeNull();
+  });
+
+  it("the zero-found state collapses to a provider picker — installed first, others gated — with NO dashed dead-end", async () => {
+    w().__AIJ_PROVIDER_INSTALLS__ = [
+      ...INSTALLED,
+      {
+        provider: "codex",
+        display_name: "Codex",
+        install_url: "https://developers.openai.com/codex",
+        status: "not_installed",
+        version: null,
+        binary: null,
+        notes: [],
+      },
+    ];
+    w().__AIJ_SCAN_REPORT__ = { ...DENIED_REPORT, probes: DENIED_REPORT.probes.map((p) => ({ ...p, health: "ok" as const, reason: null })) };
+    w().__AIJ_RECOMMENDATION__ = { items: [], summary: "", start_here: null };
+    const { container } = mountWith({});
+    await waitFor(() =>
+      expect(container.querySelector("[data-testid='install-continue']")).not.toBeNull(),
+    );
+    await act(async () => {
+      fireEvent.click(container.querySelector("[data-testid='install-continue']")!);
+    });
+    const zero = await waitFor(() => {
+      const found = container.querySelector("[data-testid='zero-found']");
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    expect(zero.textContent).toContain("Create your first account");
+    const rows = Array.from(
+      container.querySelectorAll("[data-testid='zero-found-provider']"),
+    ) as HTMLButtonElement[];
+    expect(rows.length).toBe(2);
+    // Installed sorts first and is enabled; the missing one is gated
+    // with its install link (Req.2).
+    expect(rows[0]!.getAttribute("data-installed")).toBe("true");
+    expect(rows[0]!.disabled).toBe(false);
+    expect(rows[1]!.getAttribute("data-installed")).toBe("false");
+    expect(rows[1]!.disabled).toBe(true);
+    expect(zero.querySelector("a")!.getAttribute("href")).toBe(
+      "https://developers.openai.com/codex",
+    );
+    // Choosing an installed provider lands on Confirm identity with
+    // the label PRE-FILLED — zero typed fields.
+    fireEvent.click(rows[0]!);
+    const input = await waitFor(() => {
+      const field = container.querySelector("input[placeholder^='e.g. Work']") as HTMLInputElement;
+      expect(field).not.toBeNull();
+      return field!;
+    });
+    expect(input.value).toBe("Main");
+  });
+
+  it("wizard state survives an accidental close on Confirm — label/plan restore on reopen", async () => {
+    w().__AIJ_PROVIDER_INSTALLS__ = INSTALLED;
+    w().__AIJ_SCAN_REPORT__ = { ...DENIED_REPORT, probes: DENIED_REPORT.probes.map((p) => ({ ...p, health: "ok" as const, reason: null })) };
+    w().__AIJ_RECOMMENDATION__ = { items: [], summary: "", start_here: null };
+    const first = mountWith({});
+    await waitFor(() =>
+      expect(first.container.querySelector("[data-testid='install-continue']")).not.toBeNull(),
+    );
+    await act(async () => {
+      fireEvent.click(first.container.querySelector("[data-testid='install-continue']")!);
+    });
+    await waitFor(() =>
+      expect(first.container.querySelector("[data-testid='zero-found']")).not.toBeNull(),
+    );
+    fireEvent.click(
+      first.container.querySelectorAll("[data-testid='zero-found-provider']")[0]!,
+    );
+    const input = await waitFor(() => {
+      const field = first.container.querySelector(
+        "input[placeholder^='e.g. Work']",
+      ) as HTMLInputElement;
+      expect(field).not.toBeNull();
+      return field!;
+    });
+    fireEvent.change(input, { target: { value: "Side project" } });
+    const planChip = Array.from(
+      first.container.querySelectorAll("button"),
+    ).find((button) => button.textContent?.includes("Max 5×"))!;
+    fireEvent.click(planChip);
+    // Accidental close (nothing in flight — no confirm dialog).
+    fireEvent.click(first.container.querySelector("[aria-label='Close setup']")!);
+    expect(first.container.querySelector("[data-testid='wizard-close-confirm']")).toBeNull();
+    // Reopen: label/plan restored, no credential-adjacent field stored.
+    const second = mountWith({});
+    await waitFor(() =>
+      expect(second.container.querySelector("[data-testid='install-continue']")).not.toBeNull(),
+    );
+    await act(async () => {
+      fireEvent.click(second.container.querySelector("[data-testid='install-continue']")!);
+    });
+    await waitFor(() =>
+      expect(second.container.querySelector("[data-testid='zero-found']")).not.toBeNull(),
+    );
+    fireEvent.click(
+      second.container.querySelectorAll("[data-testid='zero-found-provider']")[0]!,
+    );
+    const restored = await waitFor(() => {
+      const field = second.container.querySelector(
+        "input[placeholder^='e.g. Work']",
+      ) as HTMLInputElement;
+      expect(field).not.toBeNull();
+      return field!;
+    });
+    expect(restored.value).toBe("Side project");
+    const stored = window.sessionStorage.getItem("aij.wizard.state.claude-code");
+    expect(stored).toContain("Side project");
+    expect(stored).not.toContain("path");
+    expect(stored).not.toContain("token");
+    first.unmount();
+    second.unmount();
+    window.sessionStorage.clear();
   });
 });
