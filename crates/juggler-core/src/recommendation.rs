@@ -68,8 +68,8 @@ pub struct Recommendation {
 ///    / "Active — you'll sign in after import");
 /// 2. dormant candidates default OFF ("Dormant — include when you
 ///    want it");
-/// 3. installed-but-unconfigured Providers → "Add <P> (installed,
-///    not set up)" default ON;
+/// 3. installed-but-unconfigured Providers → "Add {P} (installed,
+///    not set up)" default ON (P = the Provider's display name);
 /// 4. labels = inferred purpose, collisions suffixed in the ENGINE
 ///    ("Work", "Work 2") — never a post-typing validation error;
 /// 5. the most-recent project rides along as `start_here`.
