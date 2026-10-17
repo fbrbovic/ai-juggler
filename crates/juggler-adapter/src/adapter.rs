@@ -106,6 +106,20 @@ pub trait HarnessAdapter: Send + Sync {
         Vec::new()
     }
 
+    /// Shell rc assignments pointing at this harness's config dirs
+    /// (AJ-E302 S5): path values only, source file + line recorded.
+    /// Default: none — adapters opt in.
+    fn scan_shell_aliases(&self) -> Vec<crate::environment::AliasHint> {
+        Vec::new()
+    }
+
+    /// Other manager tools holding this harness's setups (AJ-E302
+    /// S3/S4): metadata only (existence, counts, names — never
+    /// tokens). Default: none — adapters opt in.
+    fn scan_managers(&self) -> Vec<crate::environment::ManagerHint> {
+        Vec::new()
+    }
+
     /// Copy-imports an existing config dir (found via
     /// [`HarnessAdapter::scan_environment`]) into a fresh managed state
     /// dir. Read-only toward `source`: a byte copy with rebuildable caches

@@ -31,7 +31,7 @@
 **Research basis**: pass2/03 §6(a) Step 0 and §10 slice 1; Deep-03 §3.2 (no harness-missing path), §5 E1/E13; `claude_code.rs:126` `discover()` searched paths.
 **Handover note**: Do not fork a second wizard per Provider — parameterise. Trap: account creation succeeds without a binary (it only makes a dir), so the gate must live in the wizard, not the backend create call.
 
-### AJ-E302 Widen the scan engine: aliases, cc-switch, installed CLIs, projects, desktop | Status: TODO | Priority P0 | Effort L | Depends: AJ-E301
+### AJ-E302 Widen the scan engine: aliases, cc-switch, installed CLIs, projects, desktop | Status: DONE-EVIDENCED | Priority P0 | Effort L | Depends: AJ-E301
 **Goal**: The scan probes signals S1–S10 (pass2/03 §3) per Provider, in parallel, with per-probe health, instead of four Claude-only origins.
 **User story**: As a developer who juggles accounts via shell aliases and cc-switch, I open AI Juggler and every real setup is already listed, including the one I forgot.
 **Requirements**:
@@ -561,3 +561,24 @@ zero accounts after dismissal re-offers "Finish setting up AI
 Juggler" from Accounts. Gallery 34-wizard (14 captures) + a11y 2/2;
 the 16-onboarding-detect gallery now walks the gate. onboarding 4/4,
 vitest 254/254, playwright 419/419, verify green.
+
+**Status report (2026-10-17, AJ-E302)**: DONE-EVIDENCED — evidence
+`docs/qa/evidence/AJ-E302/manifest.md`. The scan now probes S1–S10
+(pass2/03 §3): the adapter trait carries default `scan_shell_aliases`
++ `scan_managers` (Claude opts in; others compile unchanged), the rc
+parse is name-scoped to CLAUDE_CONFIG_DIR/CODEX_HOME across
+zsh/bash/fish (POSIX + `set -x` forms, file+line recorded, malformed
+lines ignored, never evaluated), cc-switch opens its DB read-only
+immutable with an explicit id+name SELECT (locked/corrupt degrades to
+existence-only — pinned per state), S9 seeds are directory names
+only, S10 is app presence only. The engine runs probes on their own
+threads off the UI thread, streams `scan-progress {done,total}`
+events ("Checking… n of 10", aria-live), and `scan_cancel` stops
+between groups with the report carrying `cancelled` (an
+empty-but-denied/cancelled result NEVER reads "No existing setups
+found"). A committed fixture home + per-state cc-switch fixtures
+drive 7/7 scan tests; a static guardrail test pins zero
+credential-content reads; dogfood counts at
+`docs/qa/e3/AJ-E302/scan-dogfood.md` (~1.2 s wall). scan 7/7,
+onboarding 5/5, vitest 256/256, playwright 425/425, verify green.
+

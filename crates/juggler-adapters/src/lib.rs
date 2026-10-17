@@ -18,6 +18,7 @@ pub mod claude_handover;
 pub mod claude_transcript;
 pub mod fake;
 pub mod quota_ingest;
+pub mod scan_signals;
 
 pub use claude_code::{CLAUDE_CODE_ID, ClaudeCodeAdapter, LoginState};
 pub use claude_transcript::{

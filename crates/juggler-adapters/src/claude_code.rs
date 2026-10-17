@@ -202,6 +202,43 @@ impl HarnessAdapter for ClaudeCodeAdapter {
         Ok(env)
     }
 
+    /// AJ-E302 S5: rc assignments for THIS harness's variable only
+    /// (`CODEX_HOME` belongs to the codex adapter).
+    fn scan_shell_aliases(&self) -> Vec<juggler_adapter::environment::AliasHint> {
+        let Some(home) = home_dir() else {
+            return Vec::new();
+        };
+        let (hints, _) = crate::scan_signals::scan_rc_assignments(&home);
+        hints
+            .into_iter()
+            .filter(|hint| hint.variable == ENV_CONFIG_DIR)
+            .collect()
+    }
+
+    /// AJ-E302 S3/S4: t3 profile count + the cc-switch DB probe.
+    fn scan_managers(&self) -> Vec<juggler_adapter::environment::ManagerHint> {
+        let mut out = Vec::new();
+        if let Some(home) = home_dir() {
+            let t3 = home
+                .join("Library")
+                .join("Application Support")
+                .join("ClaudeCodeProfiles");
+            if t3.is_dir() {
+                let count = std::fs::read_dir(&t3)
+                    .map(|entries| entries.flatten().filter(|e| e.path().is_dir()).count())
+                    .unwrap_or_default();
+                out.push(juggler_adapter::environment::ManagerHint {
+                    manager: "t3".to_owned(),
+                    present: true,
+                    detail: format!("{count} profile(s)"),
+                    health: juggler_adapter::environment::ScanHealth::Ok,
+                });
+            }
+            out.push(crate::scan_signals::scan_cc_switch(&home));
+        }
+        out
+    }
+
     fn scan_environment(&self) -> Vec<DiscoveredInstall> {
         let env_override = std::env::var_os(ENV_CONFIG_DIR).map(PathBuf::from);
         let adapter = ClaudeCodeAdapter::new();
@@ -532,6 +569,13 @@ fn find_on_path(program: &str) -> Option<PathBuf> {
     std::env::split_paths(&path_var)
         .map(|dir| dir.join(&exe))
         .find(|candidate| candidate.is_file())
+}
+
+/// The user's home dir (`HOME` / `USERPROFILE`).
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
 }
 
 fn home_relative(relative: &str) -> Option<PathBuf> {

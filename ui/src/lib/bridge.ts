@@ -2298,3 +2298,102 @@ export async function providersDiscover(): Promise<ProviderInstallData[]> {
   }
   return invoke<ProviderInstallData[]>("providers_discover");
 }
+
+/** AJ-E302: one probe's health row (S1–S10). */
+export interface ProbeRowData {
+  id: string;
+  label: string;
+  /** ok | partial | denied */
+  health: string;
+  reason?: string | null;
+  detail: string;
+}
+
+/** AJ-E302: the 10-signal scan report — installs plus per-probe
+ * health, project seeds, desktop apps, and the cancellation flag. */
+export interface ScanReportData {
+  installs: DiscoveredInfo[];
+  probes: ProbeRowData[];
+  seeds: string[];
+  desktop_apps: string[];
+  cancelled: boolean;
+}
+
+/** The no-backend report default: one install + ten honest probes. */
+const DEFAULT_SCAN_REPORT: ScanReportData = {
+  installs: [
+    {
+      harness: "claude-code",
+      path: "/Users/you/.claude",
+      origin: "vendor-default",
+      login: "logged_in",
+      bytes: 48_000_000,
+      last_used_secs: Math.floor(Date.now() / 1000) - 86_400,
+      managed: false,
+      notes: ["Claude Code's standard location — what a plain `claude` command uses."],
+    },
+  ],
+  probes: [
+    ["s1-config-dirs", "Config directories", "1 candidate setup(s)"],
+    ["s2-env-overrides", "Environment overrides", "none set in this app's environment"],
+    ["s3-manager-t3", "t3 profiles", "not present"],
+    ["s4-manager-cc-switch", "cc-switch database", "not present"],
+    ["s5-shell-aliases", "Shell aliases", "0 assignment(s)"],
+    ["s6-installed-clis", "Installed CLIs", "claude-code: installed"],
+    ["s7-login-metadata", "Login metadata", "1 of 1 signed in"],
+    ["s8-usage-recency", "Usage recency", "1 setup(s) with recent activity"],
+    ["s9-projects", "Projects", "3 project name(s)"],
+    ["s10-desktop", "Desktop apps", "Claude.app"],
+  ].map(([id, label, detail]) => ({
+    id,
+    label,
+    health: "ok",
+    reason: null,
+    detail,
+  })),
+  seeds: ["-users-dev-app", "-users-dev-ai-juggler", "-users-dev-playground"],
+  desktop_apps: ["Claude.app"],
+  cancelled: false,
+};
+
+/** AJ-E302: the full 10-signal scan. `progress` streams
+ * (done, total) — the backend emits events; preview mode simulates.
+ * Read-only + metadata-only. */
+export async function environmentScanFull(
+  progress?: (done: number, total: number) => void,
+): Promise<ScanReportData> {
+  if (!hasBackend) {
+    const seam =
+      (window as unknown as { __AIJ_SCAN_REPORT__?: ScanReportData }).__AIJ_SCAN_REPORT__;
+    const total = 10;
+    for (let done = 1; done <= total; done += 1) {
+      progress?.(done, total);
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    return seam ?? DEFAULT_SCAN_REPORT;
+  }
+  const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+  const { listen } = await import("@tauri-apps/api/event");
+  let stop: (() => void) | undefined;
+  if (progress) {
+    stop = await listen<{ done: number; total: number }>("scan-progress", (event) => {
+      progress(event.payload.done, event.payload.total);
+    }).then((unlisten) => unlisten);
+  }
+  void getCurrentWebview;
+  try {
+    return await invoke<ScanReportData>("environment_scan_full");
+  } finally {
+    stop?.();
+  }
+}
+
+/** AJ-E302: cancels a running scan (the wizard's close/unmount). */
+export async function scanCancel(): Promise<void> {
+  if (!hasBackend) {
+    const seams = window as unknown as { __AIJ_SCAN_CANCEL__?: number };
+    seams.__AIJ_SCAN_CANCEL__ = (seams.__AIJ_SCAN_CANCEL__ ?? 0) + 1;
+    return;
+  }
+  await invoke("scan_cancel");
+}

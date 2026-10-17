@@ -3508,3 +3508,96 @@ for (const theme of THEMES) {
     });
   });
 }
+
+/**
+ * AJ-E302 gallery 34 additions — the 10-signal scan in the wizard's
+ * detect step: scanning-in-progress (the "n of 10" text), completed
+ * with Details open, and the partial/denied state — 1280×800 ×
+ * light+dark. Progress is text (aria-live), never colour-only.
+ */
+const SCAN_DENIED_REPORT = {
+  installs: [],
+  probes: [
+    { id: "s1-config-dirs", label: "Config directories", health: "ok", reason: null, detail: "0 candidate setup(s)" },
+    { id: "s2-env-overrides", label: "Environment overrides", health: "ok", reason: null, detail: "none set in this app's environment" },
+    { id: "s3-manager-t3", label: "t3 profiles", health: "ok", reason: null, detail: "not present" },
+    { id: "s4-manager-cc-switch", label: "cc-switch database", health: "denied", reason: "cc-switch database is locked or unreadable", detail: "database present (not readable — existence only)" },
+    { id: "s5-shell-aliases", label: "Shell aliases", health: "partial", reason: "1 assignment points at a directory that no longer exists", detail: "1 assignment(s) (1 dangling)" },
+    { id: "s6-installed-clis", label: "Installed CLIs", health: "ok", reason: null, detail: "claude-code: installed" },
+    { id: "s7-login-metadata", label: "Login metadata", health: "ok", reason: null, detail: "0 of 0 signed in" },
+    { id: "s8-usage-recency", label: "Usage recency", health: "ok", reason: null, detail: "0 setup(s) with recent activity" },
+    { id: "s9-projects", label: "Projects", health: "ok", reason: null, detail: "0 project name(s)" },
+    { id: "s10-desktop", label: "Desktop apps", health: "ok", reason: null, detail: "none of the known desktop apps present" },
+  ],
+  seeds: [],
+  desktop_apps: [],
+  cancelled: false,
+};
+
+for (const theme of THEMES) {
+  const openDetect = async (
+    page: import("@playwright/test").Page,
+    scanReport?: unknown,
+  ) => {
+    await page.addInitScript(
+      ({ fixture, installs, scan, theme: themeName }) => {
+        const w = window as unknown as Record<string, unknown>;
+        w.__AIJ_FIXTURE__ = fixture;
+        w.__AIJ_PROVIDER_INSTALLS__ = installs;
+        if (scan !== undefined) w.__AIJ_SCAN_REPORT__ = scan;
+        localStorage.setItem("aij.theme", themeName);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+      },
+      {
+        fixture: honestEmpty,
+        theme,
+        installs: [
+          {
+            provider: "claude-code",
+            display_name: "Claude Code",
+            install_url: "https://claude.com/download",
+            status: "installed",
+            version: "2.1.296",
+            binary: "/usr/local/bin/claude",
+            notes: [],
+          },
+        ],
+        scan: scanReport,
+      },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme as "dark" | "light" });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Accounts" }).click();
+    await page.getByRole("button", { name: /Add account|Finish setting up/ }).first().click();
+    await page.getByTestId("install-continue").click();
+  };
+
+  test(`scan — in progress (n of 10) — 1280x800 — ${theme}`, async ({ page }) => {
+    await openDetect(page);
+    await expect(page.getByTestId("scan-progress")).toContainText("of 10 checks");
+    await expect(page.getByTestId("scan-progress")).toHaveAttribute("aria-live", "polite");
+    await page.screenshot({
+      path: resolve(GALLERY, `34-wizard/scan-progress-1280x800-${theme}.png`),
+    });
+  });
+
+  test(`scan — completed with Details — 1280x800 — ${theme}`, async ({ page }) => {
+    await openDetect(page);
+    await page.getByTestId("scan-details-toggle").waitFor({ state: "visible" });
+    await page.getByTestId("scan-details-toggle").click();
+    await expect(page.getByTestId("scan-details")).toContainText("cc-switch");
+    await page.screenshot({
+      path: resolve(GALLERY, `34-wizard/scan-details-1280x800-${theme}.png`),
+    });
+  });
+
+  test(`scan — denied state never reads empty — 1280x800 — ${theme}`, async ({ page }) => {
+    await openDetect(page, SCAN_DENIED_REPORT);
+    await expect(page.getByTestId("scan-denied")).toContainText("We couldn't check 1 place");
+    await page.screenshot({
+      path: resolve(GALLERY, `34-wizard/scan-denied-1280x800-${theme}.png`),
+    });
+  });
+}

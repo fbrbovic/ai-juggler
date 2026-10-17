@@ -259,7 +259,7 @@ fn origin_rank(origin: InstallOrigin) -> u8 {
         InstallOrigin::VendorDefault => 0,
         InstallOrigin::EnvOverride => 1,
         InstallOrigin::HomePattern => 2,
-        InstallOrigin::ManagerTool => 3,
+        InstallOrigin::ManagerTool | InstallOrigin::ShellAlias => 3,
     }
 }
 
@@ -283,6 +283,9 @@ fn origin_notes(origin: InstallOrigin, login: LoginProbe) -> Vec<String> {
         }
         InstallOrigin::ManagerTool => {
             "Managed by another tool (t3.codes) — importing copies it; the tool and its sessions are never touched.".to_string()
+        }
+        InstallOrigin::ShellAlias => {
+            "Your shell points CLAUDE_CONFIG_DIR here — a setup you may have forgotten about.".to_string()
         }
     }];
     if matches!(login, LoginProbe::LoggedIn) {

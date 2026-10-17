@@ -40,6 +40,9 @@ pub enum InstallOrigin {
     /// Found under another manager tool's profile root (e.g. t3.codes'
     /// `ClaudeCodeProfiles/`) — managed elsewhere, imported read-only.
     ManagerTool,
+    /// Pointed at by a shell rc assignment (`CLAUDE_CONFIG_DIR=` in
+    /// `~/.zshrc`) — a forgotten manual setup (AJ-E302 S5).
+    ShellAlias,
 }
 
 impl InstallOrigin {
@@ -52,6 +55,7 @@ impl InstallOrigin {
             Self::EnvOverride => "env-override",
             Self::HomePattern => "home-pattern",
             Self::ManagerTool => "manager-tool",
+            Self::ShellAlias => "shell-alias",
         }
     }
 }
@@ -98,3 +102,78 @@ pub struct ImportOutcome {
 /// Opening it is the maximum login aid allowed: the user completes the
 /// vendor's flow; AI Juggler never touches credentials.
 pub type LoginUrl = &'static str;
+
+// ---------------------------------------------------------------------------
+// AJ-E302: the widened scan — per-probe health, shell-alias hints,
+// manager hints (S1–S10, pass2/03 §3). Every probe is
+// metadata-only: existence, counts, names — never credential
+// contents, never keychain values (existence only).
+
+/// One probe's health (AJ-E302 Req.4): the scan NEVER fails whole —
+/// a denied or partial probe reports itself and the rest continue.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ScanHealth {
+    /// The probe ran to completion.
+    #[default]
+    Ok,
+    /// The probe ran but some sources were unreadable/skipped — the
+    /// reason is surfaced verbatim.
+    Partial(String),
+    /// The probe could not run (permissions, locked DB) — setups it
+    /// would have found will not appear.
+    Denied(String),
+}
+
+impl ScanHealth {
+    /// Wire name (`ok` / `partial` / `denied`).
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Partial(_) => "partial",
+            Self::Denied(_) => "denied",
+        }
+    }
+
+    /// The human reason, when not `Ok`.
+    #[must_use]
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            Self::Ok => None,
+            Self::Partial(reason) | Self::Denied(reason) => Some(reason),
+        }
+    }
+}
+
+/// A path-valued env assignment found in a shell rc file (S5):
+/// `CLAUDE_CONFIG_DIR=~/work-claude` at `~/.zshrc:42`. Parsing is
+/// line-scoped to the two known variable names — never general shell
+/// evaluation, never other variables.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AliasHint {
+    /// The variable name (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`).
+    pub variable: String,
+    /// The assigned path (value only — a path, never other data).
+    pub path: PathBuf,
+    /// Source file (display path).
+    pub source_file: String,
+    /// 1-based line number.
+    pub line: u32,
+    /// False when the assigned dir doesn't exist (the dangling case
+    /// — shown as a hint, never an import candidate).
+    pub target_exists: bool,
+}
+
+/// Another manager tool's presence (S3/S4): metadata only —
+/// existence, row counts, provider NAMES. Never tokens.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagerHint {
+    /// Manager id (`t3` / `cc-switch`).
+    pub manager: String,
+    /// Present on this machine.
+    pub present: bool,
+    /// Metadata-only detail (e.g. "3 providers: work, personal").
+    pub detail: String,
+    /// The probe's health.
+    pub health: ScanHealth,
+}
