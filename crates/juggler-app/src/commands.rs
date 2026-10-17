@@ -1698,6 +1698,36 @@ pub struct DiscoveredInfo {
     pub managed: bool,
     /// Human-facing hints shown by the wizard.
     pub notes: Vec<String>,
+    /// AJ-E303: the inferred identity (purpose/login/activity with
+    /// Found/Likely/Guessed confidence words — never scores).
+    pub inference: InferenceInfo,
+    /// AJ-E303: every signal that found this dir (merged duplicates:
+    /// alias + home-pattern → ONE candidate with both signals).
+    pub signals: Vec<String>,
+}
+
+/// AJ-E303: the inference block on one candidate (rule-table fields,
+/// §4.1 — deterministic, offline, first match wins per field).
+#[derive(Clone, PartialEq, Eq, Debug, Default, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct InferenceInfo {
+    /// Inferred account purpose ("Work", "Personal", humanised name).
+    pub purpose: String,
+    /// found | likely | guessed.
+    pub purpose_confidence: String,
+    /// signed-in | maybe-expired | not-signed-in.
+    pub login: String,
+    /// found | likely | guessed.
+    pub login_confidence: String,
+    /// active | dormant | archive.
+    pub activity: String,
+    /// found | likely | guessed.
+    pub activity_confidence: String,
+    /// Human words for the activity tier ("Dormant 40 d").
+    pub activity_words: String,
+    /// True when the login lives in the OS keychain (the re-login
+    /// caveat copy applies after import).
+    pub keychain_bound: bool,
 }
 
 /// Result of importing a discovered setup as a managed account.
@@ -1889,16 +1919,7 @@ pub fn environment_scan_impl(state: &Arc<AppState>) -> Vec<DiscoveredInfo> {
             continue;
         };
         for found in adapter.scan_environment() {
-            out.push(DiscoveredInfo {
-                harness: found.harness.as_str().to_string(),
-                path: found.path.to_string_lossy().into_owned(),
-                origin: found.origin.as_str().to_string(),
-                login: login_probe_name(found.login),
-                bytes: found.bytes,
-                last_used_secs: found.last_used_secs,
-                managed: found.managed,
-                notes: found.notes,
-            });
+            out.push(discovered_info_of(found));
         }
     }
     out
@@ -11429,7 +11450,7 @@ pub fn environment_scan_full_impl(
 
     // S5: assignments whose target exists become installs (a
     // forgotten manual setup); dangling ones stay hints.
-    let (alias_installs, _alias_health, dangling) = alias_installs_of(&alias_rows, &installs);
+    let (alias_installs, _alias_health, dangling) = alias_installs_of(&alias_rows, &mut installs);
     installs.extend(alias_installs);
     tick(&mut done); // S5
 
@@ -11532,7 +11553,29 @@ fn scan_walk(state: &Arc<AppState>) -> ScanWalk {
 
 /// The wire form of one discovered install.
 fn discovered_info_of(found: juggler_adapter::environment::DiscoveredInstall) -> DiscoveredInfo {
+    let credentials_len = std::fs::metadata(found.path.join(".credentials.json"))
+        .ok()
+        .map(|meta| meta.len());
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|span| span.as_secs())
+        .unwrap_or_default();
+    let idle_secs = found
+        .last_used_secs
+        .map(|last| now_secs.saturating_sub(last));
     DiscoveredInfo {
+        inference: inference_info_of(
+            &found.path,
+            None,
+            matches!(
+                found.login,
+                juggler_adapter::environment::LoginProbe::LoggedIn
+            ),
+            credentials_len,
+            idle_secs,
+            found.managed,
+        ),
+        signals: vec![found.origin.as_str().to_owned()],
         harness: found.harness.as_str().to_string(),
         path: found.path.to_string_lossy().into_owned(),
         origin: found.origin.as_str().to_string(),
@@ -11544,41 +11587,85 @@ fn discovered_info_of(found: juggler_adapter::environment::DiscoveredInstall) ->
     }
 }
 
-/// S5: alias rows whose target exists (and is not already known)
-/// become import candidates with the shell-alias origin; dangling
-/// rows are counted for the probe health.
-fn alias_installs_of(
+/// The wire inference block for one candidate (the one extra read is
+/// a credentials-file SIZE — metadata, never contents).
+fn inference_info_of(
+    path: &std::path::Path,
+    manager_name: Option<&str>,
+    probe_logged_in: bool,
+    credentials_len: Option<u64>,
+    idle_secs: Option<u64>,
+    managed: bool,
+) -> InferenceInfo {
+    let inference =
+        juggler_adapters::inference::infer_candidate(&juggler_adapters::inference::InferInput {
+            path,
+            manager_name,
+            probe_logged_in,
+            credentials_len,
+            idle_secs,
+            managed,
+        });
+    InferenceInfo {
+        purpose: inference.purpose.value,
+        purpose_confidence: inference.purpose.confidence.as_str().to_owned(),
+        login: inference.login.value.as_str().to_owned(),
+        login_confidence: inference.login.confidence.as_str().to_owned(),
+        activity: inference.activity.value.as_str().to_owned(),
+        activity_confidence: inference.activity.confidence.as_str().to_owned(),
+        activity_words: inference.activity.value.words(),
+        keychain_bound: inference.keychain_bound,
+    }
+}
+
+/// S5 + the duplicate merge (Req.2): an alias whose target exists
+/// MERGES into the known candidate as an extra signal (alias +
+/// home-pattern → ONE candidate, signals listed); only a target no
+/// other signal found becomes a new candidate. Dangling rows are
+/// counted for the probe health.
+pub fn alias_installs_of(
     alias_rows: &[juggler_adapter::environment::AliasHint],
-    known: &[DiscoveredInfo],
+    known: &mut [DiscoveredInfo],
 ) -> (
     Vec<DiscoveredInfo>,
     juggler_adapter::environment::ScanHealth,
     u32,
 ) {
-    let known_paths: std::collections::BTreeSet<&str> =
-        known.iter().map(|install| install.path.as_str()).collect();
     let mut out = Vec::new();
     let mut dangling = 0_u32;
     for hint in alias_rows {
         let path = hint.path.to_string_lossy().into_owned();
-        if hint.target_exists && !known_paths.contains(path.as_str()) {
-            out.push(DiscoveredInfo {
-                harness: "claude-code".to_owned(),
-                path,
-                origin: "shell-alias".to_owned(),
-                login: "logged_out".to_owned(),
-                bytes: 0,
-                last_used_secs: None,
-                managed: false,
-                notes: vec![format!(
-                    "Set by {} in your shell — {}:{}.",
-                    hint.variable, hint.source_file, hint.line
-                )],
-            });
-        }
+        let signal = format!("{} in {}:{}", hint.variable, hint.source_file, hint.line);
         if !hint.target_exists {
             dangling += 1;
+            continue;
         }
+        // The duplicate merge: an existing candidate for the same dir
+        // gains the alias as a signal — never a second card.
+        if let Some(existing) = known.iter_mut().find(|install| install.path == path) {
+            if !existing.signals.contains(&signal) {
+                existing.signals.push(signal);
+            }
+            continue;
+        }
+        let credentials_len = std::fs::metadata(hint.path.join(".credentials.json"))
+            .ok()
+            .map(|meta| meta.len());
+        out.push(DiscoveredInfo {
+            inference: inference_info_of(&hint.path, None, false, credentials_len, None, false),
+            signals: vec!["shell-alias".to_owned()],
+            harness: "claude-code".to_owned(),
+            path,
+            origin: "shell-alias".to_owned(),
+            login: "logged_out".to_owned(),
+            bytes: 0,
+            last_used_secs: None,
+            managed: false,
+            notes: vec![format!(
+                "Set by {} in your shell — {}:{}.",
+                hint.variable, hint.source_file, hint.line
+            )],
+        });
     }
     let health = if dangling > 0 {
         juggler_adapter::environment::ScanHealth::Partial(format!(

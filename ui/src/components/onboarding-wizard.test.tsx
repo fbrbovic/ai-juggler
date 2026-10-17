@@ -259,3 +259,155 @@ describe("AJ-E302 the 10-signal scan in the wizard", () => {
     );
   });
 });
+
+describe("AJ-E303 candidate cards — inference, inline edit, ignore", () => {
+  const CARDS_REPORT: ScanReportData = {
+    installs: [
+      {
+        harness: "claude-code",
+        path: "/Users/you/.claude-work",
+        origin: "home-pattern",
+        login: "logged_in",
+        bytes: 9_000_000,
+        last_used_secs: Math.floor(Date.now() / 1000) - 86_400,
+        managed: false,
+        notes: ["note one", "note two — never truncated"],
+        inference: {
+          purpose: "Work",
+          purpose_confidence: "likely",
+          login: "signed-in",
+          login_confidence: "found",
+          activity: "active",
+          activity_confidence: "found",
+          activity_words: "Active this week",
+          keychain_bound: true,
+        },
+        signals: ["home-pattern", "CLAUDE_CONFIG_DIR in ~/.zshrc:3"],
+      },
+      {
+        harness: "claude-code",
+        path: "/Users/you/.claude-managed",
+        origin: "home-pattern",
+        login: "logged_in",
+        bytes: 1,
+        last_used_secs: Math.floor(Date.now() / 1000) - 91 * 86_400,
+        managed: true,
+        notes: [],
+        inference: {
+          purpose: "Managed",
+          purpose_confidence: "guessed",
+          login: "signed-in",
+          login_confidence: "found",
+          activity: "archive",
+          activity_confidence: "guessed",
+          activity_words: "Archive candidate",
+          keychain_bound: false,
+        },
+        signals: ["home-pattern"],
+      },
+    ],
+    probes: [],
+    seeds: [],
+    desktop_apps: [],
+    cancelled: false,
+  };
+
+  const openCards = async () => {
+    w().__AIJ_PROVIDER_INSTALLS__ = INSTALLED;
+    w().__AIJ_SCAN_REPORT__ = CARDS_REPORT;
+    const mounted = mount();
+    await waitFor(() =>
+      expect(mounted.container.querySelector("[data-testid='install-continue']")).not.toBeNull(),
+    );
+    await act(async () => {
+      fireEvent.click(mounted.container.querySelector("[data-testid='install-continue']")!);
+    });
+    await waitFor(() =>
+      expect(
+        mounted.container.querySelectorAll("[data-testid='candidate-card']").length,
+      ).toBe(2),
+    );
+    return mounted;
+  };
+
+  it("renders the inference line with confidence WORDS, merged signals, full notes, and the keychain caveat", async () => {
+    const { container } = await openCards();
+    const card = container.querySelector("[data-testid='candidate-card']")!;
+    expect(card.textContent).toContain("Likely: Work");
+    expect(card.textContent).toContain("Active this week");
+    expect(card.textContent).toContain("2 signals merged");
+    expect(card.textContent).toContain("Signed in");
+    expect(card.textContent).toContain("note two — never truncated");
+    expect(card.querySelector("[data-testid='keychain-caveat']")!.textContent).toContain(
+      "you'll sign in once more after import",
+    );
+    expect(card.textContent).not.toMatch(/\d+(\.\d+)?%/);
+  });
+
+  it("already-managed renders disabled with 'Already in AI Juggler' inline", async () => {
+    const { container } = await openCards();
+    const managedCard = container.querySelector(
+      "[data-testid='candidate-card'][data-managed='true']",
+    )!;
+    const importButton = managedCard.querySelector(
+      "button[data-testid='import-as']",
+    ) as HTMLButtonElement;
+    expect(importButton.disabled).toBe(true);
+    expect(importButton.textContent).toContain("Already in AI Juggler");
+  });
+
+  it("inline edit changes the import label WITHOUT re-running the scan, and Max 5× is offered", async () => {
+    const scanSpy = vi.spyOn(bridgeModule, "environmentScanFull");
+    const { container } = await openCards();
+    const callsAfterOpen = scanSpy.mock.calls.length;
+    const card = container.querySelector("[data-testid='candidate-card']")!;
+    fireEvent.click(
+      Array.from(card.querySelectorAll("button")).find((button) =>
+        button.textContent === "Edit",
+      )!,
+    );
+    const input = await waitFor(() => {
+      const field = container.querySelector(
+        "[data-testid='inline-edit-purpose']",
+      ) as HTMLInputElement;
+      expect(field).not.toBeNull();
+      return field;
+    });
+    fireEvent.change(input, { target: { value: "Consulting" } });
+    // Max 5× is in the inline plan list (Req.4).
+    const editBox = container.querySelector("[data-testid='inline-edit']")!;
+    expect(editBox.textContent).toContain("Max 5×");
+    expect(editBox.textContent).toContain("Not sure yet");
+    // The import button follows the edit…
+    await waitFor(() =>
+      expect(card.querySelector("[data-testid='import-as']")!.textContent).toContain(
+        "Import as “Consulting”",
+      ),
+    );
+    // …and NO scan re-ran (Req.5).
+    expect(scanSpy.mock.calls.length).toBe(callsAfterOpen);
+    scanSpy.mockRestore();
+  });
+
+  it("Ignore is reversible via the Ignored (n) drawer", async () => {
+    const { container } = await openCards();
+    const card = container.querySelector("[data-testid='candidate-card']")!;
+    fireEvent.click(
+      Array.from(card.querySelectorAll("button")).find((button) => button.textContent === "Ignore")!,
+    );
+    await waitFor(() =>
+      expect(container.querySelectorAll("[data-testid='candidate-card']").length).toBe(1),
+    );
+    fireEvent.click(container.querySelector("[data-testid='ignored-toggle']")!);
+    const drawer = container.querySelector("[data-testid='ignored-list']")!;
+    expect(drawer.textContent).toContain(".claude-work");
+    fireEvent.click(
+      Array.from(drawer.querySelectorAll("button")).find((button) =>
+        button.textContent === "Unignore",
+      )!,
+    );
+    await waitFor(() =>
+      expect(container.querySelectorAll("[data-testid='candidate-card']").length).toBe(2),
+    );
+  });
+});

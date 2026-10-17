@@ -51,7 +51,7 @@
 **Research basis**: pass2/03 §3 table S1–S10 and scan-contract additions; Deep-03 §1.2 findings 1–2; ADR-0006 Decision 1 (metadata-only).
 **Handover note**: Re-verify the live cc-switch DB schema version before reading beyond existence+count (pass2/03 §10 unresolved). Trap: extending the scan must not widen the `.credentials.json` copy exception (`claude_environment.rs:224`) — resolve that per FCUR F4.1 option (b) first or keep the exception Claude-import-only and documented.
 
-### AJ-E303 Found / Likely / Guessed inference with inline confidence display | Status: TODO | Priority P0 | Effort M | Depends: AJ-E302
+### AJ-E303 Found / Likely / Guessed inference with inline confidence display | Status: DONE-EVIDENCED | Priority P0 | Effort M | Depends: AJ-E302
 **Goal**: Every candidate carries an inferred label, purpose, login state and activity tier, labelled Found/Likely/Guessed, instead of a raw path card.
 **User story**: As a first-run user, I see "Claude · Work — signed in" rather than `~/.claude-work`, so I can confirm instead of decoding paths.
 **Requirements**:
@@ -581,4 +581,28 @@ drive 7/7 scan tests; a static guardrail test pins zero
 credential-content reads; dogfood counts at
 `docs/qa/e3/AJ-E302/scan-dogfood.md` (~1.2 s wall). scan 7/7,
 onboarding 5/5, vitest 256/256, playwright 425/425, verify green.
+
+**Status report (2026-10-17, AJ-E303)**: DONE-EVIDENCED — evidence
+`docs/qa/evidence/AJ-E303/manifest.md`. Every candidate now carries
+deterministic, offline inference (§4.1 rules, first match wins):
+purpose (manager name verbatim → work/corp/acme → personal/home/side
+→ humanised basename), login (Signed in / May be expired — the empty
+credentials file / Not signed in, plus the keychain-bound flag that
+renders the "sign in once more after import" caveat), activity (≤7 d
+Active, ≤90 d Dormant, else Archive), already-imported (the managed
+marker renders a DISABLED "Already in AI Juggler" card at Detect),
+and merged duplicate signals (alias + home-pattern → ONE candidate,
+signals listed). Confidence renders as the words Found/Likely/Guessed
+next to each field — never a score; plan tier has NO inference field
+at all (pinned by test) and the picker gains Max 5×. Inline edit
+(purpose + plan) never re-runs the scan (pinned by a call-count
+spy); Ignore is reversible via the Ignored (n) drawer. Golden
+rule-table tests (9/9, each rule positive+negative + the 200-in-50ms
+budget), duplicate-merge test, wizard vitest 11/11, gallery
+35-candidates (9-state matrix + deep t3 truncation), a11y 2/2 after
+three real contrast fixes (incl. the light-theme success token).
+Dogfood on this machine: 0 overrides across all fields
+(docs/qa/e3/AJ-E303/inference-dogfood.md). ts-rs bindings regenerate
+in CI via a committed test.
+
 

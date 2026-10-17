@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking", "28-switch", "29-door", "30-switchback", "31-redaction", "32-graph", "33-beta", "34-wizard"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking", "28-switch", "29-door", "30-switchback", "31-redaction", "32-graph", "33-beta", "34-wizard", "35-candidates"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -3600,4 +3600,151 @@ for (const theme of THEMES) {
       path: resolve(GALLERY, `34-wizard/scan-denied-1280x800-${theme}.png`),
     });
   });
+}
+
+/**
+ * AJ-E303 gallery 35 — the candidate-card matrix: Found/Likely/
+ * Guessed × signed-in / not-signed-in / already-managed (9 states,
+ * one screen), plus the deep t3 long-path truncation — 1280×800 and
+ * 390×844 × light+dark. Confidence is WORDS; the managed card is
+ * disabled inline.
+ */
+function cardFixture(
+  path: string,
+  confidence: "found" | "likely" | "guessed",
+  login: "signed-in" | "not-signed-in",
+  managed = false,
+): Record<string, unknown> {
+  return {
+    harness: "claude-code",
+    path,
+    origin: "home-pattern",
+    login: login === "signed-in" ? "logged_in" : "logged_out",
+    bytes: 9_000_000,
+    last_used_secs: Math.floor(Date.now() / 1000) - 86_400,
+    managed,
+    notes: ["A separate Claude configuration — created manually or by another tool."],
+    inference: {
+      purpose: managed ? "Managed" : confidence === "likely" ? "Work" : "Side",
+      purpose_confidence: confidence,
+      login,
+      login_confidence: "found",
+      activity: "active",
+      activity_confidence: "found",
+      activity_words: "Active this week",
+      keychain_bound: login === "signed-in" && path.endsWith("-key"),
+    },
+    signals: ["home-pattern"],
+  };
+}
+
+for (const theme of THEMES) {
+  for (const vp of WIZARD_VP) {
+    test(`candidates — 9-state matrix — ${vp.name} — ${theme}`, async ({ page }) => {
+      const installs = [
+        cardFixture("/Users/you/.claude", "found", "signed-in"),
+        cardFixture("/Users/you/.claude-work", "likely", "signed-in"),
+        cardFixture("/Users/you/.claude-side", "guessed", "signed-in"),
+        cardFixture("/Users/you/.claude-api", "found", "not-signed-in"),
+        cardFixture("/Users/you/.claude-personal", "likely", "not-signed-in"),
+        cardFixture("/Users/you/.claude-lab", "guessed", "not-signed-in"),
+        cardFixture("/Users/you/.claude-m1", "found", "signed-in", true),
+        cardFixture("/Users/you/.claude-m2", "likely", "not-signed-in", true),
+        cardFixture("/Users/you/.claude-m3", "guessed", "not-signed-in", true),
+      ];
+      await page.addInitScript(
+        ({ fixture, installs: rows, theme: themeName }) => {
+          const w = window as unknown as Record<string, unknown>;
+          w.__AIJ_FIXTURE__ = fixture;
+          w.__AIJ_PROVIDER_INSTALLS__ = [
+            {
+              provider: "claude-code",
+              display_name: "Claude Code",
+              install_url: "https://claude.com/download",
+              status: "installed",
+              version: "2.1.296",
+              binary: "/usr/local/bin/claude",
+              notes: [],
+            },
+          ];
+          w.__AIJ_SCAN_REPORT__ = {
+            installs: rows,
+            probes: [],
+            seeds: [],
+            desktop_apps: [],
+            cancelled: false,
+          };
+          localStorage.setItem("aij.theme", themeName);
+          localStorage.setItem("aij.onboarding.dismissed", "1");
+          sessionStorage.setItem("aij.ready.skipped", "1");
+        },
+        { fixture: honestEmpty, installs, theme },
+      );
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme as "dark" | "light" });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await page.getByRole("button", { name: "Accounts" }).click();
+      await page.getByRole("button", { name: /Add account|Finish setting up/ }).first().click();
+      await page.getByTestId("install-continue").click();
+      await expect(page.getByTestId("candidate-cards").first()).toBeVisible();
+      await expect(page.getByTestId("candidate-cards").first()).toContainText("Likely: Work");
+      await expect(page.getByTestId("candidate-cards").first()).toContainText("Already in AI Juggler");
+      await page.screenshot({
+        path: resolve(GALLERY, `35-candidates/matrix-${vp.name}-${theme}.png`),
+        fullPage: true,
+      });
+    });
+
+    test(`candidates — deep t3 long path truncates — ${vp.name} — ${theme}`, async ({ page }) => {
+      const deep =
+        "/Users/you/Library/Application Support/ClaudeCodeProfiles/profile-42/projects/some-extremely-long-nested-name/with/more/segments";
+      await page.addInitScript(
+        ({ fixture, install, theme: themeName }) => {
+          const w = window as unknown as Record<string, unknown>;
+          w.__AIJ_FIXTURE__ = fixture;
+          w.__AIJ_PROVIDER_INSTALLS__ = [
+            {
+              provider: "claude-code",
+              display_name: "Claude Code",
+              install_url: "https://claude.com/download",
+              status: "installed",
+              version: "2.1.296",
+              binary: "/usr/local/bin/claude",
+              notes: [],
+            },
+          ];
+          w.__AIJ_SCAN_REPORT__ = {
+            installs: [install],
+            probes: [],
+            seeds: [],
+            desktop_apps: [],
+            cancelled: false,
+          };
+          localStorage.setItem("aij.theme", themeName);
+          localStorage.setItem("aij.onboarding.dismissed", "1");
+          sessionStorage.setItem("aij.ready.skipped", "1");
+        },
+        {
+          fixture: honestEmpty,
+          theme,
+          install: cardFixture(deep, "guessed", "not-signed-in"),
+        },
+      );
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme as "dark" | "light" });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await page.getByRole("button", { name: "Accounts" }).click();
+      await page.getByRole("button", { name: /Add account|Finish setting up/ }).first().click();
+      await page.getByTestId("install-continue").click();
+      const card = page.getByTestId("candidate-card").first();
+      await expect(card).toBeVisible();
+      // The path truncates (one line) — the card never grows sideways.
+      const box = await card.locator("span.truncate").boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.width).toBeLessThanOrEqual(vp.width - 80);
+      await page.screenshot({
+        path: resolve(GALLERY, `35-candidates/long-path-${vp.name}-${theme}.png`),
+      });
+    });
+  }
 }

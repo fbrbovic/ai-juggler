@@ -17,6 +17,7 @@ pub mod claude_environment;
 pub mod claude_handover;
 pub mod claude_transcript;
 pub mod fake;
+pub mod inference;
 pub mod quota_ingest;
 pub mod scan_signals;
 
