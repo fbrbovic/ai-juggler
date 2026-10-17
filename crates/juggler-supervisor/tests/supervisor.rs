@@ -225,6 +225,26 @@ fn process_tree_descendants_are_tracked() {
 }
 
 /// `kill -0` liveness probe (test-side; the ladder has its own).
+/// The ladder's aliveness contract: a process whose IMAGE exited is
+/// gone (a zombie only awaits the parent's `wait`; on init-less CI
+/// containers the reparented orphan can stay zombie indefinitely —
+/// that is the OS's reaping job, not the ladder's).
+fn image_exited(pid: u32) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            // The state letter follows the comm field in parentheses.
+            if let Some(close) = stat.rfind(')') {
+                let state = stat[close + 1..].trim().chars().next();
+                return state == Some('Z');
+            }
+        }
+    }
+    !process_alive_via_kill(pid)
+}
+
+/// Waits up to `grace` for the image to be gone AND (best effort on
+/// reaping hosts) the pid fully collected.
 fn process_alive_via_kill(pid: u32) -> bool {
     std::process::Command::new("kill")
         .arg("-0")
@@ -515,7 +535,7 @@ fn ladder_exits_cooperative_helper_on_term() {
     let outcome = terminate_group(Duration::from_secs(3), move || vec![pid], || false);
     assert_eq!(outcome.members, vec![(pid, ProcessOutcome::ExitedOnTerm)]);
     assert!(outcome.all_succeeded());
-    assert!(!process_alive_via_kill(pid));
+    assert!(image_exited(pid), "the helper's image exited on TERM");
 }
 
 /// A TERM-ignoring target that is READY before its pid returns
