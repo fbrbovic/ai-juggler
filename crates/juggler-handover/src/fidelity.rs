@@ -168,6 +168,32 @@ impl FidelityLabel {
             Self::F4 => "F4",
         }
     }
+
+    /// One level lower (AJ-E210 Req.4: a failing validation cell
+    /// lowers the pair's advertised ceiling until fixed). F0 stays
+    /// F0 — the floor is honest, never negative.
+    #[must_use]
+    pub fn lowered(self) -> Self {
+        match self {
+            Self::F0 | Self::F1 => Self::F0,
+            Self::F2 => Self::F1,
+            Self::F3 => Self::F2,
+            Self::F4 => Self::F3,
+        }
+    }
+
+    /// The numeric index (`F0`=0 .. `F4`=4) — the score input the
+    /// ranking slot consumes (`index / 4`).
+    #[must_use]
+    pub fn wire_index(self) -> u8 {
+        match self {
+            Self::F0 => 0,
+            Self::F1 => 1,
+            Self::F2 => 2,
+            Self::F3 => 3,
+            Self::F4 => 4,
+        }
+    }
 }
 
 /// A cap that lowered the label (recorded in order of application;

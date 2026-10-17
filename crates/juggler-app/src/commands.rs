@@ -696,6 +696,7 @@ fn rank_candidates_for(
     let mut candidates: Vec<juggler_core::ranking::Candidate> = Vec::new();
     let mut tte_by_account: std::collections::BTreeMap<String, Option<f64>> =
         std::collections::BTreeMap::new();
+    let dogfood = dogfood_cells_of(&storage);
     for account in &accounts {
         let display = quota_display_inner(&storage, account, now);
         tte_by_account.insert(account.id.as_str().to_owned(), quota_tte(&display));
@@ -770,15 +771,20 @@ fn rank_candidates_for(
             })
             .count();
         let active_sessions = u32::try_from(active_sessions).unwrap_or(u32::MAX);
-        // AJ-E209: with a switch context the pair's REAL fidelity
-        // rides the 0.15 slot (E203 matrix), a replay pair pays its
-        // priced switch cost into costFit, and returnable originals
-        // carry the source's TTE for the return bonus.
+        // AJ-E209/E210: with a switch context the pair's ADVERTISED
+        // fidelity (the E203 ceiling, lowered one level per FAILED
+        // live cell — D-04) rides the 0.15 slot, a replay pair pays
+        // its priced switch cost into costFit, and returnable
+        // originals carry the source's TTE for the return bonus.
         let (fidelity, switch_cost) = match switch {
             Some(context) => (
-                juggler_handover::ranking::pair_fidelity_number(
+                juggler_handover::validation::advertised_ceiling_number(
                     &context.source_provider,
                     account.harness.as_str(),
+                    dogfood.get(&dogfood_key(
+                        context.source_provider.as_str(),
+                        account.harness.as_str(),
+                    )),
                 ),
                 replay_cost_for(context, account, &catalog, now),
             ),
@@ -10300,6 +10306,54 @@ pub struct SwitchTargetInfo {
     pub suggested: bool,
 }
 
+/// The §Q6 switch context for one source: its TTE (return-bonus
+/// input), the returnable originals (accounts an OPEN excursion leads
+/// back to), and the source's measured replay floor (its transcript
+/// usage).
+fn switch_rank_context_of(
+    state: &Arc<AppState>,
+    source: &juggler_core::model::InstanceRecord,
+    source_account: &juggler_core::model::Account,
+) -> AppResult<SwitchRankContext> {
+    let storage = lock_storage_arc(state)?;
+    let now = Timestamp::now().millis();
+    let source_tte_min = quota_tte(&quota_display_inner(&storage, source_account, now));
+    let mut returnable = std::collections::BTreeSet::new();
+    let graph = storage.switch_graph();
+    for project in storage.projects().list()? {
+        for work in graph.works_for_project(&project.id)? {
+            let edges = graph.edges_for_work(&work.id)?;
+            for edge in edges.iter().filter(|edge| {
+                matches!(edge.state, juggler_core::model::EdgeState::Confirmed)
+                    && edge.parent_edge_a.is_none()
+            }) {
+                let Some(to_epoch) = &edge.to_epoch else {
+                    continue;
+                };
+                let returned = edges.iter().any(|other| {
+                    matches!(other.state, juggler_core::model::EdgeState::Confirmed)
+                        && &other.from_epoch == to_epoch
+                });
+                if !returned {
+                    returnable.insert(edge.from_account.to_string());
+                }
+            }
+        }
+    }
+    let source_replay_tokens = source.transcript_ref.as_ref().and_then(|reference| {
+        std::fs::read(&reference.path).ok().map(|bytes| {
+            let parsed = juggler_adapters::claude_transcript::parse_transcript(&bytes);
+            parsed.usage.input.saturating_add(parsed.usage.output)
+        })
+    });
+    Ok(SwitchRankContext {
+        source_provider: source_account.harness.to_string(),
+        source_tte_min,
+        returnable_accounts: returnable,
+        source_replay_tokens,
+    })
+}
+
 /// AJ-E209: the ranked + badged destinations for one source session
 /// (§Q6 with the switch extensions; D-04/D-11 badges; suggest-only).
 ///
@@ -10325,51 +10379,7 @@ pub fn switch_targets_impl(
     session_id: &str,
 ) -> AppResult<Vec<SwitchTargetInfo>> {
     let (source, source_account) = handover_source(state, session_id)?;
-    let context = {
-        let storage = lock_storage_arc(state)?;
-        let now = Timestamp::now().millis();
-        // The source's TTE (return-bonus input).
-        let source_tte_min = quota_tte(&quota_display_inner(&storage, &source_account, now));
-        // Returnable originals: accounts an OPEN excursion leads
-        // back to (E207's walk, reusable here).
-        let mut returnable = std::collections::BTreeSet::new();
-        let graph = storage.switch_graph();
-        for project in storage.projects().list()? {
-            for work in graph.works_for_project(&project.id)? {
-                let epochs = graph.epochs_for_work(&work.id)?;
-                let edges = graph.edges_for_work(&work.id)?;
-                for edge in edges.iter().filter(|edge| {
-                    matches!(edge.state, juggler_core::model::EdgeState::Confirmed)
-                        && edge.parent_edge_a.is_none()
-                }) {
-                    let Some(to_epoch) = &edge.to_epoch else {
-                        continue;
-                    };
-                    let returned = edges.iter().any(|other| {
-                        matches!(other.state, juggler_core::model::EdgeState::Confirmed)
-                            && &other.from_epoch == to_epoch
-                    });
-                    if !returned {
-                        returnable.insert(edge.from_account.to_string());
-                    }
-                    let _ = &epochs;
-                }
-            }
-        }
-        // The source's measured replay floor (its transcript usage).
-        let source_replay_tokens = source.transcript_ref.as_ref().and_then(|reference| {
-            std::fs::read(&reference.path).ok().map(|bytes| {
-                let parsed = juggler_adapters::claude_transcript::parse_transcript(&bytes);
-                parsed.usage.input.saturating_add(parsed.usage.output)
-            })
-        });
-        SwitchRankContext {
-            source_provider: source_account.harness.to_string(),
-            source_tte_min,
-            returnable_accounts: returnable,
-            source_replay_tokens,
-        }
-    };
+    let context = switch_rank_context_of(state, &source, &source_account)?;
     let ranked = rank_candidates_for(
         state,
         source.project.as_ref().map(ToString::to_string).as_deref(),
@@ -10380,6 +10390,7 @@ pub fn switch_targets_impl(
         .map(|row| (row.account.clone(), row))
         .collect();
     let storage = lock_storage_arc(state)?;
+    let dogfood = dogfood_cells_of(&storage);
     let mut out = Vec::new();
     for account in storage.accounts().list()? {
         let Some(row) = by_account.get(account.id.as_str()) else {
@@ -10394,15 +10405,33 @@ pub fn switch_targets_impl(
                 context.source_provider.as_str(),
                 account.harness.as_str(),
             ));
+            // AJ-E210: the badge and validated state come from the
+            // validation matrix merged with any recorded live cells
+            // (a passing cell validates only real-CI rows — D-04).
+            let cell = dogfood.get(&dogfood_key(
+                context.source_provider.as_str(),
+                account.harness.as_str(),
+            ));
+            let matrix_row = juggler_handover::validation::pair_cell(
+                context.source_provider.as_str(),
+                account.harness.as_str(),
+            )
+            .map(|row| match cell {
+                Some(record) => juggler_handover::validation::with_dogfood(row, record.clone()),
+                None => row,
+            });
             out.push(SwitchTargetInfo {
                 recipe_id: recipe.id.to_string(),
                 account_id: account.id.to_string(),
                 account_label: account.label.clone(),
-                badge: juggler_handover::ranking::pair_badge(
+                badge: juggler_handover::validation::advertised_badge(
                     context.source_provider.as_str(),
                     account.harness.as_str(),
+                    cell,
                 ),
-                validated: false, // E210 owns flipping cells green
+                validated: matrix_row
+                    .as_ref()
+                    .is_some_and(juggler_handover::validation::PairCell::validated),
                 cross_provider: cross,
                 drops: carry.dropped.clone(),
                 score: row.score,
@@ -10880,4 +10909,248 @@ pub fn pack_export_impl(state: &Arc<AppState>, epoch_id: &str) -> AppResult<Stri
         message: error.to_string(),
     })?;
     Ok(dir.to_string_lossy().into_owned())
+}
+
+// ---------------------------------------------------------------------------
+// AJ-E210: the ordered-pair validation matrix (D-04) — the source of
+// truth that graduates pairs out of "Beta". Read side renders in
+// Settings → Beta; the record side stores HUMAN-run live dogfood
+// cells (the app never runs vendor binaries itself).
+
+/// KV key for the recorded live dogfood cells (JSON map
+/// "from→to" → [`juggler_handover::validation::DogfoodCell`]).
+const DOGFOOD_CELLS_KEY: &str = "dogfood_cells";
+
+/// The map key for one pair's recorded cell.
+fn dogfood_key(from: &str, to: &str) -> String {
+    format!("{from}\u{2192}{to}")
+}
+
+/// The recorded live dogfood cells (empty until a human records one).
+fn dogfood_cells_of(
+    storage: &Storage,
+) -> std::collections::BTreeMap<String, juggler_handover::validation::DogfoodCell> {
+    storage
+        .app_settings()
+        .get(DOGFOOD_CELLS_KEY)
+        .ok()
+        .flatten()
+        .and_then(|blob| serde_json::from_str(&blob).ok())
+        .unwrap_or_default()
+}
+
+/// One Settings → Beta matrix row (the same data the badges derive
+/// from — one source, no drift).
+#[derive(Clone, PartialEq, Debug, serde::Serialize)]
+pub struct ValidationCellInfo {
+    /// Source provider id.
+    pub from: String,
+    /// Target provider id.
+    pub to: String,
+    /// The switch mechanism at the ceiling (transplant/replay/pack-only).
+    pub mechanism: String,
+    /// The researched ceiling (E203), wire name.
+    pub researched_ceiling: String,
+    /// The advertised ceiling after validation gating (a FAILED live
+    /// cell lowers it one level until fixed).
+    pub advertised: String,
+    /// The wire badge ("F1 · Beta" / "F3 · Validated").
+    pub badge: String,
+    /// Validated = real-CI row green AND a passing live cell.
+    pub validated: bool,
+    /// The pair's shape is proven over the fake harness in CI.
+    pub mechanism_green: bool,
+    /// Both sides' REAL adapters have green fixture rows.
+    pub ci_green: bool,
+    /// The recorded live cell, when one exists (dates + verdict +
+    /// hashes — never secrets).
+    pub dogfood: Option<DogfoodCellInfo>,
+    /// One-line status ("CI fixtures green · live dogfood pending —
+    /// open beta debt").
+    pub status: String,
+    /// Honest notes (blocks, pending adapters), verbatim.
+    pub notes: Vec<String>,
+}
+
+/// The recorded live cell as the UI reads it.
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize)]
+pub struct DogfoodCellInfo {
+    /// ISO date the cell ran.
+    pub at: String,
+    /// Project shape.
+    pub project_shape: String,
+    /// pass | fail.
+    pub verdict: String,
+    /// sha256 of the source transcript before the switch.
+    pub source_sha256: String,
+    /// sha256 of the target transcript after the resume.
+    pub target_sha256: String,
+    /// The continuity note (pass) or the failure reason (fail).
+    pub note: String,
+}
+
+/// AJ-E210: the validation matrix (static researched rows merged with
+/// any recorded live cells). Read-only.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] on storage failures.
+#[tauri::command]
+pub fn validation_matrix(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> AppResult<Vec<ValidationCellInfo>> {
+    validation_matrix_impl(state.inner())
+}
+
+/// Core implementation shared with integration tests.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] per the command docs.
+pub fn validation_matrix_impl(state: &Arc<AppState>) -> AppResult<Vec<ValidationCellInfo>> {
+    let storage = lock_storage_arc(state)?;
+    let recorded = dogfood_cells_of(&storage);
+    Ok(juggler_handover::validation::validation_matrix()
+        .into_iter()
+        .map(|row| {
+            let merged = match recorded.get(&dogfood_key(&row.from, &row.to)) {
+                Some(cell) => juggler_handover::validation::with_dogfood(row.clone(), cell.clone()),
+                None => row.clone(),
+            };
+            ValidationCellInfo {
+                from: row.from.clone(),
+                to: row.to.clone(),
+                mechanism: match row.mechanism {
+                    juggler_handover::validation::PairMechanism::Transplant => "transplant",
+                    juggler_handover::validation::PairMechanism::Replay => "replay",
+                    juggler_handover::validation::PairMechanism::PackOnly => "pack-only",
+                }
+                .to_owned(),
+                researched_ceiling: row.researched_ceiling.as_str().to_owned(),
+                advertised: merged.advertised_ceiling().as_str().to_owned(),
+                badge: merged.badge(),
+                validated: merged.validated(),
+                mechanism_green: row.mechanism_green,
+                ci_green: row.ci_green,
+                dogfood: merged.dogfood.as_ref().map(|cell| DogfoodCellInfo {
+                    at: cell.at.clone(),
+                    project_shape: cell.project_shape.clone(),
+                    verdict: match cell.verdict {
+                        juggler_handover::validation::DogfoodVerdict::Pass { .. } => "pass",
+                        juggler_handover::validation::DogfoodVerdict::Fail { .. } => "fail",
+                    }
+                    .to_owned(),
+                    source_sha256: cell.source_sha256.clone(),
+                    target_sha256: cell.target_sha256.clone(),
+                    note: match &cell.verdict {
+                        juggler_handover::validation::DogfoodVerdict::Pass { continuity_note } => {
+                            continuity_note.clone()
+                        }
+                        juggler_handover::validation::DogfoodVerdict::Fail { reason } => {
+                            reason.clone()
+                        }
+                    },
+                }),
+                status: merged.status_words(),
+                notes: row.notes.clone(),
+            }
+        })
+        .collect())
+}
+
+/// AJ-E210: records a live dogfood cell for one ordered pair — a
+/// HUMAN ran the pair on real binaries and reports the outcome (the
+/// app never launches vendor binaries for validation). Recording a
+/// PASS on a real-CI-green pair flips its badge to "· Validated"; a
+/// FAIL lowers the advertised ceiling one level until fixed.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] when the pair is not in the
+/// researched matrix (never invented) or the store fails.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn validation_dogfood_record(
+    state: tauri::State<'_, Arc<AppState>>,
+    from: String,
+    to: String,
+    verdict: String,
+    at: String,
+    project_shape: String,
+    source_sha256: String,
+    target_sha256: String,
+    note: String,
+) -> AppResult<()> {
+    validation_dogfood_record_impl(
+        state.inner(),
+        &from,
+        &to,
+        &verdict,
+        &at,
+        &project_shape,
+        &source_sha256,
+        &target_sha256,
+        &note,
+    )
+}
+
+/// Core implementation shared with integration tests.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] per the command docs.
+#[allow(clippy::too_many_arguments)]
+pub fn validation_dogfood_record_impl(
+    state: &Arc<AppState>,
+    from: &str,
+    to: &str,
+    verdict: &str,
+    at: &str,
+    project_shape: &str,
+    source_sha256: &str,
+    target_sha256: &str,
+    note: &str,
+) -> AppResult<()> {
+    use juggler_handover::validation::{DogfoodCell, DogfoodVerdict};
+    if juggler_handover::validation::pair_cell(from, to).is_none() {
+        return Err(AppError::Io {
+            context: "record dogfood cell",
+            message: format!(
+                "{from}→{to} is not a researched pair — cells are recorded, never invented"
+            ),
+        });
+    }
+    let verdict = match verdict {
+        "pass" => DogfoodVerdict::Pass {
+            continuity_note: note.to_owned(),
+        },
+        "fail" => DogfoodVerdict::Fail {
+            reason: note.to_owned(),
+        },
+        other => {
+            return Err(AppError::Io {
+                context: "record dogfood cell",
+                message: format!("Unknown verdict {other:?} — pass or fail"),
+            });
+        }
+    };
+    let cell = DogfoodCell {
+        at: at.to_owned(),
+        project_shape: project_shape.to_owned(),
+        source_sha256: source_sha256.to_owned(),
+        target_sha256: target_sha256.to_owned(),
+        verdict,
+    };
+    let storage = lock_storage_arc(state)?;
+    let mut cells = dogfood_cells_of(&storage);
+    cells.insert(dogfood_key(from, to), cell);
+    let blob = serde_json::to_string(&cells).map_err(|error| AppError::Io {
+        context: "record dogfood cell",
+        message: error.to_string(),
+    })?;
+    storage
+        .app_settings()
+        .set(DOGFOOD_CELLS_KEY, &blob)
+        .map_err(AppError::Core)?;
+    Ok(())
 }

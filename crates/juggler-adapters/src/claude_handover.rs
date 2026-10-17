@@ -77,6 +77,10 @@ impl juggler_adapter::handover::HandoverSupport for ClaudeCodeAdapter {
             })?;
         let cwd = embedded_cwd(&main.bytes).map_or_else(|| dir.to_path_buf(), PathBuf::from);
         let native_id = reference.native_id.clone().unwrap_or(stem);
+        // §H2.1: a compacted source caps the honest label at F2 (the
+        // pre-compaction turns no longer travel). Everything stays
+        // "unvalidated-pair" until AJ-E210's live cells graduate it.
+        let compacted = claude_transcript::parse_transcript(&main.bytes).has_compact_boundary();
         Ok(SessionBundle {
             manifest: BundleManifest {
                 schema: 1,
@@ -85,11 +89,13 @@ impl juggler_adapter::handover::HandoverSupport for ClaudeCodeAdapter {
                 cwd,
                 harness_version: None,
                 created_at: Timestamp::now(),
-                // Interim honest label until AJ-E210 proves the pair
-                // (deep/09 D1) — never a green badge before evidence.
                 fidelity: Fidelity {
-                    level: "F1".to_owned(),
-                    caps_applied: vec!["unvalidated-pair".to_owned()],
+                    level: if compacted { "F2" } else { "F1" }.to_owned(),
+                    caps_applied: if compacted {
+                        vec!["compact-boundary".to_owned(), "unvalidated-pair".to_owned()]
+                    } else {
+                        vec!["unvalidated-pair".to_owned()]
+                    },
                 },
                 redacted: false,
             },

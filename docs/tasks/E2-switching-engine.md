@@ -571,7 +571,7 @@ must cost the same as the first.
 **Research basis**: decision-log D-04/D-11 (`decision-log.md:39-48,105-111`); pass2/02 §7-8.1 (lines 388-486); deep/09 §Q6 (lines 445-469), §H6; `docs/PROPOSAL.md:142-144` success metrics.
 **Handover note**: Do not invent a composite quality score (D-07 forbids it) and do not reuse quota rings as fidelity badges. Trap: affinity uses `ProjectHistory.accounts` (`model.rs:360-365`) — it is also the wrong-billing guard; changing its meaning breaks both. Fleet shape (D-13): node/edge ids must stay machine-qualified-ready even though fleet UI is another epic.
 
-### AJ-E210 Fixture + live validation matrix per Provider pair and beta-exit gate (D-04) | Status: TODO | Priority P0 | Effort XL | Depends: AJ-E204, AJ-E205, AJ-E207, AJ-E209
+### AJ-E210 Fixture + live validation matrix per Provider pair and beta-exit gate (D-04) | Status: DONE-EVIDENCED | Priority P0 | Effort XL | Depends: AJ-E204, AJ-E205, AJ-E207, AJ-E209
 **Goal**: Prove every ordered pair with CI fixtures plus live-binary dogfood, and make the matrix the single source of truth that graduates pairs out of beta labelling (D-04) — shipping in beta now, validation as the mandatory parallel workstream.
 **User story**: As a developer trusting a beta switch, I want each Provider pair's badge backed by a passing test matrix I can inspect, so honesty is enforced by evidence, not promises.
 **Requirements**:
@@ -591,6 +591,33 @@ must cost the same as the first.
 **Handover note**: D-04 means do not block the beta on this gate — block only the *label graduation*. Trap: pass 2 ran no live dogfood and proved no Codex/ZCode binary behaviour (pass2/00 §6); every such claim here starts unproven. If a vendor format changes weekly, add a version-tagged fixture — never loosen an assertion to make CI green.
 
 ---
+---
+---
+
+**Status report (2026-10-16, AJ-E210)**: DONE-EVIDENCED — evidence
+`docs/qa/evidence/AJ-E210/manifest.md`. The validation matrix
+(`juggler_handover::validation`) is the single source of truth that
+graduates a pair out of "Beta": three never-conflated layers —
+mechanism green (the pair's E203 shape proven over fixtures in CI;
+never promotes a badge), ci green (both sides' REAL adapters have
+fixture rows — claude-code→claude-code only today), and a recorded
+live dogfood cell (human-run, before/after sha256 + continuity
+verdict, persisted + restart-pinned, unknown pairs refused).
+Validated = ci green AND a passing cell; a FAILED cell lowers the
+advertised ceiling one level until fixed (`FidelityLabel::lowered`,
+floor F0) — into the badges AND the ranking fidelity slot (one
+source). H-F1..H-F8 are complete (H-F4 F2-label + bytes-identical,
+H-F7 PTY-independent golden path, H-F8 A→B→A chain with zero
+duplicate uuids; every test asserts source hashes). Settings → Beta
+(Profiles) renders the SAME table (real `<table>`, scoped headers,
+status in text); `just e2-gate` regenerates
+`docs/qa/gate-E2-validation.md` from the matrix — 0/11 validated,
+11 open beta debt, never listed as passed. Coverage recorded
+honestly: handover libs 92.7%, adapters libs 77.9% (claude_code.rs
+launch paths need real binaries — E808/E707), combined 85.9%. E2 is
+COMPLETE subject to live dogfood cells, which belong to humans with
+authenticated binaries per the security constraints.
+
 ---
 
 **Status report (2026-10-16, AJ-E209)**: DONE-EVIDENCED — evidence

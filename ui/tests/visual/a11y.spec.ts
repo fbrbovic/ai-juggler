@@ -1126,3 +1126,55 @@ for (const theme of ["dark", "light"] as const) {
     await expect(nodes.nth(1)).toBeFocused();
   });
 }
+
+/**
+ * AJ-E210 a11y gate: the Beta validation matrix is a REAL table —
+ * row headers (scope=row), scoped columns, status in TEXT (never
+ * colour-only), and axe reports 0 critical/serious on the card in
+ * both themes.
+ */
+for (const theme of ["dark", "light"] as const) {
+  test(`beta matrix — real table, axe 0 critical/serious — ${theme}`, async ({ page }) => {
+    await page.addInitScript(
+      ({ fixture, t0, theme: t }) => {
+        const w = window as unknown as Record<string, unknown>;
+        w.__AIJ_FIXTURE__ = fixture;
+        localStorage.setItem("aij.theme", t);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+        Date.now = () => t0;
+      },
+      { fixture: allStatuses, t0: T0, theme },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Accounts" }).click();
+    await expect(page.getByTestId("beta-matrix-table")).toBeVisible();
+    // Real table semantics: scoped column + row headers.
+    await expect(page.getByTestId("beta-matrix-table").locator("th[scope='col']").first()).toBeVisible();
+    const rowHeader = page.getByTestId("beta-matrix-row").first().locator("th[scope='row']");
+    await expect(rowHeader).toContainText("→");
+    // Status in text, never colour-only.
+    await expect(page.getByTestId("beta-matrix-row").first()).toContainText(
+      "Beta — not yet validated",
+    );
+    const scan = await new AxeBuilder({ page })
+      .include("[data-testid='beta-matrix']")
+      .analyze();
+    const serious = scan.violations.filter((v) =>
+      ["serious", "critical"].includes(v.impact ?? ""),
+    );
+    if (serious.length > 0) {
+      await page.waitForTimeout(400);
+      const recheck = await new AxeBuilder({ page })
+        .include("[data-testid='beta-matrix']")
+        .analyze();
+      const still = recheck.violations.filter((v) =>
+        ["serious", "critical"].includes(v.impact ?? ""),
+      );
+      expect(still).toHaveLength(0);
+    }
+    expect(serious).toHaveLength(0);
+  });
+}

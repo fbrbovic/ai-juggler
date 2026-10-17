@@ -151,6 +151,8 @@ pub fn run() {
             commands::switch_graph_overview,
             commands::epoch_resume,
             commands::pack_export,
+            commands::validation_matrix,
+            commands::validation_dogfood_record,
             commands::stop_session,
             commands::dashboard_stats,
             commands::terminal_spawn_login,

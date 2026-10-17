@@ -40,6 +40,10 @@ lint:
 test:
     cargo test --workspace
 
+# AJ-E210: regenerate the E2 validation gate report from the matrix.
+e2-gate:
+    ./scripts/e2_gate_report.sh > docs/qa/gate-E2-validation.md
+
 doc:
     cargo doc --workspace --no-deps
 
