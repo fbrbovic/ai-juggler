@@ -463,6 +463,21 @@ export async function accountImport(
   plan: string | null,
 ): Promise<ImportResult> {
   if (!hasBackend) {
+    // AJ-E304 test seam: substrings of source paths that reject with a
+    // coded error, so the partial-failure accept flow (one item fails,
+    // the rest complete) is reviewable in a plain browser.
+    const failPaths =
+      (window as unknown as { __AIJ_IMPORT_FAIL_PATHS__?: string[] })
+        .__AIJ_IMPORT_FAIL_PATHS__ ?? [];
+    for (const needle of failPaths) {
+      if (sourcePath.includes(needle)) {
+        throw {
+          code: "io",
+          retryable: true,
+          user_message: "Disk full — this one couldn't be copied.",
+        };
+      }
+    }
     return {
       account: {
         id: `claude-${label.toLowerCase().replace(/\s+/g, "-")}`,
@@ -2450,4 +2465,75 @@ export async function scanCancel(): Promise<void> {
     return;
   }
   await invoke("scan_cancel");
+}
+
+/** AJ-E304: one recommended item (label + one-line rationale). */
+export interface RecommendedItemData {
+  provider: string;
+  label: string;
+  /** import | add */
+  action: string;
+  rationale: string;
+  default_on: boolean;
+  path?: string | null;
+}
+
+/** AJ-E304: the set-level proposal (one accept-click juggling set). */
+export interface RecommendationData {
+  items: RecommendedItemData[];
+  summary: string;
+  start_here?: string | null;
+}
+
+/** The no-backend proposal default: the §5 worked example. */
+const DEFAULT_RECOMMENDATION: RecommendationData = {
+  items: [
+    {
+      provider: "claude-code",
+      label: "Work",
+      action: "import",
+      rationale: "Signed in — import keeps history",
+      default_on: true,
+      path: "/Users/you/.claude-work",
+    },
+    {
+      provider: "claude-code",
+      label: "Personal",
+      action: "import",
+      rationale: "Signed in — import keeps history",
+      default_on: true,
+      path: "/Users/you/.claude-personal",
+    },
+    {
+      provider: "claude-code",
+      label: "Side",
+      action: "import",
+      rationale: "Active — you'll sign in after import",
+      default_on: true,
+      path: "/Users/you/.claude-side",
+    },
+    {
+      provider: "codex",
+      label: "Codex",
+      action: "add",
+      rationale: "Add Codex (installed, not set up)",
+      default_on: true,
+      path: null,
+    },
+  ],
+  summary:
+    "Your juggling set: Claude ×3 (Work — signed in; Personal — signed in; Side — needs sign-in) + Codex ×1 (signed in).",
+  start_here: "-users-dev-api",
+};
+
+/** AJ-E304: the set-level recommendation (staging only — the accept
+ * click executes). */
+export async function recommendationFor(): Promise<RecommendationData> {
+  if (!hasBackend) {
+    return (
+      (window as unknown as { __AIJ_RECOMMENDATION__?: RecommendationData })
+        .__AIJ_RECOMMENDATION__ ?? DEFAULT_RECOMMENDATION
+    );
+  }
+  return invoke<RecommendationData>("recommendation_for");
 }

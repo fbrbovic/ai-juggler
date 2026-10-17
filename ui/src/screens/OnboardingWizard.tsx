@@ -14,6 +14,8 @@ import {
   terminalSpawnLogin,
   type ProbeRowData,
   type ScanReportData,
+  type RecommendationData,
+  recommendationFor,
   type AccountInfo,
   type DiscoveredInfo,
   type ImportResult,
@@ -321,6 +323,88 @@ function CandidateCards({
   );
 }
 
+/** The Customise view (§5): per-item toggles — the default-ON set
+ * first, quiet items under "Found but quiet", fresh adds listed;
+ * every item shows its one-line rationale. Accept executes the
+ * chosen set sequentially (⌘↩ accepts). */
+function ProposalBlock({
+  recommendation,
+  choices,
+  onChoice,
+  onAccept,
+}: {
+  recommendation: RecommendationData;
+  choices: Record<number, boolean>;
+  onChoice: (index: number, on: boolean) => void;
+  onAccept: () => void;
+}): JSX.Element {
+  const on = recommendation.items.filter((_, index) => choices[index]);
+  const quiet = recommendation.items.filter((item) => !item.default_on);
+  const row = (item: RecommendationData["items"][number], index: number): JSX.Element => {
+    const isQuiet = !item.default_on;
+    return (
+      <li
+        key={`${item.provider}-${item.label}-${index}`}
+        className="flex flex-col gap-0.5 border-b border-hairline/50 pb-1.5 last:border-0 last:pb-0"
+        data-testid="proposal-item"
+        data-quiet={isQuiet ? "true" : "false"}
+      >
+        <label className="flex items-center gap-2 text-xs">
+          <input
+            type="checkbox"
+            checked={choices[index] ?? item.default_on}
+            onChange={(event) => onChoice(index, event.target.checked)}
+            className="size-3.5 accent-[var(--color-accent)]"
+            data-testid="proposal-toggle"
+            aria-label={`${item.label}: ${item.rationale}`}
+          />
+          <span className="font-medium">{item.label}</span>
+          <span className="text-muted">{item.rationale}</span>
+        </label>
+      </li>
+    );
+  };
+  return (
+    <div
+      className="flex flex-col gap-3 rounded-xl border border-hairline px-4 py-3.5"
+      data-testid="proposal-block"
+    >
+      <p className="text-xs leading-relaxed text-muted">{recommendation.summary}</p>
+      {recommendation.start_here && (
+        <p className="text-xs text-muted" data-testid="start-here">
+          Start here: <span className="font-mono text-ink">{recommendation.start_here}</span> —
+          your most recent project.
+        </p>
+      )}
+      <ul className="flex flex-col gap-1.5">
+        {recommendation.items
+          .map((item, index) => ({ item, index }))
+          .filter(({ item }) => item.default_on)
+          .map(({ item, index }) => row(item, index))}
+      </ul>
+      {quiet.length > 0 && (
+        <div className="flex flex-col gap-1.5" data-testid="proposal-quiet">
+          <p className="text-[11px] font-medium text-muted">
+            Found but quiet — dormant setups stay unimported until you tick them.
+          </p>
+          <ul className="flex flex-col gap-1.5">
+            {recommendation.items
+              .map((item, index) => ({ item, index }))
+              .filter(({ item }) => !item.default_on)
+              .map(({ item, index }) => row(item, index))}
+          </ul>
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <Button size="sm" variant="primary" onClick={onAccept} data-testid="accept-setup">
+          Accept setup → ({on.length})
+        </Button>
+        <span className="text-[10px] text-muted">⌘↩ accepts</span>
+      </div>
+    </div>
+  );
+}
+
 /**
  * The onboarding wizard (ADR-0006, spec §12.1; AJ-E301): one shell
  * for EVERY Provider (`provider` parameter — no baked-in harness),
@@ -356,6 +440,16 @@ export function OnboardingWizard({
   const [editing, setEditing] = useState<string | null>(null);
   const [ignored, setIgnored] = useState<Record<string, boolean>>({});
   const [showIgnored, setShowIgnored] = useState(false);
+  // AJ-E304: the set-level proposal + the sequential accept.
+  const [proposalOpen, setProposalOpen] = useState(false);
+  const [recommendation, setRecommendation] = useState<RecommendationData | null>(null);
+  const [choices, setChoices] = useState<Record<number, boolean>>({});
+  const [acceptRun, setAcceptRun] = useState<
+    { label: string; state: "pending" | "done" | "failed"; error?: string }[] | null
+  >(null);
+  const [setSummary, setSetSummary] = useState<
+    { label: string; state: "done" | "failed"; error?: string }[] | null
+  >(null);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [importing, setImporting] = useState<DiscoveredInfo | null>(null);
@@ -409,6 +503,75 @@ export function OnboardingWizard({
   useEffect(() => {
     if (account) void accountLoginCommand(account.id).then(setCommand);
   }, [account]);
+
+  // AJ-E304: the proposal computes once per scan (staging only).
+  useEffect(() => {
+    if (step !== "detect" || recommendation !== null) return;
+    let cancelled = false;
+    void recommendationFor().then((proposal) => {
+      if (!cancelled) {
+        setRecommendation(proposal);
+        setChoices(
+          Object.fromEntries(proposal.items.map((item, index) => [index, item.default_on])),
+        );
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [step, recommendation]);
+
+  // ⌘↩ accepts the proposal when it is open (pass2/03 §5).
+  useEffect(() => {
+    if (!proposalOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && acceptRun === null) {
+        event.preventDefault();
+        void acceptTheSetup();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [proposalOpen, acceptRun, choices]);
+
+  // Accept executes the chosen set SEQUENTIALLY with per-item
+  // progress; a failed item degrades ITSELF only (Req.6).
+  const acceptTheSetup = async () => {
+    if (!recommendation) return;
+    const picked = recommendation.items
+      .map((item, index) => ({ item, index }))
+      .filter(({ index }) => choices[index]);
+    setAcceptRun(
+      picked.map(({ item }) => ({ label: item.label, state: "pending" as const })),
+    );
+    const results: { label: string; state: "done" | "failed"; error?: string }[] = [];
+    for (const { item } of picked) {
+      try {
+        if (item.action === "import" && item.path) {
+          await accountImport(item.provider, item.path, item.label, null);
+        } else {
+          await createAccount(item.provider, item.label, null);
+        }
+        results.push({ label: item.label, state: "done" });
+      } catch (cause) {
+        results.push({ label: item.label, state: "failed", error: errorText(cause) });
+      }
+      setAcceptRun(
+        picked.map(({ item: pickedItem }, index) => ({
+          label: pickedItem.label,
+          state: index < results.length ? results[index]!.state : "pending",
+          error: index < results.length ? results[index]!.error : undefined,
+        })),
+      );
+    }
+    onAccountCreated();
+    setAcceptRun(null);
+    setImporting(null);
+    setAccount(null);
+    setSetSummary(results);
+    setStep("summary");
+  };
 
   // Focus trap + return-focus + Esc (idle only — a running setup
   // never dies by stray key).
@@ -594,6 +757,44 @@ export function OnboardingWizard({
                 </p>
               </div>
 
+              {recommendation !== null && acceptRun === null && setSummary === null && (
+                <div
+                  className="flex flex-col gap-2.5 rounded-xl border border-accent/30 bg-accent-soft px-4 py-3.5"
+                  data-testid="proposal-teaser"
+                >
+                  <p className="text-xs leading-relaxed text-ink" data-testid="proposal-summary">
+                    {recommendation.summary}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      onClick={() => setProposalOpen(true)}
+                      data-testid="use-recommended"
+                    >
+                      Use recommended setup →
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => setProposalOpen((open) => !open)}
+                      data-testid="proposal-customise"
+                      aria-expanded={proposalOpen}
+                    >
+                      Customise
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {proposalOpen && recommendation !== null && acceptRun === null && (
+                <ProposalBlock
+                  recommendation={recommendation}
+                  choices={choices}
+                  onChoice={(index, on) => setChoices((current) => ({ ...current, [index]: on }))}
+                  onAccept={() => void acceptTheSetup()}
+                />
+              )}
+
               {report === null ? (
                 <div
                   className="flex items-center gap-3 rounded-xl border border-hairline px-4 py-5"
@@ -605,6 +806,40 @@ export function OnboardingWizard({
                     Checking your machine… {progress ? `${progress.done} of ${progress.total} checks` : "…"}
                   </span>
                 </div>
+              ) : acceptRun !== null ? (
+                <ul className="flex flex-col gap-1.5" data-testid="accept-progress" aria-live="polite">
+                  {acceptRun.map((entry) => (
+                    <li
+                      key={entry.label}
+                      className="flex items-center gap-2 rounded-lg border border-hairline px-3 py-2 text-xs"
+                      data-testid="accept-item"
+                      data-state={entry.state}
+                    >
+                      <span
+                        className={
+                          entry.state === "done"
+                            ? "text-success"
+                            : entry.state === "failed"
+                              ? "text-danger"
+                              : "text-muted"
+                        }
+                      >
+                        {entry.state === "done" ? "✓" : entry.state === "failed" ? "✕" : "…"}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+                      <span className="text-[10px] text-muted">
+                        {entry.state === "pending"
+                          ? "importing…"
+                          : entry.state === "done"
+                            ? "imported"
+                            : "failed"}
+                      </span>
+                      {entry.state === "failed" && entry.error && (
+                        <span className="text-[10px] text-danger">{entry.error}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
               ) : reportDeniedCount(report.probes) > 0 ? (
                 <div
                   className="flex flex-col gap-2 rounded-xl border border-hairline px-4 py-4"
@@ -884,7 +1119,38 @@ export function OnboardingWizard({
           )}
 
           {/* -------------------------------------------------- summary */}
-          {step === "summary" && account && (
+          {step === "summary" && setSummary !== null && (
+            <div className="flex flex-col gap-4" data-testid="set-summary">
+              <div className="flex items-center gap-2">
+                <span className="dot-live size-2.5 rounded-full bg-success" />
+                <p className="text-sm font-medium">Your juggling set is ready</p>
+              </div>
+              <ul className="flex flex-col gap-2 text-xs leading-relaxed text-muted">
+                {setSummary.map((entry) => (
+                  <li key={entry.label} className="flex gap-2" data-testid="set-summary-item" data-state={entry.state}>
+                    <span className={entry.state === "done" ? "text-success" : "text-danger"}>
+                      {entry.state === "done" ? "✓" : "✕"}
+                    </span>
+                    <span>
+                      <span className="text-ink">{entry.label}</span> —{" "}
+                      {entry.state === "done" ? "imported" : `failed: ${entry.error ?? "unknown"}`}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              {recommendation?.start_here && (
+                <p className="text-xs text-muted" data-testid="start-here">
+                  Start here: <span className="font-mono text-ink">{recommendation.start_here}</span>{" "}
+                  — your most recent project.
+                </p>
+              )}
+              <p className="text-[11px] text-muted">
+                Launch your first Instance from <span className="text-ink">New session</span>, or
+                add another account anytime.
+              </p>
+            </div>
+          )}
+          {step === "summary" && account && setSummary === null && (
             <div className="flex flex-col gap-4">
               <div className="flex items-center gap-2">
                 <span className="dot-live size-2.5 rounded-full bg-success" />
@@ -995,7 +1261,7 @@ export function OnboardingWizard({
                 onClose();
               }}
             >
-              Done
+              {setSummary !== null ? "Done" : loginState === "logged_in" ? "Continue" : "Done"}
             </Button>
           )}
         </div>

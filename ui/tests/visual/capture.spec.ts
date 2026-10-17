@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking", "28-switch", "29-door", "30-switchback", "31-redaction", "32-graph", "33-beta", "34-wizard", "35-candidates"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking", "28-switch", "29-door", "30-switchback", "31-redaction", "32-graph", "33-beta", "34-wizard", "35-candidates", "36-recommend"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -3744,6 +3744,219 @@ for (const theme of THEMES) {
       expect(box!.width).toBeLessThanOrEqual(vp.width - 80);
       await page.screenshot({
         path: resolve(GALLERY, `35-candidates/long-path-${vp.name}-${theme}.png`),
+      });
+    });
+  }
+}
+
+/**
+ * AJ-E304 gallery 36 — the recommended-set proposal: the teaser with
+ * the worked-example sentence, Customise expanded (checkbox list with
+ * rationales), accept-in-progress (per-item states; the add item hangs
+ * so the intermediate list is reviewable), and the partial-failure end
+ * state (item 2 of 4 rejects with a coded reason — 3 done, 1 failed,
+ * 0 aborts) — 1280×800 and 390×844 × light+dark.
+ */
+const WORKED_EXAMPLE_RECOMMENDATION = {
+  items: [
+    {
+      provider: "claude-code",
+      label: "Work",
+      action: "import",
+      rationale: "Signed in — import keeps history",
+      default_on: true,
+      path: "/Users/you/.claude-work",
+    },
+    {
+      provider: "claude-code",
+      label: "Personal",
+      action: "import",
+      rationale: "Signed in — import keeps history",
+      default_on: true,
+      path: "/Users/you/.claude-personal",
+    },
+    {
+      provider: "claude-code",
+      label: "Side",
+      action: "import",
+      rationale: "Active — you'll sign in after import",
+      default_on: true,
+      path: "/Users/you/.claude-side",
+    },
+    {
+      provider: "codex",
+      label: "Codex",
+      action: "add",
+      rationale: "Add Codex (installed, not set up)",
+      default_on: true,
+      path: null,
+    },
+  ],
+  summary:
+    "Your juggling set: Claude ×3 (Work — signed in; Personal — signed in; Side — needs sign-in) + Codex ×1 (signed in).",
+  start_here: "-users-dev-api",
+};
+
+const openProposalDetect = async (
+  page: import("@playwright/test").Page,
+  theme: string,
+  vp: { width: number; height: number },
+  extraWindows: Record<string, unknown> = {},
+  rec: unknown = WORKED_EXAMPLE_RECOMMENDATION,
+) => {
+  await page.addInitScript(
+    ({ fixture, rec, theme: themeName, extra }) => {
+      const w = window as unknown as Record<string, unknown>;
+      w.__AIJ_FIXTURE__ = fixture;
+      w.__AIJ_PROVIDER_INSTALLS__ = [
+        {
+          provider: "claude-code",
+          display_name: "Claude Code",
+          install_url: "https://claude.com/download",
+          status: "installed",
+          version: "2.1.296",
+          binary: "/usr/local/bin/claude",
+          notes: [],
+        },
+      ];
+      w.__AIJ_SCAN_REPORT__ = {
+        installs: [
+          {
+            harness: "claude-code",
+            path: "/Users/you/.claude-work",
+            origin: "home-pattern",
+            login: "logged_in",
+            bytes: 9_000_000,
+            last_used_secs: Math.floor(Date.now() / 1000) - 86_400,
+            managed: false,
+            notes: [],
+            inference: {
+              purpose: "Work",
+              purpose_confidence: "found",
+              login: "signed-in",
+              login_confidence: "found",
+              activity: "active",
+              activity_confidence: "found",
+              activity_words: "Active this week",
+              keychain_bound: false,
+            },
+            signals: ["home-pattern"],
+          },
+        ],
+        probes: [],
+        seeds: [],
+        desktop_apps: [],
+        cancelled: false,
+      };
+      w.__AIJ_RECOMMENDATION__ = rec;
+      Object.assign(w, extra);
+      localStorage.setItem("aij.theme", themeName);
+      localStorage.setItem("aij.onboarding.dismissed", "1");
+      sessionStorage.setItem("aij.ready.skipped", "1");
+    },
+    { fixture: honestEmpty, rec, theme, extra: extraWindows },
+  );
+  await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme as "dark" | "light" });
+  await page.setViewportSize({ width: vp.width, height: vp.height });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Accounts" }).click();
+  await page.getByRole("button", { name: /Add account|Finish setting up/ }).first().click();
+  await page.getByTestId("install-continue").click();
+  await expect(page.getByTestId("proposal-teaser")).toBeVisible();
+};
+
+for (const theme of THEMES) {
+  for (const vp of WIZARD_VP) {
+    test(`recommend — teaser + customise — ${vp.name} — ${theme}`, async ({ page }) => {
+      // Customise shows the all-signed-in set AND the collapsed
+      // "Found but quiet" group (dormant Lab, default OFF).
+      const allSignedIn = {
+        items: [
+          ...WORKED_EXAMPLE_RECOMMENDATION.items.slice(0, 3),
+          WORKED_EXAMPLE_RECOMMENDATION.items[3],
+          {
+            provider: "claude-code",
+            label: "Lab",
+            action: "import",
+            rationale: "Dormant — include when you want it",
+            default_on: false,
+            path: "/Users/you/.claude-lab",
+          },
+        ],
+        summary:
+          "Your juggling set: Claude ×3 (Work — signed in; Personal — signed in; Side — signed in) + Codex ×1 (signed in).",
+        start_here: "-users-dev-api",
+      };
+      await openProposalDetect(page, theme, vp, {}, allSignedIn);
+      await expect(page.getByTestId("proposal-summary")).toContainText(
+        "Your juggling set: Claude ×3",
+      );
+      await page.screenshot({
+        path: resolve(GALLERY, `36-recommend/proposal-${vp.name}-${theme}.png`),
+        fullPage: true,
+      });
+      await page.getByTestId("proposal-customise").click();
+      const block = page.getByTestId("proposal-block");
+      await expect(block).toBeVisible();
+      await expect(page.getByTestId("proposal-toggle")).toHaveCount(5);
+      // The dormant item rides under the quiet group, unchecked.
+      const quiet = page.getByTestId("proposal-quiet");
+      await expect(quiet).toContainText("Found but quiet");
+      await expect(quiet.getByTestId("proposal-toggle")).toHaveCount(1);
+      await expect(quiet.getByTestId("proposal-toggle")).not.toBeChecked();
+      await expect(page.getByTestId("accept-setup")).toContainText("Accept setup → (4)");
+      await page.screenshot({
+        path: resolve(GALLERY, `36-recommend/customise-${vp.name}-${theme}.png`),
+        fullPage: true,
+      });
+    });
+
+    test(`recommend — accept in progress (per-item states) — ${vp.name} — ${theme}`, async ({
+      page,
+    }) => {
+      await openProposalDetect(page, theme, vp, { __AIJ_CREATE_HANG__: true });
+      await page.getByTestId("use-recommended").click();
+      await page.getByTestId("accept-setup").click();
+      await expect(page.getByTestId("accept-progress")).toBeVisible();
+      await expect(page.getByTestId("accept-item")).toHaveCount(4);
+      // The three imports resolve; the add hangs — the list freezes reviewable.
+      await expect(
+        page.locator("[data-testid='accept-item'][data-state='done']"),
+      ).toHaveCount(3);
+      await expect(
+        page.locator("[data-testid='accept-item'][data-state='pending']"),
+      ).toHaveCount(1);
+      await page.screenshot({
+        path: resolve(GALLERY, `36-recommend/accept-progress-${vp.name}-${theme}.png`),
+        fullPage: true,
+      });
+    });
+
+    test(`recommend — one item fails, the rest complete (0 aborts) — ${vp.name} — ${theme}`, async ({
+      page,
+    }) => {
+      await openProposalDetect(page, theme, vp, {
+        __AIJ_IMPORT_FAIL_PATHS__: ["personal"],
+      });
+      await page.getByTestId("use-recommended").click();
+      await page.getByTestId("accept-setup").click();
+      const summary = page.getByTestId("set-summary");
+      await expect(summary).toBeVisible();
+      // All 4 picked items appear — a failure never aborts the run.
+      await expect(page.getByTestId("set-summary-item")).toHaveCount(4);
+      await expect(
+        page.locator("[data-testid='set-summary-item'][data-state='done']"),
+      ).toHaveCount(3);
+      const failed = page.locator(
+        "[data-testid='set-summary-item'][data-state='failed']",
+      );
+      await expect(failed).toHaveCount(1);
+      await expect(failed).toContainText("Personal");
+      await expect(failed).toContainText("Disk full");
+      await expect(page.getByTestId("start-here")).toContainText("-users-dev-api");
+      await page.screenshot({
+        path: resolve(GALLERY, `36-recommend/set-summary-${vp.name}-${theme}.png`),
+        fullPage: true,
       });
     });
   }

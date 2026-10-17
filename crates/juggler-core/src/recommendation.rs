@@ -338,4 +338,47 @@ mod tests {
         let two = serde_json::to_vec(&recommend(&candidates, &[], Some("p".into()))).unwrap();
         assert_eq!(one, two);
     }
+
+    /// Budget: ≤200 candidates propose well inside the 100 ms cap
+    /// (SPEC §26 staging; measured, not assumed).
+    #[test]
+    fn two_hundred_candidates_within_budget() {
+        let purposes = ["Work", "Personal", "Side", "Lab", "Api"];
+        let candidates: Vec<RecCandidate> = (0..200)
+            .map(|index| {
+                let purpose = purposes[index % purposes.len()].to_owned();
+                RecCandidate {
+                    provider: if index % 4 == 3 {
+                        "codex"
+                    } else {
+                        "claude-code"
+                    }
+                    .to_owned(),
+                    signed_in: index % 3 != 0,
+                    dormant: index % 10 == 0,
+                    managed: false,
+                    source_path: Some(format!("/x/{purpose}/{index}")),
+                    purpose,
+                }
+            })
+            .collect();
+        let gaps = vec![
+            RecProviderGap {
+                provider: "codex".to_owned(),
+                display_name: "Codex".to_owned(),
+            },
+            RecProviderGap {
+                provider: "gemini".to_owned(),
+                display_name: "Gemini CLI".to_owned(),
+            },
+        ];
+        let start = std::time::Instant::now();
+        let recommendation = recommend(&candidates, &gaps, Some("~/Dev/api".into()));
+        let elapsed = start.elapsed();
+        assert_eq!(recommendation.items.len(), 202);
+        assert!(
+            elapsed.as_millis() < 100,
+            "202 items proposed in {elapsed:?} — the 100 ms budget blew"
+        );
+    }
 }
