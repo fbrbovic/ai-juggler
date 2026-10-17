@@ -601,6 +601,66 @@ pub fn ranking_rows_inner(
     state: &std::sync::Arc<crate::state::AppState>,
     project: Option<String>,
 ) -> AppResult<Vec<RankedRowInfo>> {
+    rank_candidates_for(state, project.as_deref(), None)
+}
+
+/// AJ-E209: the switch-side inputs for §Q6 — the source Provider
+/// (pair fidelity + replay cost), the source's minutes-to-exhaustion
+/// (return bonus), the returnable originals, and the source's
+/// measured replay floor.
+struct SwitchRankContext {
+    /// The switching-away Provider id.
+    source_provider: String,
+    /// The SOURCE account's TTE minutes (None = unknown).
+    source_tte_min: Option<f64>,
+    /// Accounts that are returnable originals (open excursions).
+    returnable_accounts: std::collections::BTreeSet<String>,
+    /// The source conversation's measured replay floor (tokens).
+    source_replay_tokens: Option<u64>,
+}
+
+/// AJ-E209: the priced replay cost for a cross-Provider pair
+/// (same-Provider transplants pay nothing into costFit — the §Q6
+/// extension prices REPLAY, per pass2/02 §7). Returns 0.0 when
+/// unpriced (neutral, exactly like an unpriced launch).
+fn replay_cost_for(
+    context: &SwitchRankContext,
+    account: &juggler_core::model::Account,
+    catalog: &juggler_core::cost_ledger::PricingCatalog,
+    now: i64,
+) -> f64 {
+    if context.source_provider.as_str() == account.harness.as_str() {
+        return 0.0;
+    }
+    // Cross-Provider ⇒ replay today; price the measured floor at
+    // the target's bundled rate.
+    let rate = catalog
+        .bundled
+        .first()
+        .map(|row| row.model.clone())
+        .and_then(|model| {
+            catalog.price_tokens(
+                &model,
+                now,
+                juggler_core::model::TokenCounts {
+                    input: 1_000_000,
+                    ..juggler_core::model::TokenCounts::default()
+                },
+            )
+        });
+    juggler_handover::ranking::switch_cost_usd(true, context.source_replay_tokens, rate)
+        .unwrap_or(0.0)
+}
+
+/// The §Q6 candidate builder shared by the launch ranking (no
+/// switch context) and the switch entry point (E209: real pair
+/// fidelity, priced switch cost, return likelihood).
+#[allow(clippy::too_many_lines)]
+fn rank_candidates_for(
+    state: &std::sync::Arc<crate::state::AppState>,
+    project: Option<&str>,
+    switch: Option<&SwitchRankContext>,
+) -> AppResult<Vec<RankedRowInfo>> {
     let storage = lock_storage_arc(state)?;
     let accounts = storage.accounts().list()?;
     let now = juggler_core::model::Timestamp::now().millis();
@@ -618,7 +678,6 @@ pub fn ranking_rows_inner(
         })
         .collect();
     let project_sessions: Vec<String> = project
-        .as_ref()
         .map(|project_id| {
             sessions
                 .iter()
@@ -670,7 +729,7 @@ pub fn ranking_rows_inner(
                     record
                         .project
                         .as_ref()
-                        .is_some_and(|p| p.as_str() == project.as_deref().unwrap_or(""))
+                        .is_some_and(|p| p.as_str() == project.unwrap_or_default())
                         && recipes.iter().any(|recipe| {
                             recipe.id == record.profile
                                 && recipe.account.as_str() == account.id.as_str()
@@ -711,18 +770,36 @@ pub fn ranking_rows_inner(
             })
             .count();
         let active_sessions = u32::try_from(active_sessions).unwrap_or(u32::MAX);
+        // AJ-E209: with a switch context the pair's REAL fidelity
+        // rides the 0.15 slot (E203 matrix), a replay pair pays its
+        // priced switch cost into costFit, and returnable originals
+        // carry the source's TTE for the return bonus.
+        let (fidelity, switch_cost) = match switch {
+            Some(context) => (
+                juggler_handover::ranking::pair_fidelity_number(
+                    &context.source_provider,
+                    account.harness.as_str(),
+                ),
+                replay_cost_for(context, account, &catalog, now),
+            ),
+            None => (0.5, 0.0), // launch-neutral, documented (§Q6)
+        };
+        let projected_usd = projected_usd.map(|usd| usd + switch_cost);
         candidates.push(juggler_core::ranking::Candidate {
             account: account.id.as_str().to_owned(),
             logged_out: login_state_of(account) == juggler_adapters::LoginState::LoggedOut,
-            wrong_provider: false, // request-restriction surface lands with the switch epic
+            wrong_provider: false, // request-restriction surface rides E210's pair gating
             exhausted_no_reset,
             headroom_pct,
             headroom_confidence: confidence,
             affinity,
-            fidelity: 0.5, // switch-fidelity matrix lands with its epic — neutral, documented
+            fidelity,
             projected_usd,
             active_sessions,
             soft_cap: 4,
+            returnable: switch
+                .is_some_and(|context| context.returnable_accounts.contains(account.id.as_str())),
+            source_resets_min: switch.and_then(|context| context.source_tte_min),
         });
     }
 
@@ -10182,4 +10259,625 @@ fn redaction_items_of(source: &juggler_core::model::InstanceRecord) -> Vec<Redac
             segment: u32::try_from(listed.segment).unwrap_or(u32::MAX),
         })
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// AJ-E209: the badged switch entry point, the Switch Graph, and the
+// per-node actions (Resume / Export pack) — ranking suggests only.
+
+/// One ranked, badged switch destination (the handover section's
+/// rows). Suggest-only: the click is the user's.
+#[derive(Clone, PartialEq, Debug, serde::Serialize)]
+pub struct SwitchTargetInfo {
+    /// The launch recipe the switch would run under.
+    pub recipe_id: String,
+    /// Its account id.
+    pub account_id: String,
+    /// Its account label.
+    pub account_label: String,
+    /// The ordered-pair badge wire name ("F1 · Beta" — never
+    /// "lossless" below F4; cross-Provider always carries Beta).
+    pub badge: String,
+    /// Validated state (false until E210's fixtures flip cells).
+    pub validated: bool,
+    /// Cross-Provider pair (badge + Drop list are mandatory).
+    pub cross_provider: bool,
+    /// The pair's Drop list (the badge's honest companion).
+    pub drops: Vec<String>,
+    /// The §Q6 score (`None` = hard-filtered, reason alongside).
+    pub score: Option<f64>,
+    /// Hard-filter reason, when filtered.
+    pub filtered_reason: Option<String>,
+    /// Top-2 contributing factors in words.
+    pub top_factors: Vec<String>,
+    /// All inputs for the "Why this order?" expander.
+    pub factors: Vec<(String, f64)>,
+    /// Confidence badge (Measured/Computed/Estimate).
+    pub confidence: String,
+    /// Minutes-to-exhaustion, when known.
+    pub tte_min: Option<f64>,
+    /// The top survivor (suggest-only).
+    pub suggested: bool,
+}
+
+/// AJ-E209: the ranked + badged destinations for one source session
+/// (§Q6 with the switch extensions; D-04/D-11 badges; suggest-only).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] when the source session or ranking
+/// inputs cannot be resolved.
+#[tauri::command]
+pub fn switch_targets(
+    state: tauri::State<'_, Arc<AppState>>,
+    session_id: String,
+) -> AppResult<Vec<SwitchTargetInfo>> {
+    switch_targets_impl(state.inner(), &session_id)
+}
+
+/// Core implementation shared with integration tests.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] per the command docs.
+pub fn switch_targets_impl(
+    state: &Arc<AppState>,
+    session_id: &str,
+) -> AppResult<Vec<SwitchTargetInfo>> {
+    let (source, source_account) = handover_source(state, session_id)?;
+    let context = {
+        let storage = lock_storage_arc(state)?;
+        let now = Timestamp::now().millis();
+        // The source's TTE (return-bonus input).
+        let source_tte_min = quota_tte(&quota_display_inner(&storage, &source_account, now));
+        // Returnable originals: accounts an OPEN excursion leads
+        // back to (E207's walk, reusable here).
+        let mut returnable = std::collections::BTreeSet::new();
+        let graph = storage.switch_graph();
+        for project in storage.projects().list()? {
+            for work in graph.works_for_project(&project.id)? {
+                let epochs = graph.epochs_for_work(&work.id)?;
+                let edges = graph.edges_for_work(&work.id)?;
+                for edge in edges.iter().filter(|edge| {
+                    matches!(edge.state, juggler_core::model::EdgeState::Confirmed)
+                        && edge.parent_edge_a.is_none()
+                }) {
+                    let Some(to_epoch) = &edge.to_epoch else {
+                        continue;
+                    };
+                    let returned = edges.iter().any(|other| {
+                        matches!(other.state, juggler_core::model::EdgeState::Confirmed)
+                            && &other.from_epoch == to_epoch
+                    });
+                    if !returned {
+                        returnable.insert(edge.from_account.to_string());
+                    }
+                    let _ = &epochs;
+                }
+            }
+        }
+        // The source's measured replay floor (its transcript usage).
+        let source_replay_tokens = source.transcript_ref.as_ref().and_then(|reference| {
+            std::fs::read(&reference.path).ok().map(|bytes| {
+                let parsed = juggler_adapters::claude_transcript::parse_transcript(&bytes);
+                parsed.usage.input.saturating_add(parsed.usage.output)
+            })
+        });
+        SwitchRankContext {
+            source_provider: source_account.harness.to_string(),
+            source_tte_min,
+            returnable_accounts: returnable,
+            source_replay_tokens,
+        }
+    };
+    let ranked = rank_candidates_for(
+        state,
+        source.project.as_ref().map(ToString::to_string).as_deref(),
+        Some(&context),
+    )?;
+    let by_account: std::collections::BTreeMap<String, &RankedRowInfo> = ranked
+        .iter()
+        .map(|row| (row.account.clone(), row))
+        .collect();
+    let storage = lock_storage_arc(state)?;
+    let mut out = Vec::new();
+    for account in storage.accounts().list()? {
+        let Some(row) = by_account.get(account.id.as_str()) else {
+            continue;
+        };
+        for recipe in storage.profiles().list_by_account(&account.id)? {
+            if recipe.id == source.profile {
+                continue; // the source itself is not a destination
+            }
+            let cross = account.harness.as_str() != context.source_provider;
+            let carry = carry_lists_of(&juggler_handover::fidelity::base_dispositions(
+                context.source_provider.as_str(),
+                account.harness.as_str(),
+            ));
+            out.push(SwitchTargetInfo {
+                recipe_id: recipe.id.to_string(),
+                account_id: account.id.to_string(),
+                account_label: account.label.clone(),
+                badge: juggler_handover::ranking::pair_badge(
+                    context.source_provider.as_str(),
+                    account.harness.as_str(),
+                ),
+                validated: false, // E210 owns flipping cells green
+                cross_provider: cross,
+                drops: carry.dropped.clone(),
+                score: row.score,
+                filtered_reason: row.filtered_reason.clone(),
+                top_factors: row.top_factors.clone(),
+                factors: row.factors.clone(),
+                confidence: row.confidence.clone(),
+                tte_min: row.tte_min,
+                suggested: row.suggested,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// One epoch node on the timeline.
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize)]
+pub struct EpochNodeInfo {
+    /// Epoch id.
+    pub id: String,
+    /// Provider id (the icon).
+    pub provider: String,
+    /// Account label.
+    pub account_label: String,
+    /// Instance-kind badge.
+    pub kind: String,
+    /// A native session exists AND its transcript survives (the
+    /// Resume action's honest gate).
+    pub resumable: bool,
+    /// The live session id, when one is attached.
+    pub session_id: Option<String>,
+}
+
+/// One labelled edge on the timeline.
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize)]
+pub struct EdgeInfo {
+    /// From epoch id.
+    pub from: String,
+    /// To epoch id (None until launched).
+    pub to: Option<String>,
+    /// The arrow's label ("transplant F1 · 12:04" / "replay F1 ·
+    /// ≈41k tok" / "switch-back ↺").
+    pub label: String,
+    /// The §9 reason, when the edge failed (dashed red + recovery).
+    pub failed_reason: Option<String>,
+    /// Switch-back edge (renders ↺).
+    pub switch_back: bool,
+}
+
+/// One work item's timeline.
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize)]
+pub struct WorkGraphInfo {
+    /// Work title.
+    pub title: String,
+    /// Epochs newer than the last fork/merge, in order.
+    pub epochs: Vec<EpochNodeInfo>,
+    /// Their edges.
+    pub edges: Vec<EdgeInfo>,
+    /// Older epochs collapsed away ("+n switches" — never unbounded).
+    pub collapsed: u32,
+    /// The S-F9 hop line (inform, never block).
+    pub hop_note: Option<String>,
+}
+
+/// AJ-E209 Req.4: the per-project Switch Graph — the timeline that
+/// answers "how did this work travel?".
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] when the project or graph reads
+/// fail.
+#[tauri::command]
+pub fn switch_graph_overview(
+    state: tauri::State<'_, Arc<AppState>>,
+    project_id: String,
+) -> AppResult<Vec<WorkGraphInfo>> {
+    switch_graph_overview_impl(state.inner(), &project_id)
+}
+
+/// Core implementation shared with integration tests.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] per the command docs.
+pub fn switch_graph_overview_impl(
+    state: &Arc<AppState>,
+    project_id: &str,
+) -> AppResult<Vec<WorkGraphInfo>> {
+    graph_works_for(state, project_id)
+}
+
+/// The graph walk behind [`switch_graph_overview_impl`].
+fn graph_works_for(state: &Arc<AppState>, project_id: &str) -> AppResult<Vec<WorkGraphInfo>> {
+    let storage = lock_storage_arc(state)?;
+    let graph = storage.switch_graph();
+    let accounts: std::collections::BTreeMap<_, _> = storage
+        .accounts()
+        .list()?
+        .into_iter()
+        .map(|account| (account.id.clone(), account.label.clone()))
+        .collect();
+    let works =
+        graph.works_for_project(&juggler_core::model::ProjectId::new(project_id.to_owned()))?;
+    let mut out = Vec::new();
+    for work in works {
+        out.push(work_graph_info(&storage, &graph, &accounts, &work)?);
+    }
+    Ok(out)
+}
+
+/// Maps one work item to its timeline (collapse + nodes + edges +
+/// the S-F9 hop note).
+fn work_graph_info(
+    storage: &juggler_core::storage::Storage,
+    graph: &juggler_core::storage::SwitchGraphRepo<'_>,
+    accounts: &std::collections::BTreeMap<juggler_core::model::AccountId, String>,
+    work: &juggler_core::model::WorkItem,
+) -> AppResult<WorkGraphInfo> {
+    let epochs = graph.epochs_for_work(&work.id)?;
+    let edges = graph.edges_for_work(&work.id)?;
+    let has_branch = epochs.iter().any(|epoch| {
+        epochs
+            .iter()
+            .filter(|other| other.resumed_from_epoch == Some(epoch.id.clone()))
+            .count()
+            > 1
+    });
+    // Collapse epochs older than the last fork/merge point.
+    let cut = if has_branch {
+        epochs
+            .iter()
+            .filter(|epoch| {
+                epochs
+                    .iter()
+                    .filter(|other| other.resumed_from_epoch == Some(epoch.id.clone()))
+                    .count()
+                    > 1
+            })
+            .rev()
+            .map(|epoch| epoch.id.clone())
+            .next()
+    } else {
+        None
+    };
+    let keep_from = cut.or_else(|| epochs.first().map(|epoch| epoch.id.clone()));
+    let visible_start = keep_from
+        .and_then(|id| epochs.iter().position(|epoch| epoch.id == id))
+        .unwrap_or(0);
+    let collapsed = u32::try_from(visible_start).unwrap_or_default();
+    let mut nodes = Vec::new();
+    for epoch in &epochs[visible_start.min(epochs.len())..] {
+        let resumable = epoch.native_id.as_deref().is_some_and(|id| !id.is_empty())
+            && epoch
+                .session_ref
+                .as_ref()
+                .and_then(|session| storage.sessions().get(session).ok())
+                .and_then(|record| {
+                    record
+                        .transcript_ref
+                        .as_ref()
+                        .map(|reference| reference.path.is_file())
+                })
+                .unwrap_or(false);
+        nodes.push(EpochNodeInfo {
+            id: epoch.id.to_string(),
+            provider: epoch.provider.to_string(),
+            account_label: accounts
+                .get(&epoch.account)
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_owned()),
+            kind: "terminal".to_owned(),
+            resumable,
+            session_id: epoch.session_ref.as_ref().map(ToString::to_string),
+        });
+    }
+    let (wire_edges, hops, tokens) = graph_edge_summary(&edges);
+
+    Ok(WorkGraphInfo {
+        title: work.title.clone(),
+        epochs: nodes,
+        edges: wire_edges,
+        collapsed,
+        hop_note: juggler_handover::ranking::hop_note(hops, tokens),
+    })
+}
+
+/// Wires one work's edges for the timeline: labels (mechanism +
+/// fidelity shown, switch-back ↺, failed reason) and the hop/token
+/// counts feeding the S-F9 note.
+fn graph_edge_summary(edges: &[juggler_core::model::SwitchEdge]) -> (Vec<EdgeInfo>, u32, u64) {
+    use juggler_core::model::EdgeState;
+    let mut wire_edges = Vec::new();
+    for edge in edges {
+        let back = edge.parent_edge_a.is_some();
+        let label = match &edge.state {
+            EdgeState::Failed { reason, .. } => format!("failed · {reason}"),
+            _ if back => format!(
+                "switch-back ↺ · {}",
+                edge.fidelity_shown.as_deref().unwrap_or("F4")
+            ),
+            _ => {
+                let mech = match edge.mechanism {
+                    juggler_core::model::SwitchMechanism::NativeResume => "native-resume",
+                    juggler_core::model::SwitchMechanism::Transplant => "transplant",
+                    juggler_core::model::SwitchMechanism::Replay => "replay",
+                    juggler_core::model::SwitchMechanism::Pack => "pack",
+                };
+                format!("{mech} {}", edge.fidelity_shown.as_deref().unwrap_or("F0"))
+            }
+        };
+        wire_edges.push(EdgeInfo {
+            from: edge.from_epoch.to_string(),
+            to: edge.to_epoch.as_ref().map(ToString::to_string),
+            label,
+            failed_reason: match &edge.state {
+                EdgeState::Failed { reason, .. } => Some(reason.clone()),
+                _ => None,
+            },
+            switch_back: back,
+        });
+    }
+    let hops = u32::try_from(
+        edges
+            .iter()
+            .filter(|edge| matches!(edge.state, EdgeState::Confirmed))
+            .count(),
+    )
+    .unwrap_or_default();
+    let tokens = edges
+        .iter()
+        .filter_map(|edge| edge.manifest_sha256.as_ref().map(|_| 0_u64))
+        .sum::<u64>();
+    (wire_edges, hops, tokens)
+}
+
+/// Finds one epoch (any project) with its session row + account —
+/// the graph actions' shared read side.
+fn find_epoch_with_session(
+    state: &Arc<AppState>,
+    epoch_id: &str,
+) -> AppResult<(
+    juggler_core::model::Epoch,
+    juggler_core::model::InstanceRecord,
+    juggler_core::model::Account,
+)> {
+    let storage = lock_storage_arc(state)?;
+    let graph = storage.switch_graph();
+    let wanted = juggler_core::model::EpochId::new(epoch_id.to_owned());
+    let mut found = None;
+    for project in storage.projects().list()? {
+        for work in graph.works_for_project(&project.id)? {
+            if let Some(epoch) = graph
+                .epochs_for_work(&work.id)?
+                .into_iter()
+                .find(|row| row.id == wanted)
+            {
+                found = Some(epoch);
+            }
+        }
+    }
+    let epoch = found.ok_or_else(|| AppError::Io {
+        context: "graph action",
+        message: "That epoch isn't in the graph".to_owned(),
+    })?;
+    let session = epoch
+        .session_ref
+        .as_ref()
+        .and_then(|id| storage.sessions().get(id).ok())
+        .ok_or_else(|| AppError::Io {
+            context: "graph action",
+            message: "The epoch has no session row".to_owned(),
+        })?;
+    let account = storage
+        .accounts()
+        .get(&epoch.account)
+        .map_err(|error| not_found_or_core(error, "account", &epoch.account.to_string()))?;
+    Ok((epoch, session, account))
+}
+
+/// AJ-E209 Req.5: resumes an epoch's native session (the graph's
+/// Resume action — suggest-chosen, the user's click).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] when the epoch or its account/
+/// recipe cannot be resolved or the spawn fails.
+#[tauri::command]
+pub fn epoch_resume(
+    state: tauri::State<'_, Arc<AppState>>,
+    epoch_id: String,
+) -> AppResult<LaunchResult> {
+    epoch_resume_impl(state.inner(), &epoch_id)
+}
+
+/// Core implementation shared with integration tests.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] per the command docs.
+pub fn epoch_resume_impl(state: &Arc<AppState>, epoch_id: &str) -> AppResult<LaunchResult> {
+    let (epoch, session_row, account) = find_epoch_with_session(state, epoch_id)?;
+    let native_id = epoch
+        .native_id
+        .clone()
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| AppError::Io {
+            context: "resume epoch",
+            message: "The epoch has no native session to resume".to_owned(),
+        })?;
+    let profile = {
+        let storage = lock_storage_arc(state)?;
+        storage
+            .profiles()
+            .get(&session_row.profile)
+            .map_err(|error| {
+                not_found_or_core(error, "profile", &session_row.profile.to_string())
+            })?
+    };
+    let adapter = state
+        .registry
+        .get(&account.harness)
+        .ok_or_else(|| AppError::UnknownHarness(account.harness.to_string()))?;
+    let new_session = SessionId::new(format!("sess-{}", unique_suffix()));
+    let spec = adapter.launch_spec(
+        &account,
+        &profile,
+        &session_row.cwd,
+        &LaunchMode::Resume {
+            session_id: native_id.clone(),
+            delta_prompt: None,
+        },
+    )?;
+    let spawned = state.supervisor.spawn(
+        &new_session,
+        &spec,
+        &ledger_ctx(
+            state,
+            &account,
+            session_row.project.as_ref().map(ToString::to_string),
+        ),
+    )?;
+    {
+        let machine = local_machine_id(state);
+        let storage = lock_storage_arc(state)?;
+        let usage = engine_usage_snapshot(&storage, &profile.id);
+        storage
+            .sessions()
+            .insert(&juggler_core::model::InstanceRecord {
+                id: new_session.clone(),
+                conversation: Some(juggler_core::model::ConversationId::new(native_id)),
+                profile: profile.id.clone(),
+                machine,
+                kind: juggler_core::model::InstanceKind::Terminal,
+                project: session_row.project.clone(),
+                cwd: session_row.cwd.clone(),
+                status: SessionStatus::Starting,
+                started_at: Timestamp::now(),
+                last_activity: None,
+                usage,
+                attention: None,
+                running: None,
+                window: None,
+                transcript_ref: session_row.transcript_ref.clone(),
+            })?;
+    }
+    Ok(LaunchResult {
+        session_id: new_session.to_string(),
+        pid: spawned.pid,
+    })
+}
+
+/// AJ-E209 Req.5: exports an epoch's pack (the graph's Export action)
+/// — conversation turns rendered through the AJ-E208 redaction
+/// policy (the GLOBAL choice — a standalone export has no
+/// destination Provider), written under `<app-data>/exports/`.
+/// Returns the pack directory for the toast.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] when the epoch cannot be resolved,
+/// the policy is unset (exports block like switches), or the write
+/// fails.
+#[tauri::command]
+pub fn pack_export(state: tauri::State<'_, Arc<AppState>>, epoch_id: String) -> AppResult<String> {
+    pack_export_impl(state.inner(), &epoch_id)
+}
+
+/// Core implementation shared with integration tests.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] per the command docs.
+pub fn pack_export_impl(state: &Arc<AppState>, epoch_id: &str) -> AppResult<String> {
+    use juggler_handover::pack::{ConversationMode, IrTurn, PackInput, PackSource};
+    use juggler_handover::redaction::{RedactionApply, RedactionPolicy, redacted_pack};
+
+    let (epoch, session_row, account) = find_epoch_with_session(state, epoch_id)?;
+    // The GLOBAL redaction policy governs standalone exports
+    // (unset blocks, exactly like switches — no default is applied).
+    let policy = {
+        let storage = lock_storage_arc(state)?;
+        juggler_handover::redaction::resolve_policy(redaction_global_of(&storage), None)
+            .ok_or_else(|| AppError::Io {
+                context: "export pack",
+                message: "Choose how secrets are handled in packs first (Settings → Privacy)"
+                    .to_owned(),
+            })?
+    };
+    let reference = session_row
+        .transcript_ref
+        .clone()
+        .ok_or_else(|| AppError::Io {
+            context: "export pack",
+            message: "The epoch has no transcript to pack".to_owned(),
+        })?;
+    let turns: Vec<IrTurn> = transcript_side(&reference.path)
+        .map(|(_, turns)| turns)
+        .unwrap_or_default();
+    let input = PackInput {
+        pack_id: format!("pack-{}", unique_suffix()),
+        created_at_ms: Timestamp::now().millis(),
+        work_id: epoch.work.to_string(),
+        edge_id: None,
+        source: PackSource {
+            provider: account.harness.to_string(),
+            account_label: account.label.clone(),
+            profile_name: None,
+            native_session_id: epoch.native_id.clone().unwrap_or_default(),
+            harness_version: None,
+            epoch_id: epoch.id.to_string(),
+        },
+        target_hint: None,
+        project: juggler_handover::pack::PackProject {
+            root: session_row.cwd.to_string_lossy().into_owned(),
+            project_id: session_row
+                .project
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+        },
+        git: juggler_handover::pack::PackGit {
+            branch: "unknown".to_owned(),
+            head_sha: None,
+            dirty: false,
+            diff_stat: None,
+            worktree_path: None,
+        },
+        turns,
+        compacted: false,
+        artifacts: juggler_handover::pack::PackArtifacts::default(),
+        fidelity: juggler_handover::pack::PackFidelity {
+            level: "F1".to_owned(),
+            score: 0.5,
+            caps_applied: vec!["unvalidated-pair".to_owned()],
+        },
+        quota_at_creation: None,
+        lineage: juggler_handover::pack::PackLineage::default(),
+        staged_files: Vec::new(),
+    };
+    let apply = RedactionApply {
+        strip: policy == RedactionPolicy::Strip,
+        keep: std::collections::BTreeSet::new(),
+    };
+    let pack = redacted_pack(&input, ConversationMode::Distilled { last_n: 12 }, &apply);
+    let dir = state
+        .data_dir
+        .join("exports")
+        .join(format!("pack-{}", unique_suffix()));
+    std::fs::create_dir_all(&dir).map_err(|error| AppError::Io {
+        context: "export pack",
+        message: format!("could not create {}: {error}", dir.display()),
+    })?;
+    juggler_handover::pack::write_pack(&dir, &pack).map_err(|error| AppError::Io {
+        context: "export pack",
+        message: error.to_string(),
+    })?;
+    Ok(dir.to_string_lossy().into_owned())
 }

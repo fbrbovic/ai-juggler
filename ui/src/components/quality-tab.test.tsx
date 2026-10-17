@@ -163,7 +163,11 @@ describe("AJ-E409 Quality tab signals (D-07)", () => {
   it("View as table swaps the chart for a text alternative (a11y)", async () => {
     const { container } = qualityShell(instance("full"));
     await waitFor(() => expect(container.querySelector('[data-testid="quality-tokens"]')).not.toBeNull());
-    const toggle = container.querySelector('button[aria-pressed]') as HTMLButtonElement;
+    // Scoped: the inspector now renders other aria-pressed toggles
+    // (AJ-E209 ranked switch rows) above this tab's own toggle.
+    const toggle = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("button[aria-pressed]"),
+    ).find((button) => button.textContent?.includes("View as table"))!;
     expect(toggle.textContent).toContain("View as table");
     fireEvent.click(toggle);
     const table = container.querySelector('[data-testid="quality-tokens"] table');

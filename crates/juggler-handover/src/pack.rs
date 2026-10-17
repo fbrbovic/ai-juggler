@@ -592,6 +592,9 @@ pub fn write_pack(dir: &Path, pack: &GeneratedPack) -> Result<(), PackWriteError
         .iter()
         .all(|(rel, _)| !rel.starts_with("diffs/"))
     {
+        // `fs::write` creates no directories — a diff-less pack never
+        // materialised `diffs/` via the extra-files loop above.
+        std::fs::create_dir_all(tmp.join("diffs"))?;
         std::fs::write(tmp.join("diffs/EMPTY"), b"no uncommitted diff at freeze\n")?;
     }
 
