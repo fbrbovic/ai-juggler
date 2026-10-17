@@ -12,7 +12,7 @@
 > state-changing action executes only on an explicit user click
 > (`docs/SPEC.md:26` automation invariant).
 
-### AJ-E301 Parameterise the wizard by Provider and add the Step-0 install gate | Status: TODO | Priority P0 | Effort M | Depends: none
+### AJ-E301 Parameterise the wizard by Provider and add the Step-0 install gate | Status: DONE-EVIDENCED | Priority P0 | Effort M | Depends: none
 **Goal**: One wizard shell serves every Provider instead of the Claude-only constant, and a missing CLI is caught before any Account is created.
 **User story**: As a new user without `claude` installed, I see "Claude Code isn't installed" with install help at step 0, so I never waste three steps reaching a dead Login.
 **Requirements**:
@@ -542,5 +542,22 @@ destination Provider's active policy before executing (D-14).
 Trap: never backfill a policy default for existing users;
 absence of a choice means "ask before first pack", not strip.
 
-
-
+**Status report (2026-10-16, AJ-E301)**: DONE-EVIDENCED — evidence
+`docs/qa/evidence/AJ-E301/manifest.md`. One wizard shell for every
+Provider (`provider` prop; the HARNESS constant is gone; both call
+sites pass it explicitly). Step 0 gates on the adapters' own
+`discover()`, probed in parallel off the UI thread: Installed vX ·
+Not installed · Installed (vX, unverified) per Provider; a missing
+binary shows Install→ (vendor page) + Continue without it and the
+Continue button never reaches Identity (account creation only makes
+a dir — the gate lives in the wizard, per the trap note). Errors are
+coded end-to-end (`{code, retryable, user_message}` on EVERY command
+rejection; the UI renders user_message + a retry affordance, never a
+raw OS string — all 13 render sites converted). Close is the confirm
+variant while a create/import is in flight ("it will appear in
+Accounts"); Esc closes only when idle; role=dialog + focus trap +
+return-focus + primary-button focus on step change. Re-entry with
+zero accounts after dismissal re-offers "Finish setting up AI
+Juggler" from Accounts. Gallery 34-wizard (14 captures) + a11y 2/2;
+the 16-onboarding-detect gallery now walks the gate. onboarding 4/4,
+vitest 254/254, playwright 419/419, verify green.

@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking", "28-switch", "29-door", "30-switchback", "31-redaction", "32-graph", "33-beta"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking", "28-switch", "29-door", "30-switchback", "31-redaction", "32-graph", "33-beta", "34-wizard"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -157,8 +157,15 @@ for (const theme of THEMES) {
       await page.setViewportSize({ width: vp.width, height: vp.height });
       await page.goto("/");
       await page.getByRole("button", { name: "Accounts" }).click();
-      await page.getByRole("button", { name: /Add account/ }).first().click();
-      await expect(page.getByText("let's look at what you already have", { exact: false })).toBeVisible();
+      await page.getByRole("button", { name: /Add account|Finish setting up/ }).first().click();
+      // AJ-E301: Step 0 (the install gate) now precedes the scan —
+      // the preview default has Claude installed, so Continue is
+      // enabled and advances; the not-installed state is captured in
+      // the dedicated Step-0 shots below.
+      await expect(page.getByTestId("wizard-step-install")).toBeVisible();
+      await expect(page.getByTestId("install-continue")).toBeEnabled();
+      await page.getByTestId("install-continue").click();
+      await expect(page.getByText("Let's look at what", { exact: false })).toBeVisible();
       await page.waitForTimeout(400); // scan mock resolves
       await expect(page.getByText(/signed in|not signed in/).first()).toBeVisible();
       await page.screenshot({
@@ -3357,4 +3364,147 @@ for (const theme of THEMES) {
       });
     });
   }
+}
+
+/**
+ * AJ-E301 gallery 34 — the wizard's Step-0 install gate: installed /
+ * not-installed (install help open) / unverified rows, plus the
+ * in-flight close confirm — at 1280×800 and 390×844 (narrow sheet) ×
+ * light+dark. The gate precedes everything: a missing CLI never
+ * reaches Identity.
+ */
+const WIZARD_VP = [
+  { name: "1280x800", width: 1280, height: 800 },
+  { name: "390x844", width: 390, height: 844 },
+] as const;
+
+const openWizardStep0 = async (
+  page: import("@playwright/test").Page,
+  installs: unknown[],
+  theme: string,
+  vp: { width: number; height: number },
+) => {
+  await page.addInitScript(
+    ({ fixture, installs: rows, theme: themeName }) => {
+      const w = window as unknown as Record<string, unknown>;
+      w.__AIJ_FIXTURE__ = fixture;
+      w.__AIJ_PROVIDER_INSTALLS__ = rows;
+      localStorage.setItem("aij.theme", themeName);
+      localStorage.setItem("aij.onboarding.dismissed", "1");
+      sessionStorage.setItem("aij.ready.skipped", "1");
+    },
+    { fixture: honestEmpty, installs, theme },
+  );
+  await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme as "dark" | "light" });
+  await page.setViewportSize({ width: vp.width, height: vp.height });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Accounts" }).click();
+  await page.getByRole("button", { name: /Add account|Finish setting up/ }).first().click();
+  await expect(page.getByTestId("wizard-step-install")).toBeVisible();
+};
+
+for (const theme of THEMES) {
+  for (const vp of WIZARD_VP) {
+    test(`wizard step0 — installed — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openWizardStep0(page, [
+        {
+          provider: "claude-code",
+          display_name: "Claude Code",
+          install_url: "https://claude.com/download",
+          status: "installed",
+          version: "2.1.296",
+          binary: "/usr/local/bin/claude",
+          notes: [],
+        },
+      ], theme, vp);
+      await expect(page.getByTestId("install-continue")).toBeEnabled();
+      await page.screenshot({
+        path: resolve(GALLERY, `34-wizard/installed-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`wizard step0 — not installed (gate + help) — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openWizardStep0(page, [
+        {
+          provider: "claude-code",
+          display_name: "Claude Code",
+          install_url: "https://claude.com/download",
+          status: "not_installed",
+          version: null,
+          binary: null,
+          notes: [],
+        },
+      ], theme, vp);
+      await expect(page.getByTestId("install-continue")).toBeDisabled();
+      await page.locator("[data-testid='provider-row'] button").first().click();
+      await expect(page.getByTestId("install-help")).toContainText("Install Claude Code →");
+      await page.screenshot({
+        path: resolve(GALLERY, `34-wizard/not-installed-${vp.name}-${theme}.png`),
+      });
+    });
+
+    test(`wizard step0 — unverified — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openWizardStep0(page, [
+        {
+          provider: "claude-code",
+          display_name: "Claude Code",
+          install_url: "https://claude.com/download",
+          status: "unverified",
+          version: "2.2.7",
+          binary: "/usr/local/bin/claude",
+          notes: ["version drift: 2.2.7; this adapter was verified against 2.1.296"],
+        },
+      ], theme, vp);
+      await expect(page.getByTestId("provider-row")).toContainText("unverified");
+      await expect(page.getByTestId("install-continue")).toBeEnabled();
+      await page.screenshot({
+        path: resolve(GALLERY, `34-wizard/unverified-${vp.name}-${theme}.png`),
+      });
+    });
+  }
+
+  test(`wizard — close confirm while busy — 1280x800 — ${theme}`, async ({ page }) => {
+    // The close-guard visual: the confirm card over a "busy" wizard.
+    await page.addInitScript(
+      ({ fixture, installs: rows, theme: themeName }) => {
+        const w = window as unknown as Record<string, unknown>;
+        w.__AIJ_FIXTURE__ = fixture;
+        w.__AIJ_PROVIDER_INSTALLS__ = rows;
+        // createAccount hangs → the wizard stays "busy" in identity.
+        w.__AIJ_CREATE_HANG__ = true;
+        localStorage.setItem("aij.theme", themeName);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+      },
+      {
+        fixture: honestEmpty,
+        theme,
+        installs: [
+          {
+            provider: "claude-code",
+            display_name: "Claude Code",
+            install_url: "https://claude.com/download",
+            status: "installed",
+            version: "2.1.296",
+            binary: "/usr/local/bin/claude",
+            notes: [],
+          },
+        ],
+      },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme as "dark" | "light" });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Accounts" }).click();
+    await page.getByRole("button", { name: /Add account|Finish setting up/ }).first().click();
+    await page.getByTestId("install-continue").click();
+    await page.getByRole("button", { name: /fresh account/ }).click();
+    await page.getByPlaceholder("e.g. Work, Personal, Side project").fill("Work");
+    await page.getByRole("button", { name: /Create account/ }).click();
+    await page.getByRole("button", { name: "Close setup" }).click({ force: true });
+    await expect(page.getByTestId("onboarding-wizard")).toBeVisible();
+    await page.screenshot({
+      path: resolve(GALLERY, `34-wizard/close-guard-1280x800-${theme}.png`),
+    });
+  });
 }

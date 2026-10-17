@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { KillSheet, type KillBridge } from "../components/KillSheet";
 import { Button, CleanupEmpty, ProcessRow, type CleanupRowInfo } from "../components/ProcessRow";
+import { errorText } from "../lib/bridge";
 
 /**
  * AJ-E506/E507: the global Cleanup Centre — the read-only inventory
@@ -241,7 +242,7 @@ export function CleanupCentre(props: {
         }
       })
       .catch((cause: unknown) => {
-        if (alive) setError(String(cause));
+        if (alive) setError(errorText(cause));
       });
     return () => {
       alive = false;

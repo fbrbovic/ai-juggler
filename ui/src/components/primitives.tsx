@@ -1,3 +1,4 @@
+import { forwardRef } from "react";
 import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from "react";
 
 /**
@@ -28,24 +29,32 @@ const buttonSizes: Record<ButtonSize, string> = {
   md: "h-9 px-3.5 text-sm gap-2 rounded-xl",
 };
 
-export function Button({
-  variant = "secondary",
-  size = "md",
-  className = "",
-  ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & {
+/** Ref-forwarding (AJ-E301: the wizard focuses its primary button on
+ * every step change — focus management needs the ref). */
+export const Button = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: ButtonVariant;
   size?: ButtonSize;
-}) {
+}>(function Button(
+  {
+    variant = "secondary",
+    size = "md",
+    className = "",
+    type,
+    ...props
+  },
+  ref,
+) {
   return (
     <button
+      ref={ref}
+      type={type ?? "button"}
       className={`inline-flex items-center justify-center font-medium
         transition-all duration-150 disabled:opacity-40 disabled:pointer-events-none
         cursor-default select-none ${buttonVariants[variant]} ${buttonSizes[size]} ${className}`}
       {...props}
     />
   );
-}
+});
 
 export function Card({
   className = "",

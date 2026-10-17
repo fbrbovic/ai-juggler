@@ -13,8 +13,7 @@ import {
   type QuotaDisplayData,
   type AccountInfo,
   type LaunchRecipeInfo,
-  type ProjectInfo,
-} from "../lib/bridge";
+  type ProjectInfo, errorText,} from "../lib/bridge";
 
 /**
  * New session — zero typing: recent projects (real history), a native
@@ -104,7 +103,7 @@ export function NewSessionModal({
       }
       onLaunched(result.session_id, `${recipe.account_label} · ${recipe.name}`);
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
       setBusy(false);
     }
   };

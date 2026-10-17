@@ -15,7 +15,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { EpochNodeData, GraphEdgeData, WorkGraphData } from "../lib/bridge";
-import { epochResume, packExport, switchGraphOverview } from "../lib/bridge";
+import { epochResume, packExport, switchGraphOverview, errorText,} from "../lib/bridge";
 import { providerMark } from "./indicator";
 
 /** One epoch node — a button (keyboard-first; the menu opens on
@@ -183,7 +183,7 @@ export function SwitchGraph({
       setActionLine(`Resumed — instance ${result.session_id} is starting.`);
       onOpenSession(result.session_id);
     } catch (cause) {
-      setActionError(String(cause));
+      setActionError(errorText(cause));
     }
   };
 
@@ -194,7 +194,7 @@ export function SwitchGraph({
       const path = await packExport(epochId);
       setActionLine(`Pack exported to ${path}`);
     } catch (cause) {
-      setActionError(String(cause));
+      setActionError(errorText(cause));
     }
   };
 

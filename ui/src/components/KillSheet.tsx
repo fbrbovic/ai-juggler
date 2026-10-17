@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "./primitives";
+import { errorText } from "../lib/bridge";
 
 /**
  * AJ-E507: the verify-before-kill sheet — the ONLY manual kill path
@@ -189,7 +190,7 @@ export function KillSheet(props: {
         setPhase(result.verified ? "ready" : "refused");
       })
       .catch((cause: unknown) => {
-        if (alive) setError(String(cause));
+        if (alive) setError(errorText(cause));
       });
     return () => {
       alive = false;
@@ -290,7 +291,7 @@ export function KillSheet(props: {
         setPhase("report");
       })
       .catch((cause: unknown) => {
-        setError(String(cause));
+        setError(errorText(cause));
         setPhase("report");
       });
   };
@@ -556,7 +557,7 @@ export function KillSheet(props: {
                           setScope("pid");
                           setPhase(next.verified ? "ready" : "refused");
                         })
-                        .catch((cause: unknown) => setError(String(cause)));
+                        .catch((cause: unknown) => setError(errorText(cause)));
                     }}
                     data-testid={`kill-reoffer-${props.pid}`}
                   >

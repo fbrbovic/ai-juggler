@@ -8,8 +8,7 @@ import {
   type AccountInfo,
   type LaunchRecipeInfo,
   type ProjectInfo,
-  type InstanceInfo,
-} from "../lib/bridge";
+  type InstanceInfo, errorText,} from "../lib/bridge";
 
 const isLive = (status: string) => status === "running" || status === "starting";
 
@@ -218,7 +217,7 @@ export function NewSessionModal({
       }
       onLaunched(result.session_id, `${recipe.account_label} · ${recipe.name}`);
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
       setBusy(false);
     }
   };
