@@ -170,6 +170,9 @@ mod tests {
             cleanup_opt_in: false,
             renewal_date: None,
             preview_opt_in: false,
+            import_source_path: None,
+            import_origin: None,
+            imported_at: None,
         };
         let profile = juggler_core::model::Profile {
             id: juggler_core::model::ProfileId::new("p"),

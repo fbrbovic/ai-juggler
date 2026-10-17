@@ -34,6 +34,9 @@ fn account(state_dir: &Path, label: &str) -> Account {
         cleanup_opt_in: false,
         renewal_date: None,
         preview_opt_in: false,
+        import_source_path: None,
+        import_origin: None,
+        imported_at: None,
     }
 }
 

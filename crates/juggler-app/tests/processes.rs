@@ -58,6 +58,9 @@ fn seeded_state(dir: &Path, cleanup_opt_in: bool) -> Arc<AppState> {
                 cleanup_opt_in,
                 renewal_date: None,
                 preview_opt_in: false,
+                import_source_path: None,
+                import_origin: None,
+                imported_at: None,
             })
             .unwrap();
         storage

@@ -205,6 +205,16 @@ pub struct Account {
     /// mirror of a desktop Instance's window. Off by default — enabling
     /// it is the user's explicit Screen-Recording consent moment.
     pub preview_opt_in: bool,
+    /// AJ-E307 Req.1: import provenance — the source's CANONICAL path
+    /// (symlinks resolved at import time). `None` = provenance-unknown
+    /// (pre-E307 accounts; the migration backfills nothing, never
+    /// guesses).
+    pub import_source_path: Option<String>,
+    /// The discovery origin: `cc-switch` | `t3` | `alias` |
+    /// `home-pattern` | `manual`. `None` = provenance-unknown.
+    pub import_origin: Option<String>,
+    /// Import completion time, epoch ms. `None` = never imported.
+    pub imported_at: Option<i64>,
 }
 
 /// Settings applied on top of an account's defaults when launching a profile.

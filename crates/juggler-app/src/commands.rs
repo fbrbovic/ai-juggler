@@ -1392,6 +1392,14 @@ pub struct AccountInfo {
     /// AJ-E415 per-Account live-preview switch (off by default; the
     /// enable is the Screen-Recording consent moment).
     pub preview_opt_in: bool,
+    /// AJ-E307 Req.1/2: import provenance (source canonical path /
+    /// origin / imported-at). `None` = provenance-unknown (pre-E307
+    /// accounts — never guessed).
+    pub import_source_path: Option<String>,
+    /// The discovery origin (`cc-switch|t3|alias|home-pattern|manual`).
+    pub import_origin: Option<String>,
+    /// Import completion time, epoch ms (None = never imported).
+    pub imported_at: Option<i64>,
 }
 
 /// A Launch settings row for the UI (AJ-E107).
@@ -1881,6 +1889,9 @@ pub fn create_account(
         cleanup_opt_in: false,
         renewal_date: None,
         preview_opt_in: false,
+        import_source_path: None,
+        import_origin: None,
+        imported_at: None,
     };
     lock_storage_arc(state)?.accounts().insert(&account)?;
     Ok(account_info_of(&account))
@@ -2024,6 +2035,9 @@ pub fn account_import_impl(
         cleanup_opt_in: false,
         renewal_date: None,
         preview_opt_in: false,
+        import_source_path: None,
+        import_origin: None,
+        imported_at: None,
     };
     {
         let storage = lock_storage_arc(state)?;
@@ -3622,6 +3636,9 @@ fn account_info_of(account: &Account) -> AccountInfo {
         cleanup_opt_in: account.cleanup_opt_in,
         renewal_date: account.renewal_date.clone(),
         preview_opt_in: account.preview_opt_in,
+        import_source_path: account.import_source_path.clone(),
+        import_origin: account.import_origin.clone(),
+        imported_at: account.imported_at,
     }
 }
 
@@ -8625,6 +8642,9 @@ mod tests {
                 cleanup_opt_in: false,
                 renewal_date: None,
                 preview_opt_in: false,
+                import_source_path: None,
+                import_origin: None,
+                imported_at: None,
             })
             .expect("seed account");
         for (id, model) in [("rec-1", Some("opus")), ("rec-2", None)] {
@@ -8870,6 +8890,9 @@ mod tests {
                 cleanup_opt_in: false,
                 renewal_date: None,
                 preview_opt_in: false,
+                import_source_path: None,
+                import_origin: None,
+                imported_at: None,
             })
             .expect("seed account");
         storage

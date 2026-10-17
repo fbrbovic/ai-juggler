@@ -92,6 +92,14 @@ CREATE TABLE projects (
 );
 ";
 
+/// AJ-E307 Req.1: import provenance columns. Existing rows stay NULL —
+/// provenance-unknown is the honest backfill; nothing is guessed.
+const V21: &str = "
+ALTER TABLE accounts ADD COLUMN import_source_path TEXT;
+ALTER TABLE accounts ADD COLUMN import_origin TEXT;
+ALTER TABLE accounts ADD COLUMN imported_at INTEGER;
+";
+
 /// Ordered, forward-only migrations; index + 1 is the schema version.
 /// Schema version 4: imported-history enrichment on projects (which
 /// accounts worked there before AI Juggler, from imported transcripts).
@@ -369,6 +377,7 @@ CREATE TABLE artifact_manifests (
 
 const MIGRATIONS: &[&str] = &[
     V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17, V18, V19, V20,
+    V21,
 ];
 
 /// An opened AI Juggler database with typed repositories.
