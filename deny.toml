@@ -43,4 +43,13 @@ ignore = [
     # Transitive via netstat2's netlink-packet chain; macro-only
     # build-time code. Remove when netstat2 drops the netlink macro dep.
     "RUSTSEC-2024-0436",
+    # AJ-E302 (2026-10-17): the zbus support crates were folded back
+    # into the main zbus release and stand-alone versions are
+    # unmaintained (RUSTSEC-2026-0370/0371/0372 — UNMAINTAINED
+    # notices, no vulnerability). Transitive via zbus 5.19 in Tauri's
+    # Linux portal/clipboard stack. Remove when Tauri bumps zbus past
+    # the fold-in release.
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
 ]
