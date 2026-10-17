@@ -156,6 +156,7 @@ pub fn run() {
             commands::providers_discover,
             commands::environment_scan_full,
             commands::scan_cancel,
+            commands::recommendation_for,
             commands::stop_session,
             commands::dashboard_stats,
             commands::terminal_spawn_login,
