@@ -59,7 +59,9 @@ fn import_real_t3_profiles() {
             &source.to_string_lossy(),
             &name,
             plan.map(std::string::ToString::to_string),
-        ) {
+        Some("home-pattern".to_string()),
+        false,
+    ) {
             Ok(result) => {
                 println!(
                     "IMPORTED {} → account {} | {} files, {} bytes | login: {} | skipped: {} | note: {}",

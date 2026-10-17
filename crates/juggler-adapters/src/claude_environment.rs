@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use juggler_adapter::environment::{DiscoveredInstall, ImportOutcome, InstallOrigin, LoginProbe};
+use juggler_adapter::environment::{DiscoveredInstall, ImportOutcome, InstallOrigin, LoginProbe, SourceInspect};
 use juggler_core::model::HarnessId;
 
 use crate::claude_code::{CLAUDE_CODE_ID, is_managed_dir, prepare_managed_dir};
@@ -130,31 +130,6 @@ pub fn scan_claude_environment(
 ///   plausible config dir, is itself AI-Juggler-managed, when `dest`
 ///   exists, when the import ceiling is exceeded, or on any copy failure
 ///   (the message carries the plain-language reason).
-/// AJ-E307 Req.3: the pre-copy source inspection — total size,
-/// per-top-level-entry breakdown, config evidence, login state.
-/// Metadata-only; NOTHING is read, written, or copied.
-#[derive(Debug, Clone, Default)]
-pub struct SourceInspect {
-    /// Total importable bytes (after the rebuildable-cache skips).
-    pub total_bytes: u64,
-    /// Importable file count (bounded walk; `truncated` flags the cap).
-    pub file_count: u64,
-    /// Per top-level entry (folder or file) importable bytes,
-    /// largest first — the Confirm-source breakdown.
-    pub folders: Vec<(String, u64)>,
-    /// True when the walk stopped at the bounded-file cap.
-    pub truncated: bool,
-    /// The ceiling in bytes (surfaced so the UI offers the degraded
-    /// path without ever rendering a raw ceiling string).
-    pub ceiling_bytes: u64,
-    /// Config evidence (`is_claude_config_dir`).
-    pub is_config: bool,
-    /// Already managed by AI Juggler.
-    pub already_managed: bool,
-    /// The source's login state (metadata-only probe).
-    pub login: LoginProbe,
-}
-
 /// The bounded walk cap (perf budget: ≤ 2 s for ≤ 50k files).
 const INSPECT_FILE_CAP: u64 = 50_000;
 

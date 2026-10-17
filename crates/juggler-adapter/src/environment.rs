@@ -103,6 +103,30 @@ pub struct ImportOutcome {
     pub degraded: bool,
 }
 
+/// AJ-E307 Req.3: the pre-copy source inspection (metadata-only —
+/// nothing read beyond metadata, nothing written).
+#[derive(Debug, Clone, Default)]
+pub struct SourceInspect {
+    /// Total importable bytes (after the rebuildable-cache skips).
+    pub total_bytes: u64,
+    /// Importable file count (bounded walk; `truncated` flags the cap).
+    pub file_count: u64,
+    /// Per top-level entry (folder or file) importable bytes,
+    /// largest first — the Confirm-source breakdown.
+    pub folders: Vec<(String, u64)>,
+    /// True when the walk stopped at the bounded-file cap.
+    pub truncated: bool,
+    /// The adapter's copy ceiling in bytes (the UI offers the
+    /// degraded path from this, never a raw ceiling string).
+    pub ceiling_bytes: u64,
+    /// Config evidence — false renders the plain-language rejection.
+    pub is_config: bool,
+    /// Already managed by AI Juggler.
+    pub already_managed: bool,
+    /// The source's login state.
+    pub login: LoginProbe,
+}
+
 /// The vendor's own web sign-in page for this harness, when one exists.
 /// Opening it is the maximum login aid allowed: the user completes the
 /// vendor's flow; AI Juggler never touches credentials.

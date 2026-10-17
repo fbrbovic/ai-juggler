@@ -52,6 +52,13 @@ pub enum AppError {
     /// State lock poisoned (a previous panic while holding it).
     #[error("internal state unavailable")]
     StatePoisoned,
+    /// AJ-E307 Req.2: the source is already imported under another
+    /// Account — the duplicate-import hole, closed at the command.
+    #[error("Already imported as «{label}» — open it from Accounts instead of importing again")]
+    AlreadyImported {
+        /// The existing account's label.
+        label: String,
+    },
 }
 
 impl AppError {
@@ -94,6 +101,7 @@ impl AppError {
             Self::Validation { .. } => ("validation".to_owned(), false),
             Self::Io { .. } => ("io".to_owned(), true),
             Self::StatePoisoned => ("state_poisoned".to_owned(), true),
+            Self::AlreadyImported { .. } => ("already_imported".to_owned(), false),
         };
         ErrorWire {
             code,

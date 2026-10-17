@@ -286,6 +286,31 @@ impl HarnessAdapter for ClaudeCodeAdapter {
         claude_environment::import_claude_config(source, dest, &probe)
     }
 
+    fn inspect_source(
+        &self,
+        source: &Path,
+    ) -> Result<juggler_adapter::environment::SourceInspect, AdapterError> {
+        let adapter = ClaudeCodeAdapter::new();
+        let probe = move |path: &Path| match adapter.login_state(path) {
+            LoginState::LoggedIn => LoginProbe::LoggedIn,
+            LoginState::LoggedOut => LoginProbe::LoggedOut,
+        };
+        claude_environment::inspect_source(source, &probe)
+    }
+
+    fn import_account_degraded(
+        &self,
+        source: &Path,
+        dest: &Path,
+    ) -> Result<ImportOutcome, AdapterError> {
+        let adapter = ClaudeCodeAdapter::new();
+        let probe = move |path: &Path| match adapter.login_state(path) {
+            LoginState::LoggedIn => LoginProbe::LoggedIn,
+            LoginState::LoggedOut => LoginProbe::LoggedOut,
+        };
+        claude_environment::import_settings_only(source, dest, &probe)
+    }
+
     fn login_url(&self) -> Option<LoginUrl> {
         Some("https://claude.ai/login")
     }
