@@ -919,6 +919,11 @@ export interface RankedRowData {
   confidence: string;
   tte_min?: number;
   suggested: boolean;
+  /** AJ-E306 Req.7: the launch admission verdict (SPEC §5.2) —
+   * `ok|tight|no`; undefined when headroom or burn is unknown
+   * (renders "headroom unknown", never a fabricated number). Warns,
+   * never blocks. */
+  admission?: "ok" | "tight" | "no";
 }
 
 /** AJ-E611: the explainable ranking — suggest-only, the user clicks. */
@@ -995,6 +1000,7 @@ export interface WindowDisplay {
   resets_at_ms?: number;
   burned_tokens: number;
   burned_credits?: number;
+  headroom_tokens?: number | null;
 }
 
 /** AJ-E610: the subscription clock's typed state (calendar line, D-12). */
@@ -1023,6 +1029,12 @@ export interface QuotaDisplayData {
   renewal: RenewalDisplay;
   forecast: ForecastDisplay;
   unavailable_reason?: string;
+}
+
+/** AJ-E306: one window's token headroom (cap − burned) — present
+ * ONLY when the cap is known; the admission verdict's input. */
+export interface WindowHeadroom {
+  headroom_tokens?: number | null;
 }
 
 /** AJ-E610: one account's two clocks (engine-evaluated). */
