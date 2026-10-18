@@ -226,12 +226,18 @@ main::-webkit-scrollbar-track {
 
 
 /* Reduced motion: freeze micro-transitions and the live pulse —
-   accessibility (WCAG 2.3.3) and deterministic visual captures. */
+   accessibility (WCAG 2.3.3) and deterministic visual captures.
+   Transitions are switched OFF, not shortened: the CSS default
+   `transition-property` is `all`, so a tiny global duration made EVERY
+   element transition every property — inherited text colour included
+   — and right after boot the light theme briefly rendered dark-theme
+   ink until the next frames ran (the recorded "light-theme first-scan
+   contrast flash", AJ-E806). Nothing listens for transitionend. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    transition: none !important;
   }
   .dot-live, .animate-breathe {
     animation: none !important;

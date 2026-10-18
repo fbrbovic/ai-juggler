@@ -7,25 +7,34 @@ import { OnboardingWizard } from "./OnboardingWizard";
 import { AddProviderSheet } from "./AddProviderSheet";
 import { LoginQueueCard } from "../components/LoginQueueCard";
 import { BetaMatrix } from "../components/BetaMatrix";
+import { ExpertSetup } from "../components/ExpertSetup";
+import { EnvOverlayEditor } from "../components/EnvOverlayEditor";
+import { PACK_POLICY_OPTIONS, packPolicyRestatement, type PackPolicyWire } from "../components/PackPolicyChooser";
+import { providerDisplayName } from "../lib/providers";
 import {
   accountsList,
   createProfile,
   deleteProfile,
   launchSession,
   launchRecipesList,
+  pickDirectory,
   type AccountInfo,
   type LaunchRecipeInfo,
+  expertSetupInfo,
   redactionPolicyGet,
+  redactionPolicySetGlobal,
   redactionPolicySetOverride,
   type RedactionInfoData, errorText,
   signedIn,
 } from "../lib/bridge";
 
 /**
- * Profiles screen (M1-3): accounts with isolated state + one-click profile
- * launching. Every action maps 1:1 to a typed backend command; in
- * plain-browser preview mode the screen renders mock data and launches are
- * no-ops so the design can be reviewed without a backend.
+ * Accounts screen (M1-3; component name kept from the M1 "Profiles"
+ * era — the UI noun is Accounts, D-10): accounts with isolated state,
+ * their Launch settings, and the Provider-level pack-secrets policy.
+ * Every action maps 1:1 to a typed backend command; in plain-browser
+ * preview mode the screen renders mock data and launches are no-ops so
+ * the design can be reviewed without a backend.
  */
 
 export function ProfilesScreen({
@@ -91,13 +100,13 @@ export function ProfilesScreen({
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-5">
       <header className="flex items-end justify-between gap-4">
         <div>
-          <h2 className="text-lg font-semibold tracking-tight">Profiles</h2>
+          <h2 className="text-lg font-semibold tracking-tight">Accounts</h2>
           <p className="text-xs text-muted">
-            One account per harness login — each fully isolated. Launch any
-            profile in parallel with one click.
+            One account per Provider sign-in — each fully isolated. Start any of
+            them in parallel with one click.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
         <Button variant="secondary" size="sm" onClick={() => setAddProvider(true)} data-testid="add-provider">
           <IconProfiles width={14} height={14} />
           Add Provider
@@ -114,11 +123,6 @@ export function ProfilesScreen({
           {error}
         </Card>
       )}
-
-      {/* AJ-E210: the Beta validation matrix (Settings → Beta,
-          disclosure only) — the same table the switch badges derive
-          from, so "which pairs are proven" is never a guess. */}
-      <BetaMatrix />
 
       {accounts.length === 0 ? (
         <EmptyAccounts onAdd={() => setAddAccount(true)} />
@@ -142,6 +146,16 @@ export function ProfilesScreen({
           ))}
         </div>
       )}
+
+      {/* AJ-E309 Req.2 (D-14): the remembered pack-secrets choice —
+          global + per-Provider override. "Decide later" in the first
+          run points here. */}
+      <PackSecretsCard providers={[...new Set(accounts.map((account) => account.provider))]} />
+
+      {/* AJ-E210: the Beta validation matrix (Settings → Beta,
+          disclosure only) — the same table the switch badges derive
+          from, so "which pairs are proven" is never a guess. */}
+      <BetaMatrix />
 
       {addAccount && (
         <OnboardingWizard
@@ -208,7 +222,7 @@ function EmptyAccounts({ onAdd }: { onAdd: () => void }) {
         <IconProfiles width={22} height={22} />
       </span>
       <p className="max-w-sm text-center text-sm text-muted">
-        No accounts yet. Add your first harness login — AI Juggler keeps its
+        No accounts yet. Add your first Provider sign-in — AI Juggler keeps its
         state fully isolated from any existing install.
       </p>
       <Button variant="primary" size="sm" onClick={onAdd} data-testid="finish-setup">
@@ -240,61 +254,8 @@ function AccountCard({
   onLoginRechecked: () => Promise<void>;
   onInspect?: () => void;
 }) {
-/** AJ-E208: the per-Provider redaction override — Provider settings
- * (D-14: the remembered choice; "Use global" clears the override).
- * Read-only until the user picks; masked counts only, never
- * values. */
-function RedactionOverrideRow({ provider }: { provider: string }) {
-  const [policy, setPolicy] = useState<RedactionInfoData | null>(null);
-  useEffect(() => {
-    let alive = true;
-    redactionPolicyGet(provider)
-      .then((info) => {
-        if (alive) setPolicy(info);
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, [provider]);
-  const pick = async (value: string | null) => {
-    await redactionPolicySetOverride(provider, value);
-    setPolicy(await redactionPolicyGet(provider));
-  };
-  const options: [string | null, string][] = [
-    [null, `Use global${policy?.global ? ` (${policy.global})` : " — not chosen yet"}`],
-    ["strip", "Strip — replace keys with •••"],
-    ["keep", "Keep — pack stays on this Mac"],
-    ["ask", "Ask each time"],
-  ];
-  return (
-    <div className="flex flex-col gap-1 border-t border-hairline px-5 py-2.5" data-testid="provider-redaction">
-      <span className="text-[11px] uppercase tracking-wider text-faint">
-        Redaction for {provider} (pack secrets)
-      </span>
-      {policy?.override && <Chip tone="accent">Override</Chip>}
-      <div className="flex flex-wrap gap-1.5">
-        {options.map(([value, label]) => (
-          <button
-            key={label}
-            type="button"
-            onClick={() => void pick(value)}
-            className={
-              "rounded-lg border px-2 py-1 text-[11px] transition-colors " +
-              ((value === null && policy?.override == null) || policy?.override === value
-                ? "border-accent/50 bg-accent-soft text-accent-hi"
-                : "border-hairline text-muted hover:border-accent/30")
-            }
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [envFor, setEnvFor] = useState<string | null>(null);
   const onToggleSettings = () => setSettingsOpen((v) => !v);
   const loggedIn = signedIn(account.login_state);
   const loginTone: ChipTone = loggedIn ? "success" : "warning";
@@ -307,7 +268,7 @@ function RedactionOverrideRow({ provider }: { provider: string }) {
             <span className="truncate text-sm font-semibold">{account.label}</span>
             {account.plan && <Chip tone="accent">{account.plan}</Chip>}
           </div>
-          <span className="font-mono text-[11px] text-faint">{account.provider}</span>
+          <span className="text-[11px] text-muted">{providerDisplayName(account.provider)}</span>
         </div>
         <div className="ml-auto flex items-center gap-2">
           {renewalRowVisible(renewalLabel(account.renewal_date, now)) && (
@@ -341,15 +302,14 @@ function RedactionOverrideRow({ provider }: { provider: string }) {
         <Button size="sm" variant="secondary" onClick={onToggleSettings}>
           Edit launch settings {settingsOpen ? "▾" : "▸"}
         </Button>
-        <span className="ml-auto text-[11px] text-faint">
+        <span className="ml-auto text-[11px] text-muted">
           Applies when you start on this account.
         </span>
       </div>
 
       <div className={settingsOpen ? "divide-y divide-hairline" : "hidden"}>
-        {settingsOpen && <RedactionOverrideRow provider={account.provider} />}
         <div className="flex items-center justify-between px-5 py-2">
-          <span className="text-[11px] uppercase tracking-wider text-faint">Launch settings</span>
+          <span className="text-[11px] uppercase tracking-wider text-muted">Launch settings</span>
           <button
             type="button"
             className="rounded-md px-2 py-1 text-[11px] text-muted hover:bg-surface hover:text-ink"
@@ -359,12 +319,12 @@ function RedactionOverrideRow({ provider }: { provider: string }) {
           </button>
         </div>
         {profiles.length === 0 ? (
-          <div className="px-5 py-4 text-xs text-faint">
+          <div className="px-5 py-4 text-xs text-muted">
             No launch settings yet — the default applies when you start.
           </div>
         ) : (
           profiles.map((recipe) => (
-            <div key={recipe.id} className="group flex items-center gap-3 px-5 py-2.5">
+            <div key={recipe.id} className="group flex flex-wrap items-center gap-3 px-5 py-2.5">
               <span className="text-sm">{recipe.name === "Main" ? "Default" : recipe.name}</span>
               {recipe.model ? (
                 <Chip tone="neutral">{recipe.model}</Chip>
@@ -372,10 +332,19 @@ function RedactionOverrideRow({ provider }: { provider: string }) {
                 <Chip tone="neutral">default model</Chip>
               )}
               {recipe.default_cwd && (
-                <span className="truncate font-mono text-[11px] text-faint">
+                <span className="truncate font-mono text-[11px] text-muted">
                   {recipe.default_cwd}
                 </span>
               )}
+              <button
+                type="button"
+                aria-expanded={envFor === recipe.id}
+                onClick={() => setEnvFor((current) => (current === recipe.id ? null : recipe.id))}
+                className="rounded-md px-2 py-1 text-[11px] text-muted hover:bg-surface hover:text-ink"
+                data-testid="recipe-env-toggle"
+              >
+                Environment {envFor === recipe.id ? "▾" : "▸"}
+              </button>
               <div className="ml-auto flex items-center gap-1 opacity-60 transition-opacity group-hover:opacity-100">
                 <Button
                   size="sm"
@@ -392,9 +361,26 @@ function RedactionOverrideRow({ provider }: { provider: string }) {
                   Launch
                 </Button>
               </div>
+              {envFor === recipe.id && (
+                <div className="basis-full pt-1">
+                  <RecipeEnvEditor
+                    provider={account.provider}
+                    accountId={account.id}
+                    recipeId={recipe.id}
+                  />
+                </div>
+              )}
             </div>
           ))
         )}
+        <div className="px-5 py-3">
+          <ExpertSetup
+            provider={account.provider}
+            accounts={[{ id: account.id, label: account.label }]}
+            surface="accounts"
+            showMetricsExport
+          />
+        </div>
       </div>
       {/* keep recheck reachable for logged-in cards via silent refresh */}
       <span className="hidden">{void onLoginRechecked}</span>
@@ -436,7 +422,7 @@ function NewProfileModal({
 
   const submit = async () => {
     if (!name.trim()) {
-      setError("Name the profile, e.g. “Deep work”.");
+      setError("Name these Launch settings, e.g. “Deep work”.");
       return;
     }
     setBusy(true);
@@ -456,14 +442,31 @@ function NewProfileModal({
       onClose={onClose}
     >
       <div className="flex flex-col gap-4">
-        <Field label="Profile name">
+        <Field label="Name">
           <Input autoFocus value={name} placeholder="Deep work" onChange={(event) => setName(event.target.value)} />
         </Field>
         <Field label="Model (optional)" hint="Written to the account's managed settings">
           <Input value={model} placeholder="opus" onChange={(event) => setModel(event.target.value)} />
         </Field>
-        <Field label="Default directory (optional)">
-          <Input value={cwd} placeholder="Optional working directory (folder picker ships with AJ-E306)" onChange={(event) => setCwd(event.target.value)} />
+        <Field label="Default folder (optional)">
+          <div className="flex gap-2">
+            <Input
+              value={cwd}
+              placeholder="Where Instances start — or choose…"
+              onChange={(event) => setCwd(event.target.value)}
+              className="min-w-0 flex-1"
+            />
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={async () => {
+                const picked = await pickDirectory();
+                if (picked !== null) setCwd(picked);
+              }}
+            >
+              Choose…
+            </Button>
+          </div>
         </Field>
         {error && <p className="text-xs text-danger">{error}</p>}
         <div className="ml-auto flex gap-2">
@@ -471,7 +474,7 @@ function NewProfileModal({
             Cancel
           </Button>
           <Button variant="primary" size="sm" disabled={busy} onClick={() => void submit()}>
-            Create profile
+            Create Launch settings
           </Button>
         </div>
       </div>
@@ -491,7 +494,7 @@ function LoginModal({
   return (
     <Modal
       title={`Log in · ${account.label}`}
-      subtitle="Claude's own sign-in, opened for you — AI Juggler never sees your credentials."
+      subtitle={`${providerDisplayName(account.provider)}'s own sign-in, opened for you — AI Juggler never sees your credentials.`}
       onClose={onClose}
     >
       {/* AJ-E308 Req.3: the ONE shared queue card — no alerts, no
@@ -499,7 +502,7 @@ function LoginModal({
       <LoginQueueCard
         accountId={account.id}
         label={account.label}
-        providerName="claude-code"
+        providerName={providerDisplayName(account.provider)}
         initialState={account.login_state}
         onSpawned={(terminalId) => {
           openTerminal(terminalId, `Sign in · ${account.label}`);
@@ -511,3 +514,173 @@ function LoginModal({
   );
 }
 
+/**
+ * AJ-E309 Req.2 / AJ-E208 (D-14): Accounts → Pack secrets. The GLOBAL
+ * choice (the same words as the first-run chooser) and one override
+ * row per Provider in use ("Use global" clears it). Every write is
+ * the user's click; an unset global says so plainly — the first
+ * switch asks, nothing is assumed.
+ */
+function PackSecretsCard({ providers }: { providers: string[] }) {
+  const [info, setInfo] = useState<Record<string, RedactionInfoData>>({});
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const providerKey = providers.join("|");
+
+  const reload = useCallback(async () => {
+    const targets = providers.length > 0 ? providers : ["claude-code"];
+    const rows = await Promise.all(
+      targets.map(async (provider) => [provider, await redactionPolicyGet(provider)] as const),
+    );
+    setInfo(Object.fromEntries(rows));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providerKey]);
+
+  useEffect(() => {
+    void reload().catch((cause) => setError(errorText(cause)));
+  }, [reload]);
+
+  const first = Object.values(info)[0];
+  const global = (first?.global ?? null) as PackPolicyWire | null;
+  const storedOptions = PACK_POLICY_OPTIONS.filter((option) => option.value !== "decide_later");
+
+  const run = async (action: () => Promise<void>, done: string) => {
+    setError(null);
+    setStatus(null);
+    try {
+      await action();
+      await reload();
+      setStatus(done);
+    } catch (cause) {
+      setError(errorText(cause));
+    }
+  };
+
+  return (
+    <Card className="flex flex-col gap-3 p-5" data-testid="pack-secrets">
+      <div>
+        <h3 className="text-sm font-semibold">Pack secrets</h3>
+        <p className="mt-0.5 text-xs leading-relaxed text-muted">
+          Context packs carry your work to another account when you switch. Choose how keys and
+          tokens found in them are handled — remembered for every Provider unless one overrides
+          it.
+        </p>
+      </div>
+      <fieldset className="flex flex-col gap-1.5" data-testid="pack-secrets-global">
+        <legend className="mb-1 text-[11px] font-medium uppercase tracking-wider text-muted">
+          Your choice (all Providers)
+        </legend>
+        {global === null && (
+          <p className="text-[11px] text-muted" data-testid="pack-secrets-unset">
+            Not chosen yet — your first switch asks before any pack is built.
+          </p>
+        )}
+        {storedOptions.map((option) => (
+          <label
+            key={option.value}
+            className={
+              "flex items-start gap-2.5 rounded-lg border px-3 py-2 text-xs transition-colors " +
+              (global === option.value ? "border-accent/40 bg-accent-soft" : "border-hairline hover:border-accent/30")
+            }
+          >
+            <input
+              type="radio"
+              name="pack-secrets-global"
+              value={option.value}
+              checked={global === option.value}
+              onChange={() =>
+                void run(
+                  () => redactionPolicySetGlobal(option.value),
+                  packPolicyRestatement(option.value as PackPolicyWire, "global", ""),
+                )
+              }
+              className="mt-0.5 size-3.5 shrink-0 accent-[var(--color-accent)]"
+            />
+            <span className="flex flex-col gap-0.5">
+              <span className="font-medium text-ink">{option.title}</span>
+              <span className="text-[11px] leading-relaxed text-muted">{option.consequence}</span>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+      {providers.length > 0 && (
+        <div className="flex flex-col gap-1.5" data-testid="pack-secrets-overrides">
+          <p className="text-[11px] font-medium uppercase tracking-wider text-muted">
+            Per-Provider override
+          </p>
+          {providers.map((provider) => {
+            const row = info[provider];
+            const name = providerDisplayName(provider);
+            return (
+              <label key={provider} className="flex flex-wrap items-center gap-2 text-xs" data-testid="provider-redaction">
+                <span className="min-w-28 font-medium">{name}</span>
+                <select
+                  value={row?.override ?? ""}
+                  onChange={(event) =>
+                    void run(
+                      () => redactionPolicySetOverride(provider, event.target.value || null),
+                      event.target.value ? `${name} now overrides the global choice.` : `${name} follows your global choice.`,
+                    )
+                  }
+                  aria-label={`Pack secrets for ${name}`}
+                  className="rounded-lg border border-hairline bg-surface-2 px-2 py-1 text-xs text-ink"
+                >
+                  <option value="">Use my choice{global ? "" : " (not chosen yet)"}</option>
+                  {storedOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.title}
+                    </option>
+                  ))}
+                </select>
+                {row?.override && <Chip tone="accent">Override</Chip>}
+              </label>
+            );
+          })}
+        </div>
+      )}
+      {status && (
+        <p className="text-[11px] text-muted" role="status">
+          {status}
+        </p>
+      )}
+      {error && (
+        <p className="text-[11px] text-danger" role="alert">
+          {error}
+        </p>
+      )}
+    </Card>
+  );
+}
+
+/** The env-override editor for one Launch settings, with the
+ * Provider's protected (isolation) keys fetched from the backend —
+ * never a hard-coded Provider list in the UI. */
+function RecipeEnvEditor({
+  provider,
+  accountId,
+  recipeId,
+}: {
+  provider: string;
+  accountId: string;
+  recipeId: string;
+}) {
+  const [protectedKeys, setProtectedKeys] = useState<string[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void expertSetupInfo(provider, accountId)
+      .then((info) => {
+        if (alive) setProtectedKeys(info.protected_env_keys);
+      })
+      .catch(() => {
+        // The backend still refuses protected keys on Save.
+        if (alive) setProtectedKeys([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [provider, accountId]);
+  if (protectedKeys === null) {
+    return <p className="text-[11px] text-muted">Loading…</p>;
+  }
+  return <EnvOverlayEditor recipeId={recipeId} protectedKeys={protectedKeys} />;
+}

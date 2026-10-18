@@ -1,3 +1,8 @@
+> **Superseded (2026-10-18).** This was the inherited WIP plan. Its
+> "core policy storage" step was reverted (it duplicated AJ-E208's
+> store) — see `docs/qa/evidence/AJ-E309/manifest.md` "Course
+> corrections" for what shipped instead. Kept as the historical record.
+
 # AJ-E309 WIP plan (started 2026-10-18, branch stage3/e3-e309-policy-metrics)
 
 DONE + pushed (core + app):

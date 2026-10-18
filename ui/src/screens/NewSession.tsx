@@ -4,6 +4,7 @@ import { IconProjects, IconTerminal } from "../components/icons";
 import { QuotaChip } from "../components/QuotaRings";
 import { RankedRows } from "../components/RankedRows";
 import { pickRecipe } from "./NewProjectSheet";
+import { ExpertSetup } from "../components/ExpertSetup";
 import {
   hasLiveBackend,
   launchSession,
@@ -31,6 +32,7 @@ export function NewSessionModal({
   onClose,
   onLaunched,
   openLoginTerminal,
+  onManageLaunchSettings,
 }: {
   projects: ProjectInfo[];
   accounts: AccountInfo[];
@@ -40,6 +42,8 @@ export function NewSessionModal({
   /** AJ-E306 Req.8: the Sign-in-first detour opens the vendor login
    * terminal beside this sheet — the sheet stays and waits. */
   openLoginTerminal?: (id: string, title: string) => void;
+  /** AJ-E309 Req.5: the Expert hatch's [Manage Launch settings →]. */
+  onManageLaunchSettings?: () => void;
 }) {
   const [directory, setDirectory] = useState<string | null>(initialDirectory);
   const [profiles, setProfiles] = useState<LaunchRecipeInfo[] | null>(null);
@@ -403,6 +407,22 @@ export function NewSessionModal({
             )}
           </div>
 
+          {/* AJ-E309 Req.5: the expert hatch for the account this
+              sheet would launch (folder, shell line, env overrides). */}
+          {preselected !== null && (
+            <div className="mt-3">
+              <ExpertSetup
+                provider={
+                  accounts.find((entry) => entry.id === preselected.account_id)?.provider ??
+                  preselected.provider
+                }
+                accounts={[{ id: preselected.account_id, label: preselected.account_label }]}
+                surface="launch"
+                onManageLaunchSettings={onManageLaunchSettings}
+              />
+            </div>
+          )}
+
           {error && <p className="mt-3 text-xs text-danger">{error}</p>}
         </div>
 
@@ -410,7 +430,7 @@ export function NewSessionModal({
           <span className="text-[11px] text-muted">
             {directory
               ? `Launching in ${directory.split("/").pop()}`
-              : "No folder picked — the profile's default applies"}
+              : "No folder picked — the Launch settings' default folder applies"}
           </span>
           <Button size="sm" variant="secondary" onClick={onClose}>
             Close

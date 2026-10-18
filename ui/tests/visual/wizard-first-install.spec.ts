@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
-import { honestEmpty } from "./fixtures";
+import { answerPolicy, honestEmpty } from "./fixtures";
 
 /**
  * AJ-E305 quality gate — flow (a) as a TESTED CONTRACT: the primary
@@ -81,7 +81,8 @@ test("flow (a): first install ≤ 5 primary clicks, 0 typed, funnel complete", a
       const typed: string[] = [];
       w.__typedLog = typed;
       window.addEventListener("input", (event) => {
-        typed.push((event.target as HTMLElement).tagName);
+        const target = event.target as HTMLInputElement;
+        typed.push(`${target.tagName}:${target.type ?? ""}`);
       });
     },
     { fixture: honestEmpty },
@@ -106,6 +107,13 @@ test("flow (a): first install ≤ 5 primary clicks, 0 typed, funnel complete", a
   primaryClicks += 1;
   await expect(page.getByTestId("proposal-block")).toBeVisible();
 
+  // AJ-E309: the first-run pack-policy question rides this Confirm
+  // (no extra step, nothing pre-selected) — one deliberate answer.
+  let policyClicks = 0;
+  await expect(page.getByTestId("accept-setup")).toBeDisabled();
+  await answerPolicy(page, "strip");
+  policyClicks += 1;
+
   // Click 3 (primary): Accept setup →.
   await page.getByTestId("accept-setup").click();
   primaryClicks += 1;
@@ -124,15 +132,17 @@ test("flow (a): first install ≤ 5 primary clicks, 0 typed, funnel complete", a
   await page.getByTestId("launch-first-session").click();
   primaryClicks += 1;
 
-  // The budget holds; skips are secondaries, not path clicks.
-  expect(primaryClicks).toBeLessThanOrEqual(5);
+  // The budget holds WITH the policy answer (AJ-E309 Req.1: it counts
+  // inside the ≤ 5); skips are secondaries, not path clicks.
+  expect(primaryClicks + policyClicks).toBeLessThanOrEqual(5);
   expect(primaryClicks).toBe(4);
 
-  // 0 typed fields: no input event fired anywhere on the path.
+  // 0 typed fields: the only input event is the policy RADIO (a
+  // choice, not typing).
   const typed = (await page.evaluate(() =>
     (window as unknown as { __typedLog: string[] }).__typedLog,
   )) as string[];
-  expect(typed).toHaveLength(0);
+  expect(typed.filter((entry) => entry !== "INPUT:radio")).toHaveLength(0);
 
   // The funnel recorded every step, in order, no gaps.
   const funnel = (await page.evaluate(() =>
