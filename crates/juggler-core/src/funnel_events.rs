@@ -79,9 +79,9 @@ impl FunnelLog {
         let mut file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&self.path).map_err(|e| crate::CoreError::Io(e.to_string()))?;
-        let line = serde_json::to_string(event)
+            .open(&self.path)
             .map_err(|e| crate::CoreError::Io(e.to_string()))?;
+        let line = serde_json::to_string(event).map_err(|e| crate::CoreError::Io(e.to_string()))?;
         writeln!(file, "{line}").map_err(|e| crate::CoreError::Io(e.to_string()))?;
         Ok(())
     }
@@ -170,8 +170,12 @@ mod tests {
     #[test]
     fn append_read_roundtrip_and_corrupt_skip() {
         let (dir, store) = log();
-        store.append(&event("scan_started", &[("providers", "1")])).unwrap();
-        store.append(&event("login_skipped", &[("remaining", "1")])).unwrap();
+        store
+            .append(&event("scan_started", &[("providers", "1")]))
+            .unwrap();
+        store
+            .append(&event("login_skipped", &[("remaining", "1")]))
+            .unwrap();
         assert_eq!(store.read().unwrap().len(), 2);
         // A corrupt line is skipped, never fatal.
         std::fs::write(dir.path().join("funnel-events.jsonl"), "not json\n").unwrap();

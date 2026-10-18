@@ -84,13 +84,8 @@ pub fn global_policy(storage: &Storage) -> PolicyResult<Option<PackPolicy>> {
 /// # Errors
 ///
 /// Returns [`crate::CoreError`] on storage failure.
-pub fn set_global_policy(
-    storage: &Storage,
-    policy: PackPolicy,
-) -> PolicyResult<()> {
-    storage
-        .app_settings()
-        .set(&POLICY_KEY, policy.as_str())
+pub fn set_global_policy(storage: &Storage, policy: PackPolicy) -> PolicyResult<()> {
+    storage.app_settings().set(&POLICY_KEY, policy.as_str())
 }
 
 /// Reads a Provider's override; `None` = inherit the global choice.
@@ -98,13 +93,8 @@ pub fn set_global_policy(
 /// # Errors
 ///
 /// Returns [`crate::CoreError`] on storage failure.
-pub fn provider_policy(
-    storage: &Storage,
-    provider: &str,
-) -> PolicyResult<Option<PackPolicy>> {
-    let raw = storage
-        .app_settings()
-        .get(&provider_policy_key(provider))?;
+pub fn provider_policy(storage: &Storage, provider: &str) -> PolicyResult<Option<PackPolicy>> {
+    let raw = storage.app_settings().get(&provider_policy_key(provider))?;
     Ok(raw.as_deref().and_then(PackPolicy::parse))
 }
 
@@ -136,19 +126,16 @@ pub fn set_provider_policy(
 /// # Errors
 ///
 /// Returns [`crate::CoreError`] on storage failure.
-pub fn active_policy(
-    storage: &Storage,
-    provider: &str,
-) -> PolicyResult<Option<PackPolicy>> {
-    provider_policy(storage, provider).or_else(|error| Err(error)).and_then(
-        |override_choice| {
+pub fn active_policy(storage: &Storage, provider: &str) -> PolicyResult<Option<PackPolicy>> {
+    provider_policy(storage, provider)
+        .or_else(|error| Err(error))
+        .and_then(|override_choice| {
             if override_choice.is_some() {
                 Ok(override_choice)
             } else {
                 global_policy(storage)
             }
-        },
-    )
+        })
 }
 
 #[cfg(test)]
@@ -171,10 +158,7 @@ mod tests {
     fn global_roundtrip_and_restatement() {
         let storage = store();
         set_global_policy(&storage, PackPolicy::KeepWarn).unwrap();
-        assert_eq!(
-            global_policy(&storage).unwrap(),
-            Some(PackPolicy::KeepWarn)
-        );
+        assert_eq!(global_policy(&storage).unwrap(), Some(PackPolicy::KeepWarn));
         assert_eq!(
             active_policy(&storage, "claude-code").unwrap(),
             Some(PackPolicy::KeepWarn)

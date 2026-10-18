@@ -2040,6 +2040,90 @@ pub struct SourceInspectInfo {
     pub keychain_bound: bool,
 }
 
+/// AJ-E309: reads the global pack policy (`None` = no choice — the
+/// honest "ask before first pack"; never a backfilled default).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] on storage failure.
+#[tauri::command]
+pub fn policy_global(state: tauri::State<'_, Arc<AppState>>) -> AppResult<Option<String>> {
+    let storage = lock_storage_arc(&state)?;
+    Ok(juggler_core::policy::global_policy(&storage)?.map(|p| p.as_str().to_owned()))
+}
+
+/// AJ-E309: writes the global pack policy — only ever called from an
+/// explicit user click.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] on validation/storage failure.
+#[tauri::command]
+pub fn policy_global_set(state: tauri::State<'_, Arc<AppState>>, policy: String) -> AppResult<()> {
+    let choice =
+        juggler_core::policy::PackPolicy::parse(&policy).ok_or_else(|| AppError::Validation {
+            subject: "pack policy",
+            message: format!("unknown policy '{policy}'"),
+        })?;
+    let storage = lock_storage_arc(&state)?;
+    juggler_core::policy::set_global_policy(&storage, choice)?;
+    Ok(())
+}
+
+/// AJ-E309 Req.6: appends one validated funnel event to the LOCAL
+/// store (no network; telemetry opt-in only).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] on schema violation or I/O.
+#[tauri::command]
+pub fn funnel_event(
+    state: tauri::State<'_, Arc<AppState>>,
+    kind: String,
+    fields: std::collections::BTreeMap<String, String>,
+) -> AppResult<()> {
+    let event = juggler_core::funnel_events::FunnelEvent {
+        kind,
+        at_ms: juggler_core::model::Timestamp::now().millis(),
+        fields,
+    };
+    juggler_core::funnel_events::FunnelLog::open(&state.data_dir).append(&event)?;
+    Ok(())
+}
+
+/// AJ-E309 Req.7: the LOCAL funnel export — every stored event plus
+/// the per-field inference-override rates (over 30% flagged). No
+/// network call; the dry-run lands in `docs/qa/e3/AJ-E309/`.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] on storage failure.
+#[tauri::command]
+pub fn funnel_export(state: tauri::State<'_, Arc<AppState>>) -> AppResult<String> {
+    let log = juggler_core::funnel_events::FunnelLog::open(&state.data_dir);
+    let events = log.read()?;
+    let mut out =
+        String::from("# Funnel dry-run export (local only)\n\n| kind | fields |\n|---|---|\n");
+    for event in &events {
+        let fields = event
+            .fields
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        out.push_str(&format!("| {} | {} |\n", event.kind, fields));
+    }
+    out.push_str("\n## Inference override rates (>30% flagged for retuning)\n\n");
+    for (field, rate, flagged) in juggler_core::funnel_events::override_rates(&events) {
+        out.push_str(&format!(
+            "- {field}: {:.0}%{}\n",
+            rate * 100.0,
+            if flagged { " — FLAGGED" } else { "" }
+        ));
+    }
+    Ok(out)
+}
+
 /// AJ-E308 Req.7: one named isolation-checklist row.
 #[derive(Clone, PartialEq, Eq, Debug, serde::Serialize)]
 pub struct IsolationRowInfo {
