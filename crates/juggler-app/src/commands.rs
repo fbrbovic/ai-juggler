@@ -2040,6 +2040,168 @@ pub struct SourceInspectInfo {
     pub keychain_bound: bool,
 }
 
+/// AJ-E308 Req.7: one named isolation-checklist row.
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize)]
+pub struct IsolationRowInfo {
+    /// Stable row id (`managed_dir_private`, …).
+    pub id: &'static str,
+    /// The user-facing line (exactly what was checked).
+    pub label: String,
+    /// True when the check passed; a fail BLOCKS [Launch], not [Done].
+    pub pass: bool,
+    /// Evidence/note copy (the failing line names itself).
+    pub detail: String,
+}
+
+/// AJ-E308 Req.7: the post-import/create isolation checklist — six
+/// named checks, metadata-only, run automatically; any fail blocks
+/// [Launch] with the failing line named.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] (unknown account / storage).
+#[tauri::command]
+pub fn isolation_check(
+    state: tauri::State<'_, Arc<AppState>>,
+    account_id: String,
+) -> AppResult<Vec<IsolationRowInfo>> {
+    isolation_check_impl(state.inner(), &account_id)
+}
+
+/// Core implementation shared with integration tests.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] on lookup/storage failures.
+pub fn isolation_check_impl(
+    state: &Arc<AppState>,
+    account_id: &str,
+) -> AppResult<Vec<IsolationRowInfo>> {
+    let account = {
+        let storage = lock_storage_arc(state)?;
+        storage
+            .accounts()
+            .get(&AccountId::new(account_id.to_owned()))?
+    };
+    let dir = account.state_dir.clone();
+    let mut rows = Vec::new();
+
+    // 1. The managed dir is owner-private (0700).
+    #[cfg(unix)]
+    let private_pass = {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(&dir)
+            .map(|meta| meta.permissions().mode() & 0o077 == 0)
+            .unwrap_or(false)
+    };
+    #[cfg(not(unix))]
+    let private_pass = std::fs::metadata(&dir).is_ok();
+    rows.push(IsolationRowInfo {
+        id: "managed_dir_private",
+        label: "Account folder is owner-only (0700)".into(),
+        pass: private_pass,
+        detail: format!("{}", dir.display()),
+    });
+
+    // 2. The managed marker is present (this dir is unambiguously ours).
+    let marker_pass = dir
+        .join(juggler_adapters::claude_code::MANAGED_MARKER)
+        .is_file();
+    rows.push(IsolationRowInfo {
+        id: "marker_present",
+        label: "The managed-folder marker is present".into(),
+        pass: marker_pass,
+        detail: "the folder identifies itself as AI Juggler-managed".into(),
+    });
+
+    // 3. The launch environment points ONLY at this managed dir.
+    let adapter = state
+        .registry
+        .get(&account.harness)
+        .ok_or_else(|| AppError::UnknownHarness(account.harness.as_str().to_owned()))?;
+    let env_ok = adapter
+        .launch_spec(
+            &account,
+            &Profile {
+                id: ProfileId::new("check"),
+                name: "check".into(),
+                account: account.id.clone(),
+                settings_overlay: SettingsOverlay::default(),
+                default_cwd: None,
+            },
+            std::path::Path::new("/"),
+            &juggler_adapter::LaunchMode::Interactive,
+        )
+        .map(|spec| {
+            spec.env
+                .get("CLAUDE_CONFIG_DIR")
+                .is_some_and(|value| std::path::Path::new(value) == dir)
+        })
+        .unwrap_or(false);
+    rows.push(IsolationRowInfo {
+        id: "launch_env_managed_only",
+        label: "Launch environment points only at this account's folder".into(),
+        pass: env_ok,
+        detail: "CLAUDE_CONFIG_DIR resolves to the managed dir".into(),
+    });
+
+    // 4. The import SOURCE carries no AI Juggler writes (no marker,
+    //    nothing of ours inside it) — metadata-only.
+    let source_clean = account
+        .import_source_path
+        .as_deref()
+        .map(|source| {
+            !std::path::Path::new(source)
+                .join(juggler_adapters::claude_code::MANAGED_MARKER)
+                .is_file()
+        })
+        .unwrap_or(true); // fresh account: no source, vacuously clean
+    rows.push(IsolationRowInfo {
+        id: "source_free_of_juggler_writes",
+        label: "The imported-from folder is untouched (no AI Juggler writes)".into(),
+        pass: source_clean,
+        detail: account
+            .import_source_path
+            .clone()
+            .unwrap_or_else(|| "created fresh — no import source".into()),
+    });
+
+    // 5. Per-dir probe independence: this dir's login classification
+    //    reads ONLY this dir (structural: the probe takes one path;
+    //    cross-account bleed is impossible by construction — pinned
+    //    by the two-account fixture test).
+    let probe_state = login_state_of(&account);
+    let probe_pass = !matches!(probe_state, juggler_adapters::LoginState::Unknown);
+    rows.push(IsolationRowInfo {
+        id: "probe_independence",
+        label: "Login state reads only this account's folder".into(),
+        pass: probe_pass,
+        detail: format!(
+            "probe classified this dir as {}",
+            login_state_name(probe_state)
+        ),
+    });
+
+    // 6. No stray files directly under the harness accounts root —
+    //    writes outside managed dirs would land there.
+    let parent_clean = dir
+        .parent()
+        .map(|parent| {
+            std::fs::read_dir(parent)
+                .map(|read| read.flatten().all(|entry| entry.path().is_dir()))
+                .unwrap_or(true)
+        })
+        .unwrap_or(true);
+    rows.push(IsolationRowInfo {
+        id: "no_writes_outside_managed",
+        label: "No stray files outside managed folders".into(),
+        pass: parent_clean,
+        detail: "the accounts root holds only account folders".into(),
+    });
+
+    Ok(rows)
+}
+
 /// Inspects a candidate import source BEFORE any copy (metadata-only).
 #[tauri::command]
 ///

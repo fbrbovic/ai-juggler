@@ -530,3 +530,42 @@ fn import_writes_provenance_and_degraded_import_flags_e307() {
         Some(canonical.to_str().unwrap())
     );
 }
+
+#[test]
+fn isolation_check_six_rows_and_a_forced_fail_e308() {
+    let work = tempfile::tempdir().unwrap();
+    let stub = claude_stub(work.path());
+    let state = app_state(work.path(), &stub);
+    let source = existing_setup(work.path());
+    let result = commands::account_import_impl(
+        &state,
+        CLAUDE_CODE_ID,
+        source.to_str().unwrap(),
+        "Iso",
+        None,
+        Some("home-pattern".to_string()),
+        false,
+    )
+    .unwrap();
+    let rows = commands::isolation_check_impl(&state, &result.account.id).unwrap();
+    assert_eq!(rows.len(), 6, "exactly the six named rows: {rows:#?}");
+    assert!(rows.iter().all(|row| row.pass), "a healthy import: {rows:#?}");
+    let ids: Vec<&str> = rows.iter().map(|row| row.id).collect();
+    assert!(ids.contains(&"managed_dir_private"));
+    assert!(ids.contains(&"marker_present"));
+    assert!(ids.contains(&"launch_env_managed_only"));
+    assert!(ids.contains(&"source_free_of_juggler_writes"));
+    assert!(ids.contains(&"probe_independence"));
+    assert!(ids.contains(&"no_writes_outside_managed"));
+
+    // Forced fail: a stray FILE at the accounts root trips row 6 and
+    // names itself (the UI blocks [Launch], never [Done]).
+    let accounts_root = state
+        .accounts_dir()
+        .join(CLAUDE_CODE_ID);
+    std::fs::write(accounts_root.join("stray.txt"), "leak").unwrap();
+    let rows = commands::isolation_check_impl(&state, &result.account.id).unwrap();
+    let stray = rows.iter().find(|row| row.id == "no_writes_outside_managed").unwrap();
+    assert!(!stray.pass);
+    let _ = std::fs::remove_file(accounts_root.join("stray.txt"));
+}

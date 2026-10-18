@@ -32,7 +32,8 @@ pub const CLAUDE_CODE_ID: &str = "claude-code";
 const VERIFIED_AGAINST: &[&str] = &["2.1.296"];
 
 /// Marker file identifying a directory as managed by AI Juggler.
-const MANAGED_MARKER: &str = ".ai-juggler-managed";
+/// The managed-dir marker filename (AJ-E308 isolation row 2 reads it).
+pub const MANAGED_MARKER: &str = ".ai-juggler-managed";
 
 /// Environment variable naming the isolated config dir (spec §3).
 const ENV_CONFIG_DIR: &str = "CLAUDE_CONFIG_DIR";
