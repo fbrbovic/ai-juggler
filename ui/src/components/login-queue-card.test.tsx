@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LoginQueueCard, loginStateCopy } from "./LoginQueueCard";
 import * as bridgeModule from "../lib/bridge";
 
-const w = () => window as unknown as Record<string, unknown>;
 beforeEach(() => {
   vi.spyOn(bridgeModule, "accountLoginCommand").mockResolvedValue("claude login");
   vi.spyOn(bridgeModule, "accountLoginState").mockResolvedValue("logged_out");
