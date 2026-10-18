@@ -73,6 +73,9 @@ fn seed_claude_account(state: &Arc<AppState>, dir: &Path) {
             cleanup_opt_in: false,
             renewal_date: None,
             preview_opt_in: false,
+            import_source_path: None,
+            import_origin: None,
+            imported_at: None,
         })
         .unwrap();
     state

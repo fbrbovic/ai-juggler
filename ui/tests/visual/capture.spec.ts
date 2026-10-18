@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking", "28-switch", "29-door", "30-switchback", "31-redaction", "32-graph", "33-beta", "34-wizard", "35-candidates", "36-recommend", "37-flows", "38-flows-cde"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking", "28-switch", "29-door", "30-switchback", "31-redaction", "32-graph", "33-beta", "34-wizard", "35-candidates", "36-recommend", "37-flows", "38-flows-cde", "39-import"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -4388,6 +4388,189 @@ for (const theme of THEMES) {
       await expect(page.getByTestId("launch-now")).toBeEnabled();
       await page.screenshot({
         path: resolve(GALLERY, `38-flows-cde/e-launch-tight-${vp.name}-${theme}.png`),
+        fullPage: true,
+      });
+    });
+  }
+}
+
+/**
+ * AJ-E306's successor gallery 39 — AJ-E307 flow (f): the
+ * Confirm-source panel (normal / oversize / non-config), the
+ * duplicate block, and the vanished-source state — 1280×800 +
+ * 390×844 × light+dark.
+ */
+const NORMAL_INSPECT = {
+  total_bytes: 46_000_000,
+  file_count: 128,
+  folders: [
+    { name: "projects/", bytes: 40_000_000 },
+    { name: "settings.json", bytes: 60 },
+    { name: ".credentials.json", bytes: 40 },
+  ],
+  truncated: false,
+  ceiling_bytes: 2_147_483_648,
+  is_config: true,
+  already_managed: false,
+  login: "logged_in",
+  keychain_bound: true,
+};
+
+const openConfirmSource = async (
+  page: import("@playwright/test").Page,
+  theme: string,
+  vp: { width: number; height: number },
+  inspect: unknown,
+) => {
+  await page.addInitScript(
+    ({ fixture, inspect: probe, theme: t }) => {
+      const w = window as unknown as Record<string, unknown>;
+      w.__AIJ_FIXTURE__ = fixture;
+      w.__AIJ_PROVIDER_INSTALLS__ = [
+        {
+          provider: "claude-code",
+          display_name: "Claude Code",
+          install_url: "https://claude.com/download",
+          status: "installed",
+          version: "2.1.296",
+          binary: "/usr/local/bin/claude",
+          notes: [],
+        },
+      ];
+      w.__AIJ_SCAN_REPORT__ = {
+        installs: [
+          {
+            harness: "claude-code",
+            path: "/Users/you/.claude-work",
+            origin: "home-pattern",
+            login: "logged_in",
+            bytes: 9_000_000,
+            last_used_secs: 86_400,
+            managed: false,
+            notes: [],
+            inference: {
+              purpose: "Work",
+              purpose_confidence: "found",
+              login: "signed-in",
+              login_confidence: "found",
+              activity: "active",
+              activity_confidence: "found",
+              activity_words: "Active this week",
+              keychain_bound: true,
+            },
+            signals: ["home-pattern"],
+          },
+        ],
+        probes: [],
+        seeds: [],
+        desktop_apps: [],
+        cancelled: false,
+      };
+      w.__AIJ_RECOMMENDATION__ = { items: [], summary: "", start_here: null };
+      w.__AIJ_SOURCE_INSPECT__ = probe;
+      localStorage.setItem("aij.theme", t);
+      sessionStorage.setItem("aij.ready.skipped", "1");
+    },
+    { fixture: honestEmpty, inspect, theme },
+  );
+  await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme as "dark" | "light" });
+  await page.setViewportSize({ width: vp.width, height: vp.height });
+  await page.goto("/");
+  await page.getByTestId("install-continue").click();
+  await expect(page.getByTestId("candidate-card").first()).toBeVisible();
+  await page.getByTestId("import-as").first().click();
+  await expect(page.getByTestId("confirm-source")).toBeVisible();
+};
+
+for (const theme of THEMES) {
+  for (const vp of CDE_VP) {
+    test(`flow f — confirm-source normal — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openConfirmSource(page, theme, vp, NORMAL_INSPECT);
+      const panel = page.getByTestId("confirm-source");
+      await expect(panel).toContainText("projects/");
+      await expect(panel).toContainText("macOS Keychain");
+      await page.screenshot({
+        path: resolve(GALLERY, `39-import/f-normal-${vp.name}-${theme}.png`),
+        fullPage: true,
+      });
+    });
+
+    test(`flow f — oversize offers the degraded pair — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openConfirmSource(page, theme, vp, {
+        ...NORMAL_INSPECT,
+        total_bytes: 3_300_000_000,
+        folders: [{ name: "projects/", bytes: 3_299_000_000 }],
+      });
+      await expect(page.getByTestId("import-settings-only")).toBeVisible();
+      await expect(page.getByTestId("add-fresh-instead")).toBeVisible();
+      await expect(page.getByTestId("confirm-source")).not.toContainText("ceiling");
+      await page.screenshot({
+        path: resolve(GALLERY, `39-import/f-oversize-${vp.name}-${theme}.png`),
+        fullPage: true,
+      });
+    });
+
+    test(`flow f — non-config rejection — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openConfirmSource(page, theme, vp, {
+        ...NORMAL_INSPECT,
+        is_config: false,
+        folders: [{ name: "random.txt", bytes: 10 }],
+      });
+      const reject = page.getByTestId("source-not-config");
+      await expect(reject).toBeVisible();
+      await expect(reject).toContainText("doesn't look like a Claude Code setup");
+      await page.screenshot({
+        path: resolve(GALLERY, `39-import/f-non-config-${vp.name}-${theme}.png`),
+        fullPage: true,
+      });
+    });
+
+    test(`flow f — duplicate block with [Open it] — ${vp.name} — ${theme}`, async ({ page }) => {
+      await page.addInitScript(
+        ({ fixture, inspect: probe, theme: t }) => {
+          const w = window as unknown as Record<string, unknown>;
+          w.__AIJ_FIXTURE__ = fixture;
+          w.__AIJ_PROVIDER_INSTALLS__ = [
+            {
+              provider: "claude-code",
+              display_name: "Claude Code",
+              install_url: "https://claude.com/download",
+              status: "installed",
+              version: "2.1.296",
+              binary: "/usr/local/bin/claude",
+              notes: [],
+            },
+          ];
+          w.__AIJ_SCAN_REPORT__ = {
+            installs: [],
+            probes: [],
+            seeds: [],
+            desktop_apps: [],
+            cancelled: false,
+          };
+          w.__AIJ_RECOMMENDATION__ = { items: [], summary: "", start_here: null };
+          w.__AIJ_SOURCE_INSPECT__ = probe;
+          // The manual-folder entry point with a duplicate rejection.
+          w.__AIJ_IMPORT_DUPLICATE_LABEL__ = "Work";
+          w.__AIJ_PICK_DIRECTORY__ = "/Users/you/.claude-manual";
+          localStorage.setItem("aij.theme", t);
+          sessionStorage.setItem("aij.ready.skipped", "1");
+        },
+        { fixture: honestEmpty, inspect: NORMAL_INSPECT, theme },
+      );
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme as "dark" | "light" });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await page.getByTestId("install-continue").click();
+      await expect(page.getByTestId("zero-found")).toBeVisible();
+      await page.getByTestId("import-specific-folder").click();
+      await expect(page.getByTestId("confirm-source")).toBeVisible();
+      // The folder label arrives prefilled; attempt the import.
+      await page.getByRole("button", { name: "Import account" }).click();
+      await expect(page.getByTestId("duplicate-blocked")).toBeVisible();
+      await expect(page.getByTestId("duplicate-blocked")).toContainText("Already imported");
+      await page.screenshot({
+        path: resolve(GALLERY, `39-import/f-duplicate-${vp.name}-${theme}.png`),
         fullPage: true,
       });
     });

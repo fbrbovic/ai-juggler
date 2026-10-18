@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Card, Chip } from "../components/primitives";
 import { IconJuggler, IconProfiles, IconTerminal } from "../components/icons";
 import { funnelStep } from "../lib/funnel";
+import { pickDirectory, sourceInspect } from "../lib/bridge";
+import type { SourceInspectInfo } from "../types/generated/SourceInspectInfo";
 import {
   accountImport,
   accountLoginCommand,
@@ -488,6 +490,14 @@ export function OnboardingWizard({
   >(null);
   // AJ-E305 Req.3: the queued sign-ins after a set accept — one card
   // per created/imported Account that still needs the vendor login.
+  // AJ-E307: the Confirm-source panel's data + the manual folder
+  // path + the degraded choice + structured import errors.
+  const [inspect, setInspect] = useState<SourceInspectInfo | null>(null);
+  const [manualSource, setManualSource] = useState<string | null>(null);
+  const [degradedChoice, setDegradedChoice] = useState(false);
+  const [importError, setImportError] = useState<
+    { kind: "duplicate" | "moved" | "other"; text: string } | null
+  >(null);
   const [signinQueue, setSigninQueue] = useState<
     | {
         accountId: string;
@@ -658,6 +668,23 @@ export function OnboardingWizard({
     goto(queue.length > 0 ? "signins" : "summary");
   };
 
+  // AJ-E307 Req.3: inspect the chosen source at Confirm-source time
+  // (metadata-only) — sizes, breakdown, evidence, keychain note.
+  const activeSource =
+    importing !== null ? importing.path : manualSource !== null ? manualSource : null;
+  const activeOrigin = importing !== null ? importing.origin : manualSource !== null ? "manual" : null;
+  useEffect(() => {
+    if (step !== "identity" || activeSource === null) return;
+    let cancelled = false;
+    setInspect(null);
+    void sourceInspect(activeProvider, activeSource).then((found) => {
+      if (!cancelled) setInspect(found);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [step, activeSource, activeProvider]);
+
   // The current sign-in card's vendor command (fetched lazily).
   const currentSignin = signinQueue !== null ? signinQueue[signinIndex] ?? null : null;
   useEffect(() => {
@@ -768,11 +795,38 @@ export function OnboardingWizard({
   const createTheAccount = async () => {
     setBusy(true);
     setError(null);
+    setImportError(null);
     try {
-      if (importing) {
-        const result = await accountImport(activeProvider, importing.path, label.trim(), plan);
-        setImportResult(result);
-        setAccount(result.account);
+      if (activeSource !== null) {
+        try {
+          const result = await accountImport(
+            activeProvider,
+            activeSource,
+            label.trim(),
+            plan,
+            activeOrigin,
+            degradedChoice,
+          );
+          setImportResult(result);
+          setAccount(result.account);
+        } catch (cause) {
+          const text = errorText(cause);
+          setBusy(false);
+          setDegradedChoice(false);
+          if (text.includes("Already imported as")) {
+            setImportError({ kind: "duplicate", text });
+          } else if (text.includes("not a directory") || text.includes("does not exist") || text.includes("may have moved")) {
+            setImportError({ kind: "moved", text: "That setup moved or vanished — rescan to see what's here now." });
+          } else {
+            setRetryable(
+              cause !== null &&
+                typeof cause === "object" &&
+                (cause as { retryable?: unknown }).retryable === true,
+            );
+            setError(text);
+          }
+          return;
+        }
       } else {
         const created = await createAccount(activeProvider, label.trim(), plan);
         setAccount(created);
@@ -1186,8 +1240,30 @@ export function OnboardingWizard({
                 <>
                   <button
                     type="button"
+                    onClick={async () => {
+                      // AJ-E307: the manual-folder entry — native
+                      // picker, metadata-inspected before accepting.
+                      const picked = await pickDirectory();
+                      if (picked === null) return;
+                      setManualSource(picked);
+                      setImporting(null);
+                      // Zero typed fields on the manual path too — a
+                      // sensible default label, editable at Confirm.
+                      setLabel((current) =>
+                        current.trim().length > 0 ? current : "Main",
+                      );
+                      goto("identity");
+                    }}
+                    data-testid="import-specific-folder"
+                    className="self-start text-xs text-muted underline-offset-2 hover:text-ink hover:underline"
+                  >
+                    Import from a specific folder…
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => {
                       setImporting(null);
+                      setManualSource(null);
                       setLabel("");
                       goto("identity");
                     }}
@@ -1226,6 +1302,113 @@ export function OnboardingWizard({
           {/* ------------------------------------------------- identity */}
           {step === "identity" && (
             <div className="flex flex-col gap-4">
+              {/* AJ-E307 Req.3: Confirm-source — path, origin badge,
+                  total size, per-folder breakdown, keychain note —
+                  all BEFORE any copy starts. */}
+              {activeSource !== null && inspect !== null && (
+                <div
+                  className="flex flex-col gap-2 rounded-xl border border-hairline px-4 py-3"
+                  data-testid="confirm-source"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Chip tone="accent">{activeOrigin ?? "manual"}</Chip>
+                    <span className="truncate font-mono text-[11px] text-muted">
+                      {activeSource}
+                    </span>
+                    <span className="ml-auto text-[10px] text-muted">
+                      {inspect.file_count.toLocaleString()} files ·{" "}
+                      {humanBytes(inspect.total_bytes)}
+                      {inspect.truncated ? "+" : ""}
+                    </span>
+                  </div>
+                  <ul className="flex flex-col gap-0.5" data-testid="source-breakdown">
+                    {inspect.folders.slice(0, 5).map((folder) => (
+                      <li
+                        key={folder.name}
+                        className="flex items-center justify-between text-[11px] text-muted"
+                      >
+                        <span className="truncate font-mono">{folder.name}</span>
+                        <span>{humanBytes(folder.bytes)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  {inspect.total_bytes > inspect.ceiling_bytes ? (
+                    <p className="text-[11px] leading-relaxed text-muted" role="alert">
+                      The history in this folder is large ({humanBytes(inspect.total_bytes)}) —
+                      import the settings only, or start fresh.
+                    </p>
+                  ) : inspect.keychain_bound ? (
+                    <p className="text-[11px] leading-relaxed text-muted">
+                      Signed in via the macOS Keychain — you'll sign in once more after
+                      importing (the keychain entry is locked to this folder).
+                    </p>
+                  ) : null}
+                </div>
+              )}
+              {activeSource !== null && inspect !== null && !inspect.is_config && (
+                <div
+                  className="flex flex-col gap-2 rounded-xl border border-danger/30 bg-danger-soft px-4 py-3"
+                  role="alert"
+                  data-testid="source-not-config"
+                >
+                  <p className="text-xs leading-relaxed text-ink">
+                    This folder doesn't look like a {providerName} setup — no settings,
+                    credentials, or session history found.
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => {
+                      setManualSource(null);
+                      setImporting(null);
+                      goto("detect");
+                    }}
+                  >
+                    Pick a different folder
+                  </Button>
+                </div>
+              )}
+              {importError?.kind === "duplicate" && (
+                <div
+                  className="flex flex-col gap-2 rounded-xl border border-hairline px-4 py-3"
+                  role="alert"
+                  data-testid="duplicate-blocked"
+                >
+                  <p className="text-xs leading-relaxed text-ink">{importError.text}</p>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => {
+                      onAccountCreated();
+                      onClose();
+                    }}
+                  >
+                    Open it
+                  </Button>
+                </div>
+              )}
+              {importError?.kind === "moved" && (
+                <div
+                  className="flex flex-col gap-2 rounded-xl border border-hairline px-4 py-3"
+                  role="alert"
+                  data-testid="source-vanished"
+                >
+                  <p className="text-xs leading-relaxed text-ink">{importError.text}</p>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => {
+                      setManualSource(null);
+                      setImporting(null);
+                      setImportError(null);
+                      setReport(null);
+                      goto("detect");
+                    }}
+                  >
+                    Rescan
+                  </Button>
+                </div>
+              )}
               {importing ? (
                 <div className="rounded-xl border border-hairline bg-canvas px-4 py-3 text-xs leading-relaxed text-muted">
                   Importing from{" "}
@@ -1242,7 +1425,7 @@ export function OnboardingWizard({
                 </p>
               )}
 
-              <label className="block text-[11px] uppercase tracking-wider text-faint">
+              <label className="block text-[11px] uppercase tracking-wider text-muted">
                 What will you use this account for?
                 <input
                   value={label}
@@ -1253,7 +1436,7 @@ export function OnboardingWizard({
               </label>
 
               <div>
-                <p className="text-[11px] uppercase tracking-wider text-faint">Plan</p>
+                <p className="text-[11px] uppercase tracking-wider text-muted">Plan</p>
                 <div className="mt-1.5 grid grid-cols-2 gap-2">
                   {PLANS.map((tier) => (
                     <button
@@ -1268,7 +1451,7 @@ export function OnboardingWizard({
                       }
                     >
                       <span className="block font-medium">{tier.label}</span>
-                      <span className="block text-[10px] text-faint">{tier.hint}</span>
+                      <span className="block text-[10px] text-muted">{tier.hint}</span>
                     </button>
                   ))}
                 </div>
@@ -1597,7 +1780,41 @@ export function OnboardingWizard({
               Continue with {gate.mine?.display_name ?? providerName}
             </Button>
           )}
-          {step === "identity" && (
+          {step === "identity" &&
+          activeSource !== null &&
+          inspect !== null &&
+          inspect.is_config &&
+          inspect.total_bytes > inspect.ceiling_bytes ? (
+            <>
+              <Button
+                ref={primaryRef}
+                size="sm"
+                variant="primary"
+                disabled={busy || label.trim().length === 0}
+                onClick={() => {
+                  setDegradedChoice(true);
+                  void createTheAccount();
+                }}
+                data-testid="import-settings-only"
+              >
+                {busy ? "Importing…" : "Import settings only — skip history"}
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={busy}
+                onClick={() => {
+                  setManualSource(null);
+                  setImporting(null);
+                  setLabel("");
+                  goto("detect");
+                }}
+                data-testid="add-fresh-instead"
+              >
+                Add fresh
+              </Button>
+            </>
+          ) : step === "identity" ? (
             <Button
               ref={primaryRef}
               size="sm"
@@ -1605,9 +1822,9 @@ export function OnboardingWizard({
               disabled={busy || label.trim().length === 0}
               onClick={() => void createTheAccount()}
             >
-              {busy ? "Setting up…" : importing ? "Import account" : "Create account"}
+              {busy ? "Setting up…" : activeSource !== null ? "Import account" : "Create account"}
             </Button>
-          )}
+          ) : null}
           {step === "login" && (
             <Button
               ref={primaryRef}

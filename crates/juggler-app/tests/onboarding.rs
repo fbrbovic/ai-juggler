@@ -73,6 +73,8 @@ fn import_makes_an_existing_setup_launchable_without_touching_it() {
         source.to_str().unwrap(),
         "Existing account",
         Some("pro".into()),
+        Some("home-pattern".to_string()),
+        false,
     )
     .unwrap();
 
@@ -137,6 +139,8 @@ fn import_makes_an_existing_setup_launchable_without_touching_it() {
         state_dir.to_str().unwrap(),
         "Dup",
         None,
+        Some("home-pattern".to_string()),
+        false,
     )
     .unwrap_err();
     assert!(err.to_string().contains("already managed"));
@@ -339,6 +343,10 @@ fn export_scan_bindings() {
     let config = ts_rs::Config::default();
     juggler_app::commands::DiscoveredInfo::export(&config).unwrap();
     juggler_app::commands::InferenceInfo::export(&config).unwrap();
+    juggler_app::commands::AccountInfo::export(&config).unwrap();
+    juggler_app::commands::ImportResult::export(&config).unwrap();
+    juggler_app::commands::SourceInspectInfo::export(&config).unwrap();
+    juggler_app::commands::FolderSizeInfo::export(&config).unwrap();
 }
 
 /// AJ-E303 Req.2: the duplicate merge — the same canonical dir found
@@ -435,5 +443,90 @@ fn recommendation_stages_without_writing() {
         accounts.is_empty(),
         "staging only — {} accounts appeared",
         accounts.len()
+    );
+}
+
+// ---- AJ-E307: provenance, duplicate block, degraded import, inspect ----
+
+#[test]
+fn duplicate_import_is_blocked_with_the_existing_label_e307() {
+    let work = tempfile::tempdir().unwrap();
+    let stub = claude_stub(work.path());
+    let state = app_state(work.path(), &stub);
+    let source = existing_setup(work.path());
+    commands::account_import_impl(
+        &state,
+        CLAUDE_CODE_ID,
+        source.to_str().unwrap(),
+        "Work",
+        None,
+        Some("cc-switch".to_string()),
+        false,
+    )
+    .unwrap();
+    // The SAME source again: blocked, named, nothing written.
+    let err = commands::account_import_impl(
+        &state,
+        CLAUDE_CODE_ID,
+        source.to_str().unwrap(),
+        "Duplicate",
+        None,
+        Some("cc-switch".to_string()),
+        false,
+    )
+    .unwrap_err();
+    let wire = err.wire();
+    assert_eq!(wire.code, "already_imported");
+    assert!(wire.user_message.contains("Already imported as «Work»"));
+    let storage = state.storage.lock().unwrap();
+    let accounts = storage.accounts().list().unwrap();
+    assert_eq!(accounts.len(), 1, "no second account was created");
+}
+
+#[test]
+fn import_writes_provenance_and_degraded_import_flags_e307() {
+    let work = tempfile::tempdir().unwrap();
+    let stub = claude_stub(work.path());
+    let state = app_state(work.path(), &stub);
+    let source = existing_setup(work.path());
+    // The pre-copy inspection: evidence + breakdown + login.
+    let inspect =
+        commands::source_inspect_impl(&state, CLAUDE_CODE_ID, source.to_str().unwrap()).unwrap();
+    assert!(inspect.is_config);
+    assert!(!inspect.already_managed);
+    assert!(inspect.folders.iter().any(|f| f.name == "projects/"));
+    assert!(inspect.total_bytes > 0);
+    assert_eq!(inspect.ceiling_bytes, 2 * 1024 * 1024 * 1024);
+
+    let result = commands::account_import_impl(
+        &state,
+        CLAUDE_CODE_ID,
+        source.to_str().unwrap(),
+        "Degraded",
+        None,
+        Some("t3".to_string()),
+        true,
+    )
+    .unwrap();
+    assert!(result.degraded, "the degraded flag rides the wire");
+    assert!(
+        !result
+            .account
+            .import_source_path
+            .clone()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(result.account.import_origin.as_deref(), Some("t3"));
+    assert!(result.account.imported_at.is_some());
+    // Provenance is queryable by path (the duplicate check's input).
+    let storage = state.storage.lock().unwrap();
+    let stored = storage.accounts().list().unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].import_origin.as_deref(), Some("t3"));
+    let canonical = source.canonicalize().unwrap();
+    assert_eq!(
+        stored[0].import_source_path.as_deref(),
+        Some(canonical.to_str().unwrap())
     );
 }

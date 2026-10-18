@@ -7,7 +7,9 @@
 
 use std::path::{Path, PathBuf};
 
-use juggler_adapter::environment::{DiscoveredInstall, ImportOutcome, InstallOrigin, LoginProbe};
+use juggler_adapter::environment::{
+    DiscoveredInstall, ImportOutcome, InstallOrigin, LoginProbe, SourceInspect,
+};
 use juggler_core::model::HarnessId;
 
 use crate::claude_code::{CLAUDE_CODE_ID, is_managed_dir, prepare_managed_dir};
@@ -121,15 +123,129 @@ pub fn scan_claude_environment(
     found
 }
 
-/// Copy-imports an existing Claude config dir into the fresh managed dir
-/// `dest` (which must not exist). Read-only toward `source`.
+/// The bounded walk cap (perf budget: ≤ 2 s for ≤ 50k files).
+const INSPECT_FILE_CAP: u64 = 50_000;
+
+/// The history-bearing top-level dirs the settings-only degraded
+/// import skips (AJ-E307 Req.4) — session transcripts and plans.
+const HISTORY_DIRS: &[&str] = &["projects", "todos"];
+
+/// Inspects a candidate source BEFORE any copy (Confirm-source step).
 ///
 /// # Errors
 ///
-/// - [`juggler_adapter::AdapterError::AccountDir`] when the source is not a
-///   plausible config dir, is itself AI-Juggler-managed, when `dest`
-///   exists, when the import ceiling is exceeded, or on any copy failure
-///   (the message carries the plain-language reason).
+/// [`juggler_adapter::AdapterError::AccountDir`] when the path is not a directory.
+pub fn inspect_source(
+    source: &Path,
+    login_probe: &dyn Fn(&Path) -> LoginProbe,
+) -> Result<SourceInspect, juggler_adapter::AdapterError> {
+    let mut inspect = SourceInspect {
+        ceiling_bytes: MAX_IMPORT_BYTES,
+        ..SourceInspect::default()
+    };
+    if !source.is_dir() {
+        return Err(juggler_adapter::AdapterError::AccountDir {
+            path: source.to_path_buf(),
+            message: "folder does not exist (it may have moved)".to_string(),
+        });
+    }
+    let canonical =
+        source
+            .canonicalize()
+            .map_err(|e| juggler_adapter::AdapterError::AccountDir {
+                path: source.to_path_buf(),
+                message: format!("cannot read folder: {e}"),
+            })?;
+    inspect.is_config = is_claude_config_dir(&canonical);
+    inspect.already_managed = is_managed_dir(&canonical);
+    inspect.login = login_probe(&canonical);
+    let mut entries: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+    inspect_walk(&canonical, &canonical, &mut entries, &mut inspect).map_err(|e| {
+        juggler_adapter::AdapterError::AccountDir {
+            path: source.to_path_buf(),
+            message: format!("cannot read folder: {e}"),
+        }
+    })?;
+    let mut folders: Vec<(String, u64)> = entries.into_iter().collect();
+    folders.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    inspect.folders = folders;
+    Ok(inspect)
+}
+
+fn inspect_walk(
+    root: &Path,
+    dir: &Path,
+    entries: &mut std::collections::BTreeMap<String, u64>,
+    inspect: &mut SourceInspect,
+) -> Result<(), String> {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return Ok(()); // unreadable subtree: counts as nothing
+    };
+    for entry in read.flatten() {
+        if inspect.file_count >= INSPECT_FILE_CAP {
+            inspect.truncated = true;
+            return Ok(());
+        }
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        let name = entry.file_name();
+        let name = name.to_string_lossy().into_owned();
+        if SKIP_ON_IMPORT.contains(&name.as_str()) {
+            continue;
+        }
+        if meta.is_dir() {
+            inspect_walk(root, &entry.path(), entries, inspect)?;
+        } else {
+            inspect.file_count += 1;
+            inspect.total_bytes = inspect.total_bytes.saturating_add(meta.len());
+            let relative = entry.path().strip_prefix(root).ok().map(Path::to_path_buf);
+            let is_top_level_file = relative
+                .as_deref()
+                .is_some_and(|rel| rel.components().count() == 1);
+            let top = match relative.as_deref().and_then(|rel| rel.components().next()) {
+                Some(component) => component.as_os_str().to_string_lossy().into_owned(),
+                None => name.clone(),
+            };
+            let label = if is_top_level_file {
+                top
+            } else {
+                format!("{top}/")
+            };
+            let slot = entries.entry(label).or_insert(0);
+            *slot = slot.saturating_add(meta.len());
+        }
+    }
+    Ok(())
+}
+
+/// AJ-E307 Req.4: the degraded import — settings only, history dirs
+/// skipped by name, each skip recorded with its size so the wizard
+/// shows exactly what stayed behind.
+/// # Errors
+///
+/// Same conditions as [`import_claude_config`] (the history dirs are
+/// skipped before any ceiling check applies to them).
+pub fn import_settings_only(
+    source: &Path,
+    dest: &Path,
+    login_probe: &dyn Fn(&Path) -> LoginProbe,
+) -> Result<ImportOutcome, juggler_adapter::AdapterError> {
+    let mut outcome =
+        import_with_cap_skips(source, dest, login_probe, MAX_IMPORT_BYTES, HISTORY_DIRS)?;
+    outcome.degraded = true;
+    Ok(outcome)
+}
+
+/// Copy-imports an existing Claude Code configuration into a managed
+/// account dir (the default and ONLY default-path mode — Req.7: no
+/// adopt-in-place).
+///
+/// # Errors
+///
+/// [`juggler_adapter::AdapterError::AccountDir`] for a missing,
+/// non-config, already-managed, or oversize source, or a destination
+/// that already exists.
 pub fn import_claude_config(
     source: &Path,
     dest: &Path,
@@ -143,13 +259,34 @@ pub fn import_claude_config(
 ///
 /// # Errors
 ///
-/// Same conditions as [`import_claude_config`], with the ceiling taken
-/// from `max_bytes` instead of [`MAX_IMPORT_BYTES`].
+/// Same conditions as [`import_claude_config`], with the ceiling
+/// taken from `max_bytes` instead of [`MAX_IMPORT_BYTES`].
 pub fn import_with_cap(
     source: &Path,
     dest: &Path,
     login_probe: &dyn Fn(&Path) -> LoginProbe,
     max_bytes: u64,
+) -> Result<ImportOutcome, juggler_adapter::AdapterError> {
+    import_with_cap_skips(source, dest, login_probe, max_bytes, &[])
+}
+
+/// [`import_with_cap`] with extra top-level skips (the degraded
+/// import's history dirs), a per-folder breakdown in the outcome,
+/// and SESSION-SCOPED cleanup on mid-copy failure: the import
+/// refuses a `dest` that exists on entry, so anything at `dest`
+/// mid-call is definitionally ours — removing it can never touch a
+/// foreign dir (Req.6: orphans never accumulate silently).
+///
+/// # Errors
+///
+/// Same conditions as [`import_claude_config`]; a mid-copy failure
+/// removes the partial managed dir before the error returns.
+pub fn import_with_cap_skips(
+    source: &Path,
+    dest: &Path,
+    login_probe: &dyn Fn(&Path) -> LoginProbe,
+    max_bytes: u64,
+    extra_skips: &[&str],
 ) -> Result<ImportOutcome, juggler_adapter::AdapterError> {
     use juggler_adapter::AdapterError;
 
@@ -186,18 +323,19 @@ pub fn import_with_cap(
 
     // Collect first, copy second: fail before writing anything when the
     // tree exceeds the ceiling.
-    let mut files: Vec<(PathBuf, u64)> = Vec::new();
-    let mut skipped: Vec<String> = Vec::new();
-    let mut total = 0u64;
-    collect_files(
-        &source,
-        &source,
-        &mut files,
-        &mut skipped,
-        &mut total,
-        max_bytes,
-    )
-    .map_err(dir_error)?;
+    let mut acc = CollectAccum {
+        files: Vec::new(),
+        skipped: Vec::new(),
+        total: 0,
+        folders: Vec::new(),
+    };
+    collect_files(&source, &source, &mut acc, max_bytes, extra_skips).map_err(dir_error)?;
+    let CollectAccum {
+        files,
+        skipped,
+        folders,
+        ..
+    } = acc;
 
     let source_login = login_probe(&source);
 
@@ -209,18 +347,28 @@ pub fn import_with_cap(
     for (relative, _) in &files {
         let from = source.join(relative);
         let to = dest.join(relative);
-        if let Some(parent) = to.parent() {
-            crate::claude_code::create_private_dir(parent).map_err(|e| {
-                AdapterError::AccountDir {
-                    path: to.clone(),
-                    message: format!("cannot create {}: {e}", parent.display()),
-                }
-            })?;
+        if let Some(parent) = to.parent()
+            && let Err(e) = crate::claude_code::create_private_dir(parent)
+        {
+            cleanup_partial(dest);
+            return Err(AdapterError::AccountDir {
+                path: to.clone(),
+                message: format!(
+                    "cannot create {} — the partial import was removed; retry or pick a different folder ({e})",
+                    parent.display()
+                ),
+            });
         }
-        std::fs::copy(&from, &to).map_err(|e| AdapterError::AccountDir {
-            path: to.clone(),
-            message: format!("cannot copy {}: {e}", relative.display()),
-        })?;
+        if let Err(e) = std::fs::copy(&from, &to) {
+            cleanup_partial(dest);
+            return Err(AdapterError::AccountDir {
+                path: to.clone(),
+                message: format!(
+                    "cannot copy {} — the partial import was removed; retry or pick a different folder ({e})",
+                    relative.display()
+                ),
+            });
+        }
         if relative
             .file_name()
             .is_some_and(|n| n == ".credentials.json")
@@ -232,8 +380,23 @@ pub fn import_with_cap(
         bytes_copied += std::fs::metadata(&to).map(|m| m.len()).unwrap_or_default();
     }
 
-    let login = login_probe(dest);
-    let login_note = match (source_login, login) {
+    let (login, login_note) = login_carryover(source_login, login_probe(dest));
+
+    Ok(ImportOutcome {
+        files_copied,
+        bytes_copied,
+        skipped,
+        login,
+        login_note,
+        folders,
+        degraded: false,
+    })
+}
+
+/// The post-copy login carryover pair (destination probe + the
+/// plain-language note when the login could not move).
+fn login_carryover(source: LoginProbe, dest: LoginProbe) -> (LoginProbe, Option<String>) {
+    let note = match (source, dest) {
         (LoginProbe::LoggedIn, LoginProbe::LoggedOut) => Some(
             "Your Claude login lives in the macOS Keychain, locked to the original folder — it can't (and shouldn't) be moved. Sign in once inside the imported account; it takes a few seconds.".to_string(),
         ),
@@ -242,14 +405,30 @@ pub fn import_with_cap(
         }
         _ => None,
     };
+    (dest, note)
+}
 
-    Ok(ImportOutcome {
-        files_copied,
-        bytes_copied,
-        skipped,
-        login,
-        login_note,
-    })
+/// Sizes a skipped subtree (bounded by the walk cap; metadata only).
+fn size_tree(dir: &Path, total: &mut u64) {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in read.flatten() {
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if meta.is_dir() {
+            size_tree(&entry.path(), total);
+        } else {
+            *total = total.saturating_add(meta.len());
+        }
+    }
+}
+
+/// Req.6: best-effort removal of THIS import's partial managed dir
+/// (safe by construction — see [`import_with_cap_skips`]).
+fn cleanup_partial(dest: &Path) {
+    let _ = std::fs::remove_dir_all(dest);
 }
 
 // ---- internals -----------------------------------------------------------
@@ -346,13 +525,21 @@ fn newest_mtime_secs(dir: &Path) -> Option<u64> {
 /// Depth-first file collection relative to `root`; noise entries are
 /// skipped and recorded. Fails (as a string) once the running total
 /// exceeds `max_bytes` — before any copying happens.
+/// The collect pass's accumulators (one bundle — keeps the walker's
+/// argument list inside clippy's budget).
+struct CollectAccum {
+    files: Vec<(PathBuf, u64)>,
+    skipped: Vec<String>,
+    total: u64,
+    folders: Vec<(String, u64)>,
+}
+
 fn collect_files(
     root: &Path,
     dir: &Path,
-    files: &mut Vec<(PathBuf, u64)>,
-    skipped: &mut Vec<String>,
-    total: &mut u64,
+    acc: &mut CollectAccum,
     max_bytes: u64,
+    extra_skips: &[&str],
 ) -> Result<(), String> {
     let Ok(read) = std::fs::read_dir(dir) else {
         return Ok(()); // unreadable subtree: skip it, don't fail the import
@@ -369,23 +556,55 @@ fn collect_files(
         };
         if meta.is_dir() {
             if SKIP_ON_IMPORT.contains(&name.as_str()) {
-                skipped.push(format!("{}/ (rebuildable cache)", relative.display()));
+                acc.skipped
+                    .push(format!("{}/ (rebuildable cache)", relative.display()));
                 continue;
             }
-            collect_files(root, &entry.path(), files, skipped, total, max_bytes)?;
+            if extra_skips.contains(&name.as_str()) {
+                // Size the skipped tree so the degraded import's skip
+                // note can say how much history stayed behind.
+                let mut skipped_bytes = 0u64;
+                size_tree(&entry.path(), &mut skipped_bytes);
+                #[allow(clippy::cast_precision_loss)]
+                let gib = skipped_bytes as f64 / 1_073_741_824.0;
+                acc.skipped.push(format!(
+                    "{}/ ({gib:.1} GiB history — skipped at your choice)",
+                    relative.display(),
+                ));
+                continue;
+            }
+            collect_files(root, &entry.path(), acc, max_bytes, extra_skips)?;
+        } else if SKIP_ON_IMPORT.contains(&name.as_str()) {
+            acc.skipped
+                .push(format!("{} (rebuildable)", relative.display()));
         } else {
-            if SKIP_ON_IMPORT.contains(&name.as_str()) {
-                skipped.push(format!("{} (rebuildable)", relative.display()));
-                continue;
-            }
-            *total += meta.len();
-            if *total > max_bytes {
+            acc.total += meta.len();
+            if acc.total > max_bytes {
                 return Err(format!(
                     "configuration is larger than the {} GiB import ceiling — add a fresh account instead",
                     max_bytes / (1024 * 1024 * 1024)
                 ));
             }
-            files.push((relative, meta.len()));
+            // Per-top-level-entry accounting (the breakdown list) —
+            // computed before `relative` moves into the file list.
+            let top = match relative.components().next() {
+                Some(component) => component.as_os_str().to_string_lossy().into_owned(),
+                None => name.clone(),
+            };
+            let label = if relative.components().count() > 1 {
+                format!("{top}/")
+            } else {
+                top
+            };
+            match acc
+                .folders
+                .iter_mut()
+                .find(|(existing, _)| *existing == label)
+            {
+                Some(slot) => slot.1 += meta.len(),
+                None => acc.folders.push((label, meta.len())),
+            }
+            acc.files.push((relative, meta.len()));
         }
     }
     Ok(())

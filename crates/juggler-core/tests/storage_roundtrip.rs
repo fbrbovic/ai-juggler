@@ -53,6 +53,9 @@ fn arb_account() -> impl Strategy<Value = Account> {
             cleanup_opt_in: false,
             renewal_date: None,
             preview_opt_in: false,
+            import_source_path: None,
+            import_origin: None,
+            imported_at: None,
         })
 }
 
@@ -186,6 +189,9 @@ fn seed_chain(storage: &Storage) -> (Account, Profile) {
         cleanup_opt_in: false,
         renewal_date: None,
         preview_opt_in: false,
+        import_source_path: None,
+        import_origin: None,
+        imported_at: None,
     };
     let profile = Profile {
         id: ProfileId::new("seed-profile"),
@@ -543,8 +549,8 @@ fn v4_database_upgrades_in_place_to_v5_with_identical_values() {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     assert_eq!(
-        version, 20,
-        "v4 → current (v20, AJ-E201 switch graph) exactly once, on open"
+        version, 21,
+        "v4 → current (v21, AJ-E307 import provenance) exactly once, on open"
     );
 
     let account = storage.accounts().get(&AccountId::new("acc-1")).unwrap();
@@ -571,7 +577,7 @@ fn v4_database_upgrades_in_place_to_v5_with_identical_values() {
         .raw_conn()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 20);
+    assert_eq!(version, 21);
     assert!(storage.sessions().get(&SessionId::new("sess-1")).is_ok());
 }
 
@@ -613,6 +619,9 @@ fn account_renewal_date_roundtrip_and_default_none() {
             cleanup_opt_in: false,
             renewal_date: None,
             preview_opt_in: false,
+            import_source_path: None,
+            import_origin: None,
+            imported_at: None,
         })
         .unwrap();
     // A row stored WITHOUT the field loads as None — never a guess (D-12).
@@ -1062,7 +1071,10 @@ fn v12_ledger_upgrades_in_place_to_v13() {
         .raw_conn()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 20, "v12 → current (v20) exactly once, on open");
+    assert_eq!(
+        version, 21,
+        "v12 → current (v21, AJ-E307) exactly once, on open"
+    );
     drop(storage);
 
     // …then the ledger repo opens the same file (CREATE no-ops, the
@@ -1079,4 +1091,44 @@ fn v12_ledger_upgrades_in_place_to_v13() {
     drop(repo);
     let repo = ProcessLedgerRepo::open(&file).unwrap();
     assert_eq!(repo.rows_for_session("sess-old").unwrap().len(), 1);
+}
+
+#[test]
+fn account_provenance_roundtrip_e307() {
+    // AJ-E307 Req.1: provenance persists verbatim; absent = unknown
+    // (never guessed), on both insert and update paths.
+    let dir = tempfile::tempdir().unwrap();
+    let storage = juggler_core::storage::Storage::open(&dir.path().join("s.db")).unwrap();
+    let account = Account {
+        id: AccountId::new("acc-prov"),
+        harness: HarnessId::new("claude-code"),
+        label: "Provenanced".into(),
+        plan: None,
+        state_dir: dir.path().join("managed"),
+        cleanup_opt_in: false,
+        renewal_date: None,
+        preview_opt_in: false,
+        import_source_path: Some("/Users/you/.cc-switch/profiles/work".into()),
+        import_origin: Some("cc-switch".into()),
+        imported_at: Some(1_728_800_000_000),
+    };
+    storage.accounts().insert(&account).unwrap();
+    let loaded = storage.accounts().get(&AccountId::new("acc-prov")).unwrap();
+    assert_eq!(
+        loaded.import_source_path.as_deref(),
+        Some("/Users/you/.cc-switch/profiles/work")
+    );
+    assert_eq!(loaded.import_origin.as_deref(), Some("cc-switch"));
+    assert_eq!(loaded.imported_at, Some(1_728_800_000_000));
+    // An update that leaves provenance untouched keeps it.
+    storage
+        .accounts()
+        .update(&Account {
+            label: "Renamed".into(),
+            ..account
+        })
+        .unwrap();
+    let reloaded = storage.accounts().get(&AccountId::new("acc-prov")).unwrap();
+    assert_eq!(reloaded.label, "Renamed");
+    assert_eq!(reloaded.import_origin.as_deref(), Some("cc-switch"));
 }

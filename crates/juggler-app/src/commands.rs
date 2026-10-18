@@ -1392,6 +1392,17 @@ pub struct AccountInfo {
     /// AJ-E415 per-Account live-preview switch (off by default; the
     /// enable is the Screen-Recording consent moment).
     pub preview_opt_in: bool,
+    /// AJ-E307 Req.1/2: import provenance (source canonical path /
+    /// origin / imported-at). `None` = provenance-unknown (pre-E307
+    /// accounts — never guessed).
+    #[ts(optional = nullable)]
+    pub import_source_path: Option<String>,
+    /// The discovery origin (`cc-switch|t3|alias|home-pattern|manual`).
+    #[ts(optional = nullable)]
+    pub import_origin: Option<String>,
+    /// Import completion time, epoch ms (None = never imported).
+    #[ts(optional = nullable)]
+    pub imported_at: Option<i64>,
 }
 
 /// A Launch settings row for the UI (AJ-E107).
@@ -1799,6 +1810,11 @@ pub struct ImportResult {
     pub skipped: Vec<String>,
     /// Login state of the imported account: `logged_in` | `logged_out`.
     pub login: String,
+    /// AJ-E307 Req.3: per top level entry bytes, largest first — the
+    /// copy receipt's breakdown.
+    pub folders: Vec<FolderSizeInfo>,
+    /// True when this was the settings-only degraded import.
+    pub degraded: bool,
     /// When login did not carry over, the plain-language reason and next
     /// step (e.g. macOS keychain path-locking).
     pub login_note: Option<String>,
@@ -1881,6 +1897,9 @@ pub fn create_account(
         cleanup_opt_in: false,
         renewal_date: None,
         preview_opt_in: false,
+        import_source_path: None,
+        import_origin: None,
+        imported_at: None,
     };
     lock_storage_arc(state)?.accounts().insert(&account)?;
     Ok(account_info_of(&account))
@@ -1978,6 +1997,101 @@ pub fn environment_scan_impl(state: &Arc<AppState>) -> Vec<DiscoveredInfo> {
     out
 }
 
+/// AJ-E307 Req.3: one breakdown row (top-level entry + bytes).
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct FolderSizeInfo {
+    /// Top-level folder (with `/`) or file name.
+    pub name: String,
+    /// Importable bytes under it.
+    #[ts(type = "number")]
+    pub bytes: u64,
+}
+
+/// AJ-E307 Req.3: the pre-copy source inspection on the wire.
+#[derive(Clone, PartialEq, Debug, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+// A flat one-row wire payload for one panel — the honest shape here
+// is four independent flags, not a state machine.
+#[allow(clippy::struct_excessive_bools)]
+pub struct SourceInspectInfo {
+    /// Total importable bytes.
+    #[ts(type = "number")]
+    pub total_bytes: u64,
+    /// Importable file count.
+    #[ts(type = "number")]
+    pub file_count: u64,
+    /// Per-entry breakdown, largest first.
+    pub folders: Vec<FolderSizeInfo>,
+    /// The bounded walk hit its file cap (sizes are a floor).
+    pub truncated: bool,
+    /// The copy ceiling in bytes — the UI offers the degraded path
+    /// from `total_bytes > ceiling_bytes`, never a raw ceiling string.
+    #[ts(type = "number")]
+    pub ceiling_bytes: u64,
+    /// Config evidence — false renders the plain-language rejection.
+    pub is_config: bool,
+    /// Already managed by AI Juggler.
+    pub already_managed: bool,
+    /// Source login state: `logged_in` | `logged_out`.
+    pub login: String,
+    /// Keychain-bound login (signed in, no credentials file) — the
+    /// re-login note shows at Confirm-source time (Req.8).
+    pub keychain_bound: bool,
+}
+
+/// Inspects a candidate import source BEFORE any copy (metadata-only).
+#[tauri::command]
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] (unknown harness / unreadable path).
+pub fn source_inspect(
+    state: tauri::State<'_, Arc<AppState>>,
+    harness: String,
+    source_path: String,
+) -> AppResult<SourceInspectInfo> {
+    source_inspect_impl(state.inner(), &harness, &source_path)
+}
+
+/// Core implementation shared with integration tests.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] on failure.
+pub fn source_inspect_impl(
+    state: &Arc<AppState>,
+    harness: &str,
+    source_path: &str,
+) -> AppResult<SourceInspectInfo> {
+    let adapter = state
+        .registry
+        .get(&juggler_core::model::HarnessId::new(harness))
+        .ok_or_else(|| AppError::UnknownHarness(harness.to_string()))?;
+    let inspect = adapter.inspect_source(std::path::Path::new(source_path))?;
+    // Keychain-bound: signed in with NO credentials file (the login
+    // cannot move — E303's caveat, surfaced at Confirm-source).
+    let keychain_bound = inspect.login == juggler_adapter::environment::LoginProbe::LoggedIn
+        && !std::path::Path::new(source_path)
+            .join(".credentials.json")
+            .exists();
+    Ok(SourceInspectInfo {
+        total_bytes: inspect.total_bytes,
+        file_count: inspect.file_count,
+        folders: inspect
+            .folders
+            .into_iter()
+            .map(|(name, bytes)| FolderSizeInfo { name, bytes })
+            .collect(),
+        truncated: inspect.truncated,
+        ceiling_bytes: inspect.ceiling_bytes,
+        is_config: inspect.is_config,
+        already_managed: inspect.already_managed,
+        login: login_probe_name(inspect.login),
+        keychain_bound,
+    })
+}
+
 /// Imports a discovered setup as a new managed account: byte-copies the
 /// config into an isolated dir (source untouched), creates a default
 /// "Main" profile so the account is immediately launchable.
@@ -1992,8 +2106,18 @@ pub fn account_import(
     source_path: String,
     label: String,
     plan: Option<String>,
+    origin: Option<String>,
+    degraded: Option<bool>,
 ) -> AppResult<ImportResult> {
-    account_import_impl(state.inner(), &harness, &source_path, &label, plan)
+    account_import_impl(
+        state.inner(),
+        &harness,
+        &source_path,
+        &label,
+        plan,
+        origin,
+        degraded.unwrap_or(false),
+    )
 }
 
 /// Core implementation shared with integration tests.
@@ -2007,14 +2131,37 @@ pub fn account_import_impl(
     source_path: &str,
     label: &str,
     plan: Option<String>,
+    origin: Option<String>,
+    degraded: bool,
 ) -> AppResult<ImportResult> {
     let adapter = state
         .registry
         .get(&juggler_core::model::HarnessId::new(harness))
         .ok_or_else(|| AppError::UnknownHarness(harness.to_string()))?;
+    // AJ-E307 Req.2: duplicate protection — a provenance-matched
+    // source is blocked with the existing account's label, before
+    // anything is written.
+    let canonical_source = match std::path::Path::new(source_path).canonicalize() {
+        Ok(path) => path.to_string_lossy().into_owned(),
+        Err(_) => source_path.to_owned(),
+    };
+    {
+        let storage = lock_storage_arc(state)?;
+        for existing in storage.accounts().list()? {
+            if existing.import_source_path.as_deref() == Some(canonical_source.as_str()) {
+                return Err(AppError::AlreadyImported {
+                    label: existing.label.clone(),
+                });
+            }
+        }
+    }
     let id = AccountId::new(format!("{harness}-{}", unique_suffix()));
     let state_dir = state.accounts_dir().join(harness).join(id.as_str());
-    let outcome = adapter.import_account(std::path::Path::new(source_path), &state_dir)?;
+    let outcome = if degraded {
+        adapter.import_account_degraded(std::path::Path::new(source_path), &state_dir)?
+    } else {
+        adapter.import_account(std::path::Path::new(source_path), &state_dir)?
+    };
     let account = Account {
         id,
         harness: juggler_core::model::HarnessId::new(harness),
@@ -2024,6 +2171,11 @@ pub fn account_import_impl(
         cleanup_opt_in: false,
         renewal_date: None,
         preview_opt_in: false,
+        // AJ-E307 Req.1: the import's provenance, written at import
+        // time — canonical path + origin + completion stamp.
+        import_source_path: Some(canonical_source),
+        import_origin: origin,
+        imported_at: Some(juggler_core::model::Timestamp::now().millis()),
     };
     {
         let storage = lock_storage_arc(state)?;
@@ -2045,6 +2197,12 @@ pub fn account_import_impl(
         skipped: outcome.skipped,
         login: login_probe_name(outcome.login),
         login_note: outcome.login_note,
+        folders: outcome
+            .folders
+            .into_iter()
+            .map(|(name, bytes)| FolderSizeInfo { name, bytes })
+            .collect(),
+        degraded: outcome.degraded,
     })
 }
 
@@ -3622,6 +3780,9 @@ fn account_info_of(account: &Account) -> AccountInfo {
         cleanup_opt_in: account.cleanup_opt_in,
         renewal_date: account.renewal_date.clone(),
         preview_opt_in: account.preview_opt_in,
+        import_source_path: account.import_source_path.clone(),
+        import_origin: account.import_origin.clone(),
+        imported_at: account.imported_at,
     }
 }
 
@@ -8625,6 +8786,9 @@ mod tests {
                 cleanup_opt_in: false,
                 renewal_date: None,
                 preview_opt_in: false,
+                import_source_path: None,
+                import_origin: None,
+                imported_at: None,
             })
             .expect("seed account");
         for (id, model) in [("rec-1", Some("opus")), ("rec-2", None)] {
@@ -8870,6 +9034,9 @@ mod tests {
                 cleanup_opt_in: false,
                 renewal_date: None,
                 preview_opt_in: false,
+                import_source_path: None,
+                import_origin: None,
+                imported_at: None,
             })
             .expect("seed account");
         storage

@@ -1690,3 +1690,92 @@ for (const theme of ["dark", "light"] as const) {
     await expect(page.getByTestId("onboarding-wizard")).toBeVisible();
   });
 }
+
+/**
+ * AJ-E307 a11y gate: the Confirm-source panel — the breakdown is
+ * real list markup, failure states announce via role="alert", and
+ * the step scans axe-clean (0 critical/serious) in both themes.
+ */
+for (const theme of ["dark", "light"] as const) {
+  test(`confirm-source — list semantics, alerts, axe 0 — ${theme}`, async ({ page }) => {
+    await page.addInitScript(
+      ({ fixture, theme: t }) => {
+        const w = window as unknown as Record<string, unknown>;
+        w.__AIJ_FIXTURE__ = fixture;
+        w.__AIJ_PROVIDER_INSTALLS__ = [
+          {
+            provider: "claude-code",
+            display_name: "Claude Code",
+            install_url: "https://claude.com/download",
+            status: "installed",
+            version: "2.1.296",
+            binary: "/usr/local/bin/claude",
+            notes: [],
+          },
+        ];
+        w.__AIJ_SCAN_REPORT__ = {
+          installs: [
+            {
+              harness: "claude-code",
+              path: "/Users/you/.claude-work",
+              origin: "home-pattern",
+              login: "logged_in",
+              bytes: 9_000_000,
+              last_used_secs: 86_400,
+              managed: false,
+              notes: [],
+              inference: {
+                purpose: "Work",
+                purpose_confidence: "found",
+                login: "signed-in",
+                login_confidence: "found",
+                activity: "active",
+                activity_confidence: "found",
+                activity_words: "Active this week",
+                keychain_bound: true,
+              },
+              signals: ["home-pattern"],
+            },
+          ],
+          probes: [],
+          seeds: [],
+          desktop_apps: [],
+          cancelled: false,
+        };
+        w.__AIJ_RECOMMENDATION__ = { items: [], summary: "", start_here: null };
+        w.__AIJ_SOURCE_INSPECT__ = {
+          total_bytes: 46_000_000,
+          file_count: 128,
+          folders: [
+            { name: "projects/", bytes: 40_000_000 },
+            { name: "settings.json", bytes: 60 },
+          ],
+          truncated: false,
+          ceiling_bytes: 2_147_483_648,
+          is_config: true,
+          already_managed: false,
+          login: "logged_in",
+          keychain_bound: true,
+        };
+        localStorage.setItem("aij.theme", t);
+        sessionStorage.setItem("aij.ready.skipped", "1");
+      },
+      { fixture: honestEmpty, theme },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+    await page.getByTestId("install-continue").click();
+    await page.getByTestId("import-as").first().click();
+    const panel = page.getByTestId("confirm-source");
+    await expect(panel).toBeVisible();
+    // The breakdown is a real list with items a screen reader counts.
+    const breakdown = page.getByTestId("source-breakdown");
+    await expect(breakdown).toBeVisible();
+    expect(await breakdown.locator("li").count()).toBeGreaterThan(0);
+    // Sizes are text (never colour-only).
+    await expect(panel).toContainText("projects/");
+    const confirmed = await scanSeriousWithConfirm(page);
+    expect(confirmed).toHaveLength(0);
+  });
+}

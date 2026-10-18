@@ -137,6 +137,41 @@ pub trait HarnessAdapter: Send + Sync {
         ))
     }
 
+    /// AJ-E307 Req.3: the pre-copy source inspection — metadata-only;
+    /// the Confirm-source step's data (sizes, breakdown, evidence).
+    ///
+    /// # Errors
+    ///
+    /// [`AdapterError::Unsupported`] by default; adapters with a copy
+    /// import surface their own typed failures.
+    fn inspect_source(
+        &self,
+        source: &Path,
+    ) -> Result<crate::environment::SourceInspect, AdapterError> {
+        let _ = source;
+        Err(AdapterError::Unsupported(
+            "this adapter cannot inspect configurations".into(),
+        ))
+    }
+
+    /// AJ-E307 Req.4: the settings-only degraded import — history
+    /// dirs skipped, each skip recorded with its size.
+    ///
+    /// # Errors
+    ///
+    /// [`AdapterError::Unsupported`] by default; otherwise the same
+    /// conditions as [`HarnessAdapter::import_account`].
+    fn import_account_degraded(
+        &self,
+        source: &Path,
+        dest: &Path,
+    ) -> Result<ImportOutcome, AdapterError> {
+        let _ = (source, dest);
+        Err(AdapterError::Unsupported(
+            "this adapter has no degraded import".into(),
+        ))
+    }
+
     /// The vendor's own web sign-in page, when one exists (the maximum
     /// login aid: we open the page, the user completes the vendor's flow).
     #[must_use]

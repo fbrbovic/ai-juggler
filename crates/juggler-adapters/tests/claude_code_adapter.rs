@@ -27,6 +27,9 @@ fn account(state_dir: &Path) -> juggler_core::model::Account {
         cleanup_opt_in: false,
         renewal_date: None,
         preview_opt_in: false,
+        import_source_path: None,
+        import_origin: None,
+        imported_at: None,
     }
 }
 

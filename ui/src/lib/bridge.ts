@@ -1,3 +1,6 @@
+
+// AJ-E307: per top-level entry bytes (the copy receipt breakdown)
+// and the degraded flag; provenance echoes on AccountInfo.
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -5,6 +8,7 @@ import type { AppInfo } from "../types/generated/AppInfo";
 import type { AccountInfo } from "../types/generated/AccountInfo";
 import type { DiscoveredInfo } from "../types/generated/DiscoveredInfo";
 import type { ImportResult } from "../types/generated/ImportResult";
+import type { SourceInspectInfo } from "../types/generated/SourceInspectInfo";
 import type { InstanceInfo } from "../types/generated/InstanceInfo";
 import type { InstanceQuotaInfo } from "../types/generated/InstanceQuotaInfo";
 import type { InstanceResourcesInfo } from "../types/generated/InstanceResourcesInfo";
@@ -41,6 +45,7 @@ export type {
   InstanceInfo,
   InstanceQuotaInfo,
   InstanceResourcesInfo,
+  SourceInspectInfo,
   LaunchRecipeInfo,
   LaunchResult,
   NeedsAttention,
@@ -461,11 +466,24 @@ export async function accountImport(
   sourcePath: string,
   label: string,
   plan: string | null,
+  origin: string | null = null,
+  degraded = false,
 ): Promise<ImportResult> {
   if (!hasBackend) {
     // AJ-E304 test seam: substrings of source paths that reject with a
     // coded error, so the partial-failure accept flow (one item fails,
     // the rest complete) is reviewable in a plain browser.
+    // AJ-E307 test seam: reject with the coded duplicate error.
+    const duplicateLabel = (
+      window as unknown as { __AIJ_IMPORT_DUPLICATE_LABEL__?: string }
+    ).__AIJ_IMPORT_DUPLICATE_LABEL__;
+    if (duplicateLabel !== undefined) {
+      throw {
+        code: "already_imported",
+        retryable: false,
+        user_message: `Already imported as «${duplicateLabel}» — open it from Accounts instead of importing again`,
+      };
+    }
     const failPaths =
       (window as unknown as { __AIJ_IMPORT_FAIL_PATHS__?: string[] })
         .__AIJ_IMPORT_FAIL_PATHS__ ?? [];
@@ -489,15 +507,61 @@ export async function accountImport(
         renewal_date: null,
         preview_opt_in: false,
       },
-      files_copied: 128,
-      bytes_copied: 46_000_000,
-      skipped: ["shell-snapshots/ (rebuildable cache)", "statsig/ (rebuildable cache)"],
+      files_copied: degraded ? 8 : 128,
+      bytes_copied: degraded ? 6_000_000 : 46_000_000,
+      folders: degraded
+        ? [{ name: "settings.json", bytes: 60 }, { name: ".credentials.json", bytes: 40 }]
+        : [
+            { name: "projects/", bytes: 40_000_000 },
+            { name: "settings.json", bytes: 60 },
+            { name: ".credentials.json", bytes: 40 },
+          ],
+      degraded,
+      skipped: degraded
+        ? ["projects/ (37.3 GiB history — skipped at your choice)", "shell-snapshots/ (rebuildable cache)"]
+        : ["shell-snapshots/ (rebuildable cache)", "statsig/ (rebuildable cache)"],
       login: "logged_out",
       login_note:
         "Your Claude login lives in the macOS Keychain, locked to the original folder — it can't (and shouldn't) be moved. Sign in once inside the imported account; it takes a few seconds.",
     };
   }
-  return invoke<ImportResult>("account_import", { harness, sourcePath, label, plan });
+  return invoke<ImportResult>("account_import", {
+    harness,
+    sourcePath,
+    label,
+    plan,
+    origin,
+    degraded,
+  });
+}
+
+/** AJ-E307 Req.3: inspect a candidate import source BEFORE any copy
+ * (metadata-only): sizes, per-entry breakdown, evidence, login. */
+export async function sourceInspect(
+  harness: string,
+  sourcePath: string,
+): Promise<SourceInspectInfo> {
+  if (!hasBackend) {
+    return (
+      (window as unknown as { __AIJ_SOURCE_INSPECT__?: SourceInspectInfo })
+        .__AIJ_SOURCE_INSPECT__ ?? {
+        total_bytes: 46_000_000,
+        file_count: 128,
+        folders: [
+          { name: "projects/", bytes: 40_000_000 },
+          { name: "settings.json", bytes: 60 },
+          { name: ".credentials.json", bytes: 40 },
+        ],
+        truncated: false,
+        ceiling_bytes: 2_147_483_648,
+        is_config: true,
+        already_managed: false,
+        login: "logged_in",
+        keychain_bound: true,
+      }
+    );
+  }
+  return invoke<SourceInspectInfo>("source_inspect", { harness, sourcePath });
 }
 
 /** Opens the vendor's own web sign-in page in the system browser. */
@@ -1825,7 +1889,13 @@ export async function switchUndo(edgeId: string): Promise<LaunchResult> {
 
 /** Native macOS folder picker; null when cancelled. */
 export async function pickDirectory(): Promise<string | null> {
-  if (!hasBackend) return null;
+  if (!hasBackend) {
+    // AJ-E307 test seam: specs inject the "picked" folder.
+    return (
+      (window as unknown as { __AIJ_PICK_DIRECTORY__?: string })
+        .__AIJ_PICK_DIRECTORY__ ?? null
+    );
+  }
   const selection = await openDialog({ directory: true, multiple: false });
   return typeof selection === "string" ? selection : null;
 }

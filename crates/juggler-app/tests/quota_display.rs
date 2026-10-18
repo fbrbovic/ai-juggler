@@ -38,6 +38,9 @@ fn account(provider: &str, plan: Option<&str>) -> Account {
         cleanup_opt_in: false,
         renewal_date: None,
         preview_opt_in: false,
+        import_source_path: None,
+        import_origin: None,
+        imported_at: None,
     }
 }
 
