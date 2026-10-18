@@ -2047,7 +2047,7 @@ pub struct IsolationRowInfo {
     pub id: &'static str,
     /// The user-facing line (exactly what was checked).
     pub label: String,
-    /// True when the check passed; a fail BLOCKS [Launch], not [Done].
+    /// True when the check passed; a fail BLOCKS \[Launch\], not \[Done\].
     pub pass: bool,
     /// Evidence/note copy (the failing line names itself).
     pub detail: String,
@@ -2055,7 +2055,7 @@ pub struct IsolationRowInfo {
 
 /// AJ-E308 Req.7: the post-import/create isolation checklist — six
 /// named checks, metadata-only, run automatically; any fail blocks
-/// [Launch] with the failing line named.
+/// \[Launch\] with the failing line named.
 ///
 /// # Errors
 ///
