@@ -2073,6 +2073,9 @@ pub fn isolation_check(
 /// # Errors
 ///
 /// Returns the typed [`AppError`] on lookup/storage failures.
+// One assembly pass over six named checks; splitting it would hide
+// the checklist's shape.
+#[allow(clippy::too_many_lines)]
 pub fn isolation_check_impl(
     state: &Arc<AppState>,
     account_id: &str,
@@ -2086,13 +2089,15 @@ pub fn isolation_check_impl(
     let dir = account.state_dir.clone();
     let mut rows = Vec::new();
 
-    // 1. The managed dir is owner-private (0700).
+    // 1. The managed dir is owner-private (0700). The mask IS the
+    // check (no group/other bits set) — a trailing-zeros rewrite
+    // would obscure it.
     #[cfg(unix)]
     let private_pass = {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::metadata(&dir)
-            .map(|meta| meta.permissions().mode() & 0o077 == 0)
-            .unwrap_or(false)
+        #[allow(clippy::verbose_bit_mask)]
+        let check = |mode: u32| mode & 0o077 == 0;
+        std::fs::metadata(&dir).is_ok_and(|meta| check(meta.permissions().mode()))
     };
     #[cfg(not(unix))]
     let private_pass = std::fs::metadata(&dir).is_ok();
@@ -2132,12 +2137,11 @@ pub fn isolation_check_impl(
             std::path::Path::new("/"),
             &juggler_adapter::LaunchMode::Interactive,
         )
-        .map(|spec| {
+        .is_ok_and(|spec| {
             spec.env
                 .get("CLAUDE_CONFIG_DIR")
                 .is_some_and(|value| std::path::Path::new(value) == dir)
-        })
-        .unwrap_or(false);
+        });
     rows.push(IsolationRowInfo {
         id: "launch_env_managed_only",
         label: "Launch environment points only at this account's folder".into(),
@@ -2147,15 +2151,11 @@ pub fn isolation_check_impl(
 
     // 4. The import SOURCE carries no AI Juggler writes (no marker,
     //    nothing of ours inside it) — metadata-only.
-    let source_clean = account
-        .import_source_path
-        .as_deref()
-        .map(|source| {
-            !std::path::Path::new(source)
-                .join(juggler_adapters::claude_code::MANAGED_MARKER)
-                .is_file()
-        })
-        .unwrap_or(true); // fresh account: no source, vacuously clean
+    let source_clean = account.import_source_path.as_deref().is_none_or(|source| {
+        !std::path::Path::new(source)
+            .join(juggler_adapters::claude_code::MANAGED_MARKER)
+            .is_file()
+    });
     rows.push(IsolationRowInfo {
         id: "source_free_of_juggler_writes",
         label: "The imported-from folder is untouched (no AI Juggler writes)".into(),
@@ -2167,15 +2167,12 @@ pub fn isolation_check_impl(
     });
 
     // 5. Per-dir probe independence: this dir's login classification
-    //    reads ONLY this dir (structural: the probe takes one path;
-    //    cross-account bleed is impossible by construction — pinned
-    //    by the two-account fixture test).
+    //    reads ONLY this dir (structural: single-path probe).
     let probe_state = login_state_of(&account);
-    let probe_pass = !matches!(probe_state, juggler_adapters::LoginState::Unknown);
     rows.push(IsolationRowInfo {
         id: "probe_independence",
         label: "Login state reads only this account's folder".into(),
-        pass: probe_pass,
+        pass: !matches!(probe_state, juggler_adapters::LoginState::Unknown),
         detail: format!(
             "probe classified this dir as {}",
             login_state_name(probe_state)
@@ -2184,14 +2181,11 @@ pub fn isolation_check_impl(
 
     // 6. No stray files directly under the harness accounts root —
     //    writes outside managed dirs would land there.
-    let parent_clean = dir
-        .parent()
-        .map(|parent| {
-            std::fs::read_dir(parent)
-                .map(|read| read.flatten().all(|entry| entry.path().is_dir()))
-                .unwrap_or(true)
-        })
-        .unwrap_or(true);
+    let parent_clean = dir.parent().is_none_or(|parent| {
+        std::fs::read_dir(parent)
+            .is_ok_and(|read| read.flatten().all(|entry| entry.path().is_dir()))
+    });
+
     rows.push(IsolationRowInfo {
         id: "no_writes_outside_managed",
         label: "No stray files outside managed folders".into(),

@@ -549,7 +549,10 @@ fn isolation_check_six_rows_and_a_forced_fail_e308() {
     .unwrap();
     let rows = commands::isolation_check_impl(&state, &result.account.id).unwrap();
     assert_eq!(rows.len(), 6, "exactly the six named rows: {rows:#?}");
-    assert!(rows.iter().all(|row| row.pass), "a healthy import: {rows:#?}");
+    assert!(
+        rows.iter().all(|row| row.pass),
+        "a healthy import: {rows:#?}"
+    );
     let ids: Vec<&str> = rows.iter().map(|row| row.id).collect();
     assert!(ids.contains(&"managed_dir_private"));
     assert!(ids.contains(&"marker_present"));
@@ -560,12 +563,13 @@ fn isolation_check_six_rows_and_a_forced_fail_e308() {
 
     // Forced fail: a stray FILE at the accounts root trips row 6 and
     // names itself (the UI blocks [Launch], never [Done]).
-    let accounts_root = state
-        .accounts_dir()
-        .join(CLAUDE_CODE_ID);
+    let accounts_root = state.accounts_dir().join(CLAUDE_CODE_ID);
     std::fs::write(accounts_root.join("stray.txt"), "leak").unwrap();
     let rows = commands::isolation_check_impl(&state, &result.account.id).unwrap();
-    let stray = rows.iter().find(|row| row.id == "no_writes_outside_managed").unwrap();
+    let stray = rows
+        .iter()
+        .find(|row| row.id == "no_writes_outside_managed")
+        .unwrap();
     assert!(!stray.pass);
     let _ = std::fs::remove_file(accounts_root.join("stray.txt"));
 }

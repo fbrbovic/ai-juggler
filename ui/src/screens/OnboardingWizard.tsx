@@ -1581,6 +1581,7 @@ export function OnboardingWizard({
                   onSpawned={(terminalId) =>
                     openLoginTerminal(terminalId, `Sign in · ${currentSignin.label}`)
                   }
+                  onReady={() => setSigninIndex((index) => index + 1)}
                   onSkip={() => setSigninIndex((index) => index + 1)}
                 />
               )}

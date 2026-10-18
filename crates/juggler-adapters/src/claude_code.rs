@@ -249,15 +249,10 @@ impl HarnessAdapter for ClaudeCodeAdapter {
         let legacy_shared_keychain = false;
         let probe = move |path: &Path| match adapter.login_state(path) {
             LoginState::SignedIn => LoginProbe::LoggedIn,
+            LoginState::LoggedOut if legacy_shared_keychain => LoginProbe::LoggedIn,
             // Scan-side axis stays binary (inference vocabulary); the
             // account-state WIRE carries the full taxonomy (AJ-E308).
-            LoginState::Partial
-            | LoginState::Expired
-            | LoginState::SsoPending
-            | LoginState::ApiKey
-            | LoginState::Unknown => LoginProbe::LoggedOut,
-            LoginState::LoggedOut if legacy_shared_keychain => LoginProbe::LoggedIn,
-            LoginState::LoggedOut => LoginProbe::LoggedOut,
+            _ => LoginProbe::LoggedOut,
         };
         let home = home_relative(".")
             .filter(|p| p.is_dir())
@@ -433,7 +428,7 @@ pub enum LoginState {
     /// No credentials found for this config dir.
     LoggedOut,
     /// The probe itself failed (unreadable dir) — NEVER renders as
-    /// LoggedOut (AJ-E308 Req.1).
+    /// [`LoginState::LoggedOut`] (AJ-E308 Req.1).
     Unknown,
 }
 
@@ -441,7 +436,7 @@ pub enum LoginState {
 fn epoch_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|since| since.as_secs() as i64)
+        .map(|since| i64::try_from(since.as_secs()).unwrap_or(i64::MAX))
         .unwrap_or_default()
 }
 
@@ -496,7 +491,7 @@ impl ClaudeCodeAdapter {
         value
             .get("expires_at")
             .or_else(|| value.get("expiry"))
-            .and_then(|claim| claim.as_i64())
+            .and_then(serde_json::Value::as_i64)
             .is_some_and(|at| at < epoch_secs())
     }
 

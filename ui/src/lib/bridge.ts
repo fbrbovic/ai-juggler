@@ -578,7 +578,11 @@ export async function accountLoginCommand(accountId: string): Promise<string> {
 
 export async function accountLoginState(accountId: string): Promise<string> {
   if (!hasBackend) {
-    return "logged_out";
+    // AJ-E308 test seam: specs inject the probed state.
+    return (
+      (window as unknown as { __AIJ_LOGIN_STATE__?: string }).__AIJ_LOGIN_STATE__ ??
+      "logged_out"
+    );
   }
   return invoke<string>("account_login_state", { accountId });
 }

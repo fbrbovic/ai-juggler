@@ -74,6 +74,7 @@ export function LoginQueueCard({
   loginNote,
   terminalEnded = false,
   onSpawned,
+  onReady,
   onSkip,
   onDone,
   compact = false,
@@ -87,6 +88,9 @@ export function LoginQueueCard({
    * re-probe beats the next poll tick (Req.2). */
   terminalEnded?: boolean;
   onSpawned?: (terminalId: string) => void;
+  /** Fired when the poll auto-detects a ready state — the queue
+   * advances without any click (Req.2's "we detect it"). */
+  onReady?: () => void;
   onSkip?: () => void;
   onDone?: () => void;
   compact?: boolean;
@@ -130,6 +134,12 @@ export function LoginQueueCard({
 
   const ready = signedIn(state);
   const copy = loginStateCopy(state);
+
+  // Auto-detect hands the moment to the queue (no click needed).
+  useEffect(() => {
+    if (ready) onReady?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready]);
 
   const spawn = async () => {
     setSpawnError(null);
