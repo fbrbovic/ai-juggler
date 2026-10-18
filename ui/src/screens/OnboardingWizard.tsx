@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Card, Chip } from "../components/primitives";
 import { IconJuggler, IconProfiles, IconTerminal } from "../components/icons";
 import { funnelStep } from "../lib/funnel";
-import { pickDirectory, sourceInspect } from "../lib/bridge";
+import { pickDirectory, sourceInspect,
+  signedIn,
+} from "../lib/bridge";
 import type { SourceInspectInfo } from "../types/generated/SourceInspectInfo";
 import {
   accountImport,
@@ -627,7 +629,7 @@ export function OnboardingWizard({
         if (item.action === "import" && item.path) {
           const imported = await accountImport(item.provider, item.path, item.label, null);
           results.push({ label: item.label, state: "done" });
-          if (imported.login !== "logged_in") {
+          if (!signedIn(imported.login)) {
             queue.push({
               accountId: imported.account.id,
               label: imported.account.label,
@@ -638,7 +640,7 @@ export function OnboardingWizard({
         } else {
           const created = await createAccount(item.provider, item.label, null);
           results.push({ label: item.label, state: "done" });
-          if (created.login_state !== "logged_in") {
+          if (!signedIn(created.login_state)) {
             queue.push({
               accountId: created.id,
               label: created.label,
@@ -1413,7 +1415,7 @@ export function OnboardingWizard({
                 <div className="rounded-xl border border-hairline bg-canvas px-4 py-3 text-xs leading-relaxed text-muted">
                   Importing from{" "}
                   <span className="font-mono text-[11px]">{importing.path}</span>
-                  {importing.login === "logged_in" &&
+                  {signedIn(importing.login) &&
                     " — your settings and session history come along."}
                   {importing.login === "logged_out" &&
                     " — its settings come along; you'll sign in after."}
@@ -1477,7 +1479,7 @@ export function OnboardingWizard({
           {/* ---------------------------------------------------- login */}
           {step === "login" && account && (
             <div className="flex flex-col gap-4">
-              {loginState === "logged_in" || account.login_state === "logged_in" ? (
+              {signedIn(loginState) || signedIn(account.login_state) ? (
                 <div className="flex flex-col items-center gap-3 py-6 text-center">
                   <span className="dot-live size-2.5 rounded-full bg-success" />
                   <p className="text-sm font-medium">Signed in and ready</p>
@@ -1835,7 +1837,7 @@ export function OnboardingWizard({
                 goto("summary");
               }}
             >
-              {loginState === "logged_in" ? "Continue" : "I'll sign in later"}
+              {signedIn(loginState) ? "Continue" : "I'll sign in later"}
             </Button>
           )}
           {step === "signins" && (
@@ -1858,7 +1860,7 @@ export function OnboardingWizard({
                 onClose();
               }}
             >
-              {loginState === "logged_in" ? "Continue" : "Done"}
+              {signedIn(loginState) ? "Continue" : "Done"}
             </Button>
           )}
         </div>

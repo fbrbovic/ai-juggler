@@ -22,7 +22,9 @@ import type {
 import { renewalLabel } from "../lib/renewal";
 import { QuotaBar, formatCountdown, quotaTierTag } from "./primitives";
 import { TwoClocks, WindowRing } from "./QuotaRings";
-import { accountSetFee, quotaDisplay, switchTargets, type QuotaDisplayData, type SwitchBackSuggestionData, type SwitchTargetData, errorText,} from "../lib/bridge";
+import { accountSetFee, quotaDisplay, switchTargets, type QuotaDisplayData, type SwitchBackSuggestionData, type SwitchTargetData, errorText,
+  signedIn,
+} from "../lib/bridge";
 import { formatBytes, stateChip } from "./indicator";
 import { SwitchGraph } from "./SwitchGraph";
 import { SwitchTargetRows } from "./SwitchTargetRows";
@@ -919,7 +921,7 @@ function InstanceOverview(props: PanelProps) {
             </p>
             <div className="flex flex-col gap-1.5">
               {profiles.slice(0, 5).map((recipe) => {
-                const ready = accounts.find((a) => a.id === recipe.account_id)?.login_state === "logged_in";
+                const ready = signedIn(accounts.find((a) => a.id === recipe.account_id)?.login_state);
                 return (
                   <button
                     key={recipe.id}
@@ -987,8 +989,8 @@ function InstanceOverview(props: PanelProps) {
             <span>
               plan: <span className="text-muted">{account.plan ?? "unknown"}</span>
             </span>
-            <Chip tone={account.login_state === "logged_in" ? "success" : "neutral"}>
-              {account.login_state === "logged_in" ? "signed in" : "signed out"}
+            <Chip tone={signedIn(account.login_state) ? "success" : "neutral"}>
+              {signedIn(account.login_state) ? "signed in" : "signed out"}
             </Chip>
           </div>
         </Card>
@@ -1023,7 +1025,7 @@ function InstanceOverview(props: PanelProps) {
           <p className="font-mono text-[11.5px]">{data.provider.id}</p>
           <p className="text-[11.5px] text-muted">
             {providerAccounts.length} account{providerAccounts.length === 1 ? "" : "s"} ·{" "}
-            {providerAccounts.filter((a) => a.login_state === "logged_in").length} signed in
+            {providerAccounts.filter((a) => signedIn(a.login_state)).length} signed in
           </p>
         </Card>
         <Card className="flex flex-col gap-2 p-4">
@@ -1031,8 +1033,8 @@ function InstanceOverview(props: PanelProps) {
           {providerAccounts.map((account) => (
             <p key={account.id} className="flex items-center gap-2 py-1 text-xs">
               <span className="min-w-0 flex-1 truncate font-medium">{account.label}</span>
-              <Chip tone={account.login_state === "logged_in" ? "success" : "neutral"}>
-                {account.login_state === "logged_in" ? "signed in" : "signed out"}
+              <Chip tone={signedIn(account.login_state) ? "success" : "neutral"}>
+                {signedIn(account.login_state) ? "signed in" : "signed out"}
               </Chip>
             </p>
           ))}
@@ -1559,7 +1561,7 @@ function ProviderOverview(props: PanelProps) {
             <div key={account.id} className="flex flex-col gap-1 py-0.5">
               <span className="text-[11.5px]">
                 <span className="text-ink">{account.label}</span>
-                {account.login_state !== "logged_in" ? <span className="text-faint"> · signed out</span> : null}
+                {!signedIn(account.login_state) ? <span className="text-faint"> · signed out</span> : null}
               </span>
               <QuotaBar quota={worst?.quota ?? null} />
             </div>
@@ -1600,7 +1602,7 @@ function AccountOverview(props: PanelProps) {
     }, null);
   const usualProjects = props.projects.filter((p) => p.accounts_used.includes(account.label));
 
-  if (account.login_state !== "logged_in") {
+  if (!signedIn(account.login_state)) {
     // Logged-out collapse: the Overview IS the sign-in card (Req.3).
     return (
       <Card className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center" data-testid="account-signin-card">
@@ -1730,7 +1732,7 @@ function AccountActions(props: PanelProps) {
         }
         reason={first ? undefined : "no launch settings on this account yet"}
       />
-      <ActionRow label={account.login_state === "logged_in" ? "Re-check login" : "Sign in"} onClick={() => window.dispatchEvent(new Event("aij:open-accounts"))} reason="opens Accounts" />
+      <ActionRow label={signedIn(account.login_state) ? "Re-check login" : "Sign in"} onClick={() => window.dispatchEvent(new Event("aij:open-accounts"))} reason="opens Accounts" />
       <ActionRow
         label="Edit renewal date..."
         onClick={() => window.dispatchEvent(new Event("aij:edit-renewal"))}
@@ -1837,7 +1839,7 @@ function ProjectActions(props: PanelProps) {
     <div className="flex flex-col gap-2" data-testid="project-actions">
       <p className="text-[11px] uppercase tracking-wider text-muted">Launch with another account (ranked by headroom)</p>
       {ranked.map(({ recipe, usual }) => {
-        const ready = props.accounts.find((a) => a.id === recipe.account_id)?.login_state === "logged_in";
+        const ready = signedIn(props.accounts.find((a) => a.id === recipe.account_id)?.login_state);
         return (
           <button
             key={recipe.id}

@@ -21,7 +21,9 @@ import {
   type LaunchRecipeInfo,
   redactionPolicyGet,
   redactionPolicySetOverride,
-  type RedactionInfoData, errorText,} from "../lib/bridge";
+  type RedactionInfoData, errorText,
+  signedIn,
+} from "../lib/bridge";
 
 /**
  * Profiles screen (M1-3): accounts with isolated state + one-click profile
@@ -299,7 +301,7 @@ function RedactionOverrideRow({ provider }: { provider: string }) {
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const onToggleSettings = () => setSettingsOpen((v) => !v);
-  const loggedIn = account.login_state === "logged_in";
+  const loggedIn = signedIn(account.login_state);
   const loginTone: ChipTone = loggedIn ? "success" : "warning";
   return (
     <Card className="overflow-hidden">

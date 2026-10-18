@@ -12,6 +12,7 @@ import {
   type AccountInfo,
   type QuotaDisplayData,
   errorText,
+  signedIn,
 } from "../lib/bridge";
 
 /**
@@ -297,7 +298,7 @@ export function NewProjectSheet({
                       <Button
                         size="sm"
                         variant="primary"
-                        disabled={busy || loginByAccount.get(recommended.account_id) !== "logged_in"}
+                        disabled={busy || !signedIn(loginByAccount.get(recommended.account_id))}
                         onClick={() => void start(recommended)}
                         data-testid="start-session"
                       >
@@ -307,7 +308,7 @@ export function NewProjectSheet({
                         Change
                       </Button>
                     </div>
-                    {loginByAccount.get(recommended.account_id) !== "logged_in" && (
+                    {!signedIn(loginByAccount.get(recommended.account_id)) && (
                       <p className="text-[11px] text-muted">
                         This account needs sign-in (Ready home) — pick another or sign in first.
                       </p>
@@ -317,7 +318,7 @@ export function NewProjectSheet({
                 {recipes !== null && showAll && (
                   <div className="flex flex-col gap-1.5" data-testid="project-account-list">
                     {recipes.map((recipe) => {
-                      const ready = loginByAccount.get(recipe.account_id) === "logged_in";
+                      const ready = signedIn(loginByAccount.get(recipe.account_id));
                       return (
                         <button
                           key={recipe.id}

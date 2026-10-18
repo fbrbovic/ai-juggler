@@ -15,7 +15,9 @@ import {
   type QuotaDisplayData,
   type AccountInfo,
   type LaunchRecipeInfo,
-  type ProjectInfo, errorText,} from "../lib/bridge";
+  type ProjectInfo, errorText,
+  signedIn,
+} from "../lib/bridge";
 
 /**
  * New session — zero typing: recent projects (real history), a native
@@ -306,7 +308,7 @@ export function NewSessionModal({
                   <Button
                     size="sm"
                     variant="primary"
-                    disabled={busy || loginByAccount.get(preselected.account_id) !== "logged_in"}
+                    disabled={busy || !signedIn(loginByAccount.get(preselected.account_id))}
                     onClick={() => void launch(preselected)}
                     data-testid="launch-now"
                   >
@@ -320,7 +322,7 @@ export function NewSessionModal({
                   >
                     Customise ▸
                   </Button>
-                  {loginByAccount.get(preselected.account_id) !== "logged_in" && (
+                  {!signedIn(loginByAccount.get(preselected.account_id)) && (
                     <Button
                       size="sm"
                       variant="secondary"
@@ -348,7 +350,7 @@ export function NewSessionModal({
             {(customiseOpen || preselected === null) &&
               (profiles ?? []).map((recipe) => {
                 const login = loginByAccount.get(recipe.account_id) ?? "logged_out";
-                const ready = login === "logged_in";
+                const ready = signedIn(login);
                 return (
                   <div
                     key={recipe.id}

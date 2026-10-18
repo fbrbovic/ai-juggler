@@ -1,6 +1,6 @@
 import { Button, Card, Chip } from "../components/primitives";
 import { IconJuggler, IconProfiles } from "../components/icons";
-import type { AccountInfo } from "../lib/bridge";
+import { signedIn, type AccountInfo } from "../lib/bridge";
 
 /**
  * The get-ready home: any account that isn't signed in surfaces here as a
@@ -17,7 +17,7 @@ export function ReadyHome({
   onSignIn: (account: AccountInfo) => void;
   onSkip: () => void;
 }) {
-  const ready = accounts.filter((a) => a.login_state === "logged_in").length;
+  const ready = accounts.filter((a) => signedIn(a.login_state)).length;
   const total = accounts.length;
   const allReady = ready === total;
 
@@ -42,7 +42,7 @@ export function ReadyHome({
 
       <div className="flex flex-col gap-2">
         {accounts.map((account) => {
-          const isReady = account.login_state === "logged_in";
+          const isReady = signedIn(account.login_state);
           return (
             <Card
               key={account.id}

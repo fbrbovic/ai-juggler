@@ -2365,6 +2365,16 @@ export function errorText(cause: unknown): string {
   return text === "[object Object]" ? "Something went wrong — try again." : text;
 }
 
+/**
+ * AJ-E308: the ready-check across login-state generations — the
+ * taxonomy's `signed_in` plus the legacy `logged_in` string (scan
+ * candidates still carry it). Everything else (partial / expired /
+ * sso_pending / api_key / logged_out / unknown) is not ready.
+ */
+export function signedIn(state: string | null | undefined): boolean {
+  return state === "signed_in" || state === "logged_in";
+}
+
 /** True when the coded rejection says a retry can succeed. */
 export function errorRetryable(cause: unknown): boolean {
   return (

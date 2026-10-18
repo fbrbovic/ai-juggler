@@ -3795,11 +3795,18 @@ fn login_probe_name(probe: juggler_adapter::LoginProbe) -> String {
     .to_string()
 }
 
-/// Wire-format name for a login state.
+/// Wire-format name for a login state — the AJ-E308 Req.1 taxonomy
+/// (`signed_in|partial|expired|sso_pending|api_key|logged_out|unknown`).
+/// `unknown` renders "sign in when online", NEVER as logged out.
 fn login_state_name(state: juggler_adapters::LoginState) -> &'static str {
     match state {
-        juggler_adapters::LoginState::LoggedIn => "logged_in",
+        juggler_adapters::LoginState::SignedIn => "signed_in",
+        juggler_adapters::LoginState::Partial => "partial",
+        juggler_adapters::LoginState::Expired => "expired",
+        juggler_adapters::LoginState::SsoPending => "sso_pending",
+        juggler_adapters::LoginState::ApiKey => "api_key",
         juggler_adapters::LoginState::LoggedOut => "logged_out",
+        juggler_adapters::LoginState::Unknown => "unknown",
     }
 }
 
