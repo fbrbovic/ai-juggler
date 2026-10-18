@@ -21,6 +21,8 @@ pub mod quality;
 pub mod quota;
 pub mod quota_forecast;
 pub mod ranking;
+pub mod funnel_events;
+pub mod policy;
 pub mod recommendation;
 pub mod renewal;
 pub mod storage;
