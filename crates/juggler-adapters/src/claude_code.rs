@@ -346,6 +346,14 @@ impl HarnessAdapter for ClaudeCodeAdapter {
         ClaudeCodeAdapter::login_spec_inherent(self, state_dir)
     }
 
+    fn isolation_env_keys(&self) -> &'static [&'static str] {
+        &[ENV_CONFIG_DIR, ENV_BIN_OVERRIDE]
+    }
+
+    fn shell_command(&self) -> Option<&'static str> {
+        Some("claude")
+    }
+
     fn launch_spec(
         &self,
         account: &Account,
@@ -362,12 +370,14 @@ impl HarnessAdapter for ClaudeCodeAdapter {
             .default_cwd
             .clone()
             .unwrap_or_else(|| cwd.to_path_buf());
-        let mut env = EnvMap::new();
+        // Launch-settings overrides first, isolation LAST: an
+        // override can never repoint the config dir (AJ-E309 — the
+        // env editor refuses these keys too; this is the backstop).
+        let mut env: EnvMap = profile.settings_overlay.env.clone();
         env.insert(
             ENV_CONFIG_DIR.to_string(),
             account.state_dir.to_string_lossy().into_owned(),
         );
-        env.extend(profile.settings_overlay.env.clone());
         let (args, needs_pty) = match mode {
             LaunchMode::Interactive => (Vec::new(), true),
             LaunchMode::Headless { prompt } => (

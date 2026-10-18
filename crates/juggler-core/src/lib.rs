@@ -18,7 +18,6 @@ pub mod error;
 pub mod fs;
 pub mod funnel_events;
 pub mod model;
-pub mod policy;
 pub mod quality;
 pub mod quota;
 pub mod quota_forecast;

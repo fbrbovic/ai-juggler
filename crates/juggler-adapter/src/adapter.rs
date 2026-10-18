@@ -195,6 +195,59 @@ pub trait HarnessAdapter: Send + Sync {
             "this harness has no terminal login flow".into(),
         ))
     }
+
+    /// The environment variables that fence an Account's isolated
+    /// state for this Provider (AJ-E309). Launch-settings overrides
+    /// may never set them — an override that repointed the config
+    /// dir would silently break isolation. The FIRST key is the one
+    /// that points the Provider at the state dir (the snippet sets
+    /// it); later keys are reserved but never emitted.
+    #[must_use]
+    fn isolation_env_keys(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// The command a user types to start this Provider against
+    /// `state_dir` by hand — the Expert-setup snippet and the
+    /// external-terminal login fallback (AJ-E309 Req.5). `None` when
+    /// the Provider has no terminal entry point.
+    #[must_use]
+    fn shell_command(&self) -> Option<&'static str> {
+        None
+    }
+}
+
+/// Single-quotes `value` for a POSIX shell (`'` becomes `'\''`), so a
+/// copied snippet survives spaces and quotes in managed paths.
+#[must_use]
+pub fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r"'\''"))
+}
+
+/// Builds the copyable shell line for `adapter` against `state_dir`
+/// plus any extra environment (Launch-settings overrides), isolation
+/// keys first. `None` when the Provider has no terminal entry point.
+#[must_use]
+pub fn shell_snippet(
+    adapter: &dyn HarnessAdapter,
+    state_dir: &Path,
+    extra_env: &std::collections::BTreeMap<String, String>,
+) -> Option<String> {
+    let command = adapter.shell_command()?;
+    let dir = state_dir.to_string_lossy();
+    let mut parts: Vec<String> = adapter
+        .isolation_env_keys()
+        .iter()
+        .take(1)
+        .map(|key| format!("{key}={}", shell_quote(&dir)))
+        .collect();
+    for (key, value) in extra_env {
+        if !adapter.isolation_env_keys().contains(&key.as_str()) {
+            parts.push(format!("{key}={}", shell_quote(value)));
+        }
+    }
+    parts.push(command.to_owned());
+    Some(parts.join(" "))
 }
 
 /// Shared adapter handle type used by the registry and supervisor.
