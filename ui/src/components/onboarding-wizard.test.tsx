@@ -724,3 +724,127 @@ describe("AJ-E305 flow (a) — first install in ≤5 primary clicks, 0 typed fie
     window.sessionStorage.clear();
   });
 });
+
+describe("AJ-E307 — Confirm-source, degraded import, duplicate block", () => {
+  const w = () => window as unknown as Record<string, unknown>;
+
+  const mountWizard = () =>
+    render(
+      <OnboardingWizard
+        provider="claude-code"
+        onClose={() => {}}
+        onAccountCreated={() => {}}
+        openLoginTerminal={() => {}}
+      />,
+    );
+
+  const reachIdentityViaCandidate = async (mounted: ReturnType<typeof render>) => {
+    w().__AIJ_PROVIDER_INSTALLS__ = INSTALLED;
+    await waitFor(() =>
+      expect(mounted.container.querySelector("[data-testid='install-continue']")).not.toBeNull(),
+    );
+    await act(async () => {
+      fireEvent.click(mounted.container.querySelector("[data-testid='install-continue']")!);
+    });
+    await waitFor(() =>
+      expect(mounted.container.querySelector("[data-testid='candidate-card']")).not.toBeNull(),
+    );
+    fireEvent.click(
+      mounted.container.querySelector("[data-testid='import-as']")!,
+    );
+    await waitFor(() =>
+      expect(mounted.container.querySelector("[data-testid='confirm-source']")).not.toBeNull(),
+    );
+  };
+
+  it("Confirm-source shows path, origin badge, size, and the per-folder breakdown list", async () => {
+    const mounted = mountWizard();
+    await reachIdentityViaCandidate(mounted);
+    const panel = mounted.container.querySelector("[data-testid='confirm-source']")!;
+    // The origin badge renders (whatever the scan inferred).
+    expect(panel.textContent).toContain("vendor-default");
+    expect(panel.textContent).toContain("43.9 MB");
+    const breakdown = panel.querySelector("[data-testid='source-breakdown']")!;
+    expect(breakdown.querySelectorAll("li").length).toBeGreaterThan(0);
+    expect(breakdown.textContent).toContain("projects/");
+  });
+
+  it("an oversize source offers ONLY the degraded pair — no raw ceiling string", async () => {
+    w().__AIJ_SOURCE_INSPECT__ = {
+      total_bytes: 3_300_000_000,
+      file_count: 9000,
+      folders: [
+        { name: "projects/", bytes: 3_299_000_000 },
+        { name: "settings.json", bytes: 60 },
+      ],
+      truncated: false,
+      ceiling_bytes: 2_147_483_648,
+      is_config: true,
+      already_managed: false,
+      login: "logged_in",
+      keychain_bound: false,
+    };
+    const mounted = mountWizard();
+    await reachIdentityViaCandidate(mounted);
+    // The plain Import button is REPLACED by the offer pair.
+    expect(mounted.container.querySelector("[data-testid='import-settings-only']")).not.toBeNull();
+    expect(mounted.container.querySelector("[data-testid='add-fresh-instead']")).not.toBeNull();
+    const body = mounted.container.textContent ?? "";
+    expect(body).toContain("history in this folder is large");
+    expect(body).not.toContain("2 GiB");
+    expect(body).not.toContain("ceiling");
+  });
+
+  it("a non-config folder gets the plain reason + Pick a different folder", async () => {
+    w().__AIJ_SOURCE_INSPECT__ = {
+      total_bytes: 10,
+      file_count: 1,
+      folders: [{ name: "random.txt", bytes: 10 }],
+      truncated: false,
+      ceiling_bytes: 2_147_483_648,
+      is_config: false,
+      already_managed: false,
+      login: "logged_out",
+      keychain_bound: false,
+    };
+    const mounted = mountWizard();
+    await reachIdentityViaCandidate(mounted);
+    const reject = mounted.container.querySelector("[data-testid='source-not-config']")!;
+    expect(reject.getAttribute("role")).toBe("alert");
+    expect(reject.textContent).toContain("doesn't look like a Claude Code setup");
+  });
+
+  it("the duplicate block renders the existing label with [Open it]", async () => {
+    const importSpy = vi
+      .spyOn(bridgeModule, "accountImport")
+      .mockRejectedValue({
+        code: "already_imported",
+        retryable: false,
+        user_message: "Already imported as «Work» — open it from Accounts instead of importing again",
+      });
+    const mounted = mountWizard();
+    await reachIdentityViaCandidate(mounted);
+    const input = mounted.container.querySelector(
+      "input[placeholder^='e.g. Work']",
+    ) as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "Second try" } });
+    });
+    await act(async () => {
+      fireEvent.click(
+        Array.from(mounted.container.querySelectorAll("button")).find(
+          (button) => button.textContent === "Import account",
+        )!,
+      );
+    });
+    const blocked = await waitFor(() => {
+      const found = mounted.container.querySelector("[data-testid='duplicate-blocked']");
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    expect(blocked.getAttribute("role")).toBe("alert");
+    expect(blocked.textContent).toContain("Already imported as «Work»");
+    expect(blocked.textContent).toContain("Open it");
+    importSpy.mockRestore();
+  });
+});

@@ -26,6 +26,7 @@
 | AJ-E304 | PASS12 | 2026-10-17 | [manifest](AJ-E304/manifest.md) |
 | AJ-E305 | PASS12 | 2026-10-17 | [manifest](AJ-E305/manifest.md) |
 | AJ-E306 | PASS11 | 2026-10-17 | [manifest](AJ-E306/manifest.md) |
+| AJ-E307 | PASS10 | 2026-10-17 | [manifest](AJ-E307/manifest.md) |
 | AJ-E401 | PASS9 | 2026-10-13 | [manifest](AJ-E401/manifest.md) |
 | AJ-E402 | PASS11 | 2026-10-13 | [manifest](AJ-E402/manifest.md) |
 | AJ-E403 | PASS10 | 2026-10-13 | [manifest](AJ-E403/manifest.md) |

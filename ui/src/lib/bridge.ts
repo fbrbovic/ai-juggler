@@ -473,6 +473,17 @@ export async function accountImport(
     // AJ-E304 test seam: substrings of source paths that reject with a
     // coded error, so the partial-failure accept flow (one item fails,
     // the rest complete) is reviewable in a plain browser.
+    // AJ-E307 test seam: reject with the coded duplicate error.
+    const duplicateLabel = (
+      window as unknown as { __AIJ_IMPORT_DUPLICATE_LABEL__?: string }
+    ).__AIJ_IMPORT_DUPLICATE_LABEL__;
+    if (duplicateLabel !== undefined) {
+      throw {
+        code: "already_imported",
+        retryable: false,
+        user_message: `Already imported as «${duplicateLabel}» — open it from Accounts instead of importing again`,
+      };
+    }
     const failPaths =
       (window as unknown as { __AIJ_IMPORT_FAIL_PATHS__?: string[] })
         .__AIJ_IMPORT_FAIL_PATHS__ ?? [];
@@ -1878,7 +1889,13 @@ export async function switchUndo(edgeId: string): Promise<LaunchResult> {
 
 /** Native macOS folder picker; null when cancelled. */
 export async function pickDirectory(): Promise<string | null> {
-  if (!hasBackend) return null;
+  if (!hasBackend) {
+    // AJ-E307 test seam: specs inject the "picked" folder.
+    return (
+      (window as unknown as { __AIJ_PICK_DIRECTORY__?: string })
+        .__AIJ_PICK_DIRECTORY__ ?? null
+    );
+  }
   const selection = await openDialog({ directory: true, multiple: false });
   return typeof selection === "string" ? selection : null;
 }

@@ -1247,7 +1247,11 @@ export function OnboardingWizard({
                       if (picked === null) return;
                       setManualSource(picked);
                       setImporting(null);
-                      setLabel("");
+                      // Zero typed fields on the manual path too — a
+                      // sensible default label, editable at Confirm.
+                      setLabel((current) =>
+                        current.trim().length > 0 ? current : "Main",
+                      );
                       goto("identity");
                     }}
                     data-testid="import-specific-folder"
@@ -1421,7 +1425,7 @@ export function OnboardingWizard({
                 </p>
               )}
 
-              <label className="block text-[11px] uppercase tracking-wider text-faint">
+              <label className="block text-[11px] uppercase tracking-wider text-muted">
                 What will you use this account for?
                 <input
                   value={label}
@@ -1432,7 +1436,7 @@ export function OnboardingWizard({
               </label>
 
               <div>
-                <p className="text-[11px] uppercase tracking-wider text-faint">Plan</p>
+                <p className="text-[11px] uppercase tracking-wider text-muted">Plan</p>
                 <div className="mt-1.5 grid grid-cols-2 gap-2">
                   {PLANS.map((tier) => (
                     <button
@@ -1447,7 +1451,7 @@ export function OnboardingWizard({
                       }
                     >
                       <span className="block font-medium">{tier.label}</span>
-                      <span className="block text-[10px] text-faint">{tier.hint}</span>
+                      <span className="block text-[10px] text-muted">{tier.hint}</span>
                     </button>
                   ))}
                 </div>

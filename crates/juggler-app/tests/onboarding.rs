@@ -489,18 +489,11 @@ fn import_writes_provenance_and_degraded_import_flags_e307() {
     let state = app_state(work.path(), &stub);
     let source = existing_setup(work.path());
     // The pre-copy inspection: evidence + breakdown + login.
-    let inspect = commands::source_inspect_impl(
-        &state,
-        CLAUDE_CODE_ID,
-        source.to_str().unwrap(),
-    )
-    .unwrap();
+    let inspect =
+        commands::source_inspect_impl(&state, CLAUDE_CODE_ID, source.to_str().unwrap()).unwrap();
     assert!(inspect.is_config);
     assert!(!inspect.already_managed);
-    assert!(inspect
-        .folders
-        .iter()
-        .any(|f| f.name == "projects/"));
+    assert!(inspect.folders.iter().any(|f| f.name == "projects/"));
     assert!(inspect.total_bytes > 0);
     assert_eq!(inspect.ceiling_bytes, 2 * 1024 * 1024 * 1024);
 
@@ -515,12 +508,14 @@ fn import_writes_provenance_and_degraded_import_flags_e307() {
     )
     .unwrap();
     assert!(result.degraded, "the degraded flag rides the wire");
-    assert!(!result
-        .account
-        .import_source_path
-        .clone()
-        .unwrap()
-        .is_empty());
+    assert!(
+        !result
+            .account
+            .import_source_path
+            .clone()
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(result.account.import_origin.as_deref(), Some("t3"));
     assert!(result.account.imported_at.is_some());
     // Provenance is queryable by path (the duplicate check's input).

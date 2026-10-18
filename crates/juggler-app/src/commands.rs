@@ -2008,6 +2008,9 @@ pub struct FolderSizeInfo {
 /// AJ-E307 Req.3: the pre-copy source inspection on the wire.
 #[derive(Clone, PartialEq, Debug, serde::Serialize, ts_rs::TS)]
 #[ts(export, export_to = "../../../ui/src/types/generated/")]
+// A flat one-row wire payload for one panel — the honest shape here
+// is four independent flags, not a state machine.
+#[allow(clippy::struct_excessive_bools)]
 pub struct SourceInspectInfo {
     /// Total importable bytes.
     #[ts(type = "number")]
@@ -2135,10 +2138,10 @@ pub fn account_import_impl(
     // AJ-E307 Req.2: duplicate protection — a provenance-matched
     // source is blocked with the existing account's label, before
     // anything is written.
-    let canonical_source = std::path::Path::new(source_path)
-        .canonicalize()
-        .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| source_path.to_owned());
+    let canonical_source = match std::path::Path::new(source_path).canonicalize() {
+        Ok(path) => path.to_string_lossy().into_owned(),
+        Err(_) => source_path.to_owned(),
+    };
     {
         let storage = lock_storage_arc(state)?;
         for existing in storage.accounts().list()? {

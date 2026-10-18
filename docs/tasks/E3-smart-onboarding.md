@@ -288,7 +288,7 @@ Trap: `SessionRecord + InstanceKind` is the Instance record
 today (`model.rs:389`); UI copy renames, storage does not
 (pass2/03 §1.2 ruling 4).
 
-### AJ-E307 Flow (f) import from competitor/manual dirs, provenance and degraded import | Status: TODO | Priority P0 | Effort L | Depends: AJ-E302, AJ-E303
+### AJ-E307 Flow (f) import from competitor/manual dirs, provenance and degraded import | Status: DONE-EVIDENCED | Priority P0 | Effort L | Depends: AJ-E302, AJ-E303
 **Goal**:
 Import cc-switch / t3 / alias-discovered / manual folders in
 ≤ 3 clicks, with source provenance, duplicate protection,
@@ -712,3 +712,35 @@ present). vitest 281/281 (+9 across two new files); Playwright
 verify green; clippy 0. PARTIAL-BY-DESIGN (recorded): the
 concurrent two-Instance fake-harness e2e rides the real-backend
 dogfood windows (E7/E10); every UI precondition is pinned here.
+**Status report (2026-10-17, AJ-E307)**: DONE-EVIDENCED — evidence
+`docs/qa/evidence/AJ-E307/manifest.md`. Accounts now carry import
+provenance (canonical source path + origin + imported-at; V21
+migration, existing rows stay NULL = provenance-unknown, never
+guessed) — written at import time, queryable on the wire, and the
+duplicate-import hole is CLOSED: a provenance-matched source rejects
+with coded `already_imported` + "Already imported as «Work»" and the
+wizard renders the block with [Open it]. The Confirm-source panel
+(new `source_inspect` command over a metadata-only bounded walk)
+shows path, origin badge, file count, total, and the per-folder
+breakdown as real list markup BEFORE any copy — plus the keychain
+re-login note (Req.8) and two failure states as role=alert: non-config
+→ plain reason + [Pick a different folder]; vanished at import →
+"That setup moved" + [Rescan]. An over-ceiling source offers exactly
+[Import settings only — skip history] / [Add fresh] — the settings-only
+import skips projects//todos/ with sized skip notes and flags the
+result degraded; the raw ceiling string never reaches the UI ("The
+history in this folder is large"). Mid-copy failures remove THIS
+session's partial managed dir before returning (session-scoped by
+construction — the marker-first trap closed); orphans never
+accumulate. The manual-folder entry on Detect uses the native picker
+(0 typed paths; label prefilled "Main"); adopt-in-place exists
+nowhere (Req.7). All four quality-gate tests green: immutability
+snapshot across full+degraded+inspect, duplicate block, oversize
+→ degraded with ZERO transcript files, injected-failure rollback.
+adapters environment 12/12 (82 total), onboarding 10/10, vitest
+285/285 (wizard 21/21), Playwright 520/520 (gallery 39-import = 16
+captures; a11y +2 after three REAL pre-existing identity-step
+contrast fixes text-faint→text-muted), verify green, clippy 0.
+PARTIAL-BY-DESIGN (recorded): per-number perf instrumentation is
+bounded-by-construction; the live maintainer cc-switch dogfood table
+lands with the maintainer driving (live-user-data constraint).

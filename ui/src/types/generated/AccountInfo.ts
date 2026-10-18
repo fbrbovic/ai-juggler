@@ -37,4 +37,18 @@ renewal_date: string | null,
  * AJ-E415 per-Account live-preview switch (off by default; the
  * enable is the Screen-Recording consent moment).
  */
-preview_opt_in: boolean, };
+preview_opt_in: boolean, 
+/**
+ * AJ-E307 Req.1/2: import provenance (source canonical path /
+ * origin / imported-at). `None` = provenance-unknown (pre-E307
+ * accounts — never guessed).
+ */
+import_source_path: string | null, 
+/**
+ * The discovery origin (`cc-switch|t3|alias|home-pattern|manual`).
+ */
+import_origin: string | null, 
+/**
+ * Import completion time, epoch ms (None = never imported).
+ */
+imported_at: bigint | null, };
