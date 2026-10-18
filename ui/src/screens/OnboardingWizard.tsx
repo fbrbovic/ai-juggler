@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Card, Chip } from "../components/primitives";
 import { IconJuggler, IconProfiles, IconTerminal } from "../components/icons";
 import { funnelStep } from "../lib/funnel";
+import { LoginQueueCard } from "../components/LoginQueueCard";
 import { pickDirectory, sourceInspect,
   signedIn,
 } from "../lib/bridge";
@@ -510,8 +511,6 @@ export function OnboardingWizard({
     | null
   >(null);
   const [signinIndex, setSigninIndex] = useState(0);
-  const [signinCommand, setSigninCommand] = useState("");
-  const [signinCopied, setSigninCopied] = useState(false);
   // AJ-E305 Req.2: the zero-found collapse may re-target this run at
   // another installed Provider (the picker writes the override).
   const [providerOverride, setProviderOverride] = useState<string | null>(null);
@@ -687,19 +686,7 @@ export function OnboardingWizard({
     };
   }, [step, activeSource, activeProvider]);
 
-  // The current sign-in card's vendor command (fetched lazily).
   const currentSignin = signinQueue !== null ? signinQueue[signinIndex] ?? null : null;
-  useEffect(() => {
-    if (step !== "signins" || currentSignin === null) return;
-    let cancelled = false;
-    setSigninCommand("");
-    void accountLoginCommand(currentSignin.accountId).then((found) => {
-      if (!cancelled) setSigninCommand(found);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [step, currentSignin]);
 
   // A finished (or skipped-through) queue lands on the Summary — the
   // queue itself never blocks it.
@@ -1565,72 +1552,22 @@ export function OnboardingWizard({
                     : "to finish setting up"}
                 </p>
                 <p className="mt-1 text-xs leading-relaxed text-muted">
-                  Each account signs in with the vendor's own login — AI Juggler never sees
-                  your credentials. Skipping is fine; you can sign in anytime from Accounts.
+                  Skipping is fine; you can sign in anytime from Accounts.
                 </p>
               </div>
               {currentSignin !== null && (
-                <div
-                  className="flex flex-col gap-3 rounded-xl border border-hairline bg-canvas px-4 py-3.5"
-                  data-testid="signin-card"
-                >
-                  <p className="text-xs">
-                    <span className="font-medium text-ink">{currentSignin.label}</span>
-                    <span className="text-muted">
-                      {" "}
-                      ·{" "}
-                      {installs?.find((row) => row.provider === currentSignin.provider)
-                        ?.display_name ?? currentSignin.provider}
-                    </span>
-                  </p>
-                  {currentSignin.loginNote && (
-                    <p className="text-[11px] leading-relaxed text-muted">
-                      {currentSignin.loginNote}
-                    </p>
-                  )}
-                  <div className="rounded-lg border border-hairline px-3 py-2 font-mono text-[11px] leading-relaxed text-success">
-                    {signinCommand || "…"}
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      size="sm"
-                      variant="primary"
-                      onClick={async () => {
-                        const terminal = await terminalSpawnLogin(currentSignin.accountId);
-                        openLoginTerminal(terminal.id, `Sign in · ${currentSignin.label}`);
-                      }}
-                    >
-                      <IconTerminal width={14} height={14} />
-                      Sign in
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => void loginOpenWeb(currentSignin.provider)}
-                    >
-                      Open vendor page
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={async () => {
-                        await navigator.clipboard.writeText(signinCommand);
-                        setSigninCopied(true);
-                        window.setTimeout(() => setSigninCopied(false), 1500);
-                      }}
-                    >
-                      {signinCopied ? "Copied" : "Copy command"}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => setSigninIndex((index) => index + 1)}
-                      data-testid="signin-skip"
-                    >
-                      Skip for now
-                    </Button>
-                  </div>
-                </div>
+                <LoginQueueCard
+                  key={currentSignin.accountId}
+                  accountId={currentSignin.accountId}
+                  label={currentSignin.label}
+                  providerName={currentSignin.provider}
+                  initialState="logged_out"
+                  loginNote={currentSignin.loginNote}
+                  onSpawned={(terminalId) =>
+                    openLoginTerminal(terminalId, `Sign in · ${currentSignin.label}`)
+                  }
+                  onSkip={() => setSigninIndex((index) => index + 1)}
+                />
               )}
               {signinQueue.length > 1 && (
                 <p className="text-[11px] text-muted">

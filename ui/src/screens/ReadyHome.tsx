@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { Button, Card, Chip } from "../components/primitives";
 import { IconJuggler, IconProfiles } from "../components/icons";
 import { signedIn, type AccountInfo } from "../lib/bridge";
+import { LoginQueueCard } from "../components/LoginQueueCard";
 
 /**
  * The get-ready home: any account that isn't signed in surfaces here as a
@@ -10,14 +12,17 @@ import { signedIn, type AccountInfo } from "../lib/bridge";
  */
 export function ReadyHome({
   accounts,
-  onSignIn,
   onSkip,
+  openTerminal,
 }: {
   accounts: AccountInfo[];
-  onSignIn: (account: AccountInfo) => void;
   onSkip: () => void;
+  /** AJ-E308: the shared queue card spawns its own terminals. */
+  openTerminal: (id: string, title: string) => void;
 }) {
   const ready = accounts.filter((a) => signedIn(a.login_state)).length;
+  // AJ-E308 Req.3: the expanded shared queue card per account.
+  const [openFor, setOpenFor] = useState<string | null>(null);
   const total = accounts.length;
   const allReady = ready === total;
 
@@ -69,7 +74,12 @@ export function ReadyHome({
               {isReady ? (
                 <Chip tone="success">ready</Chip>
               ) : (
-                <Button size="sm" variant="primary" onClick={() => onSignIn(account)}>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={() => setOpenFor((current) => (current === account.id ? null : account.id))}
+                  aria-expanded={openFor === account.id}
+                >
                   <IconProfiles width={13} height={13} />
                   Sign in
                 </Button>
@@ -77,6 +87,20 @@ export function ReadyHome({
             </Card>
           );
         })}
+        {accounts
+          .filter((account) => account.id === openFor && !signedIn(account.login_state))
+          .map((account) => (
+            <LoginQueueCard
+              key={account.id}
+              accountId={account.id}
+              label={account.label}
+              providerName="claude-code"
+              initialState={account.login_state}
+              onSpawned={(terminalId) =>
+                openTerminal(terminalId, `Sign in · ${account.label}`)
+              }
+            />
+          ))}
       </div>
 
       <div className="flex items-center justify-center gap-4">

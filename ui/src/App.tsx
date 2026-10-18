@@ -5,7 +5,7 @@ import { GoToPalette } from "./components/GoToPalette";
 import { PortWarningSheet } from "./components/PortMap";
 import { RecoverySummaryDialog } from "./components/RecoverySummaryDialog";
 import { CleanupCentre, focusCleanupFilter } from "./screens/CleanupCentre";
-import { launchPortWarning, type PortWarningInfo, errorText,} from "./lib/bridge";
+import { launchPortWarning, type PortWarningInfo,} from "./lib/bridge";
 import {
   IconFleet,
   IconJuggler,
@@ -665,15 +665,7 @@ export default function App() {
           ) : showReadyHome && selection.kind === "none" ? (
             <ReadyHome
               accounts={accounts}
-              onSignIn={async (account) => {
-                try {
-                  const { terminalSpawnLogin } = await import("./lib/bridge");
-                  const terminal = await terminalSpawnLogin(account.id);
-                  openLoginTerminal(terminal.id, `Sign in · ${account.label}`);
-                } catch (cause) {
-                  window.alert(`Could not start sign-in: ${errorText(cause)}`);
-                }
-              }}
+              openTerminal={openLoginTerminal}
               onSkip={() => {
                 sessionStorage.setItem("aij.ready.skipped", "1");
                 setReadySkipped(true);
