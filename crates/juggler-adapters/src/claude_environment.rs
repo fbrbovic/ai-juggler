@@ -134,7 +134,7 @@ const HISTORY_DIRS: &[&str] = &["projects", "todos"];
 ///
 /// # Errors
 ///
-/// [`AdapterError::AccountDir`] when the path is not a directory.
+/// [`juggler_adapter::AdapterError::AccountDir`] when the path is not a directory.
 pub fn inspect_source(
     source: &Path,
     login_probe: &dyn Fn(&Path) -> LoginProbe,
