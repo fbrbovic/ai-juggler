@@ -32,7 +32,8 @@ pub const CLAUDE_CODE_ID: &str = "claude-code";
 const VERIFIED_AGAINST: &[&str] = &["2.1.296"];
 
 /// Marker file identifying a directory as managed by AI Juggler.
-const MANAGED_MARKER: &str = ".ai-juggler-managed";
+/// The managed-dir marker filename (AJ-E308 isolation row 2 reads it).
+pub const MANAGED_MARKER: &str = ".ai-juggler-managed";
 
 /// Environment variable naming the isolated config dir (spec §3).
 const ENV_CONFIG_DIR: &str = "CLAUDE_CONFIG_DIR";
@@ -247,9 +248,11 @@ impl HarnessAdapter for ClaudeCodeAdapter {
         #[cfg(not(target_os = "macos"))]
         let legacy_shared_keychain = false;
         let probe = move |path: &Path| match adapter.login_state(path) {
-            LoginState::LoggedIn => LoginProbe::LoggedIn,
+            LoginState::SignedIn => LoginProbe::LoggedIn,
             LoginState::LoggedOut if legacy_shared_keychain => LoginProbe::LoggedIn,
-            LoginState::LoggedOut => LoginProbe::LoggedOut,
+            // Scan-side axis stays binary (inference vocabulary); the
+            // account-state WIRE carries the full taxonomy (AJ-E308).
+            _ => LoginProbe::LoggedOut,
         };
         let home = home_relative(".")
             .filter(|p| p.is_dir())
@@ -280,8 +283,16 @@ impl HarnessAdapter for ClaudeCodeAdapter {
     fn import_account(&self, source: &Path, dest: &Path) -> Result<ImportOutcome, AdapterError> {
         let adapter = ClaudeCodeAdapter::new();
         let probe = move |path: &Path| match adapter.login_state(path) {
-            LoginState::LoggedIn => LoginProbe::LoggedIn,
-            LoginState::LoggedOut => LoginProbe::LoggedOut,
+            // Scan-side axis stays binary (the inference's
+            // signed-in/not vocabulary); the account-state WIRE
+            // carries the full taxonomy (AJ-E308).
+            LoginState::SignedIn => LoginProbe::LoggedIn,
+            LoginState::Partial
+            | LoginState::Expired
+            | LoginState::SsoPending
+            | LoginState::ApiKey
+            | LoginState::LoggedOut
+            | LoginState::Unknown => LoginProbe::LoggedOut,
         };
         claude_environment::import_claude_config(source, dest, &probe)
     }
@@ -292,8 +303,16 @@ impl HarnessAdapter for ClaudeCodeAdapter {
     ) -> Result<juggler_adapter::environment::SourceInspect, AdapterError> {
         let adapter = ClaudeCodeAdapter::new();
         let probe = move |path: &Path| match adapter.login_state(path) {
-            LoginState::LoggedIn => LoginProbe::LoggedIn,
-            LoginState::LoggedOut => LoginProbe::LoggedOut,
+            // Scan-side axis stays binary (the inference's
+            // signed-in/not vocabulary); the account-state WIRE
+            // carries the full taxonomy (AJ-E308).
+            LoginState::SignedIn => LoginProbe::LoggedIn,
+            LoginState::Partial
+            | LoginState::Expired
+            | LoginState::SsoPending
+            | LoginState::ApiKey
+            | LoginState::LoggedOut
+            | LoginState::Unknown => LoginProbe::LoggedOut,
         };
         claude_environment::inspect_source(source, &probe)
     }
@@ -305,8 +324,16 @@ impl HarnessAdapter for ClaudeCodeAdapter {
     ) -> Result<ImportOutcome, AdapterError> {
         let adapter = ClaudeCodeAdapter::new();
         let probe = move |path: &Path| match adapter.login_state(path) {
-            LoginState::LoggedIn => LoginProbe::LoggedIn,
-            LoginState::LoggedOut => LoginProbe::LoggedOut,
+            // Scan-side axis stays binary (the inference's
+            // signed-in/not vocabulary); the account-state WIRE
+            // carries the full taxonomy (AJ-E308).
+            LoginState::SignedIn => LoginProbe::LoggedIn,
+            LoginState::Partial
+            | LoginState::Expired
+            | LoginState::SsoPending
+            | LoginState::ApiKey
+            | LoginState::LoggedOut
+            | LoginState::Unknown => LoginProbe::LoggedOut,
         };
         claude_environment::import_settings_only(source, dest, &probe)
     }
@@ -384,10 +411,33 @@ impl HarnessAdapter for ClaudeCodeAdapter {
 /// contents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoginState {
-    /// Credentials are present (file or keychain entry exists).
-    LoggedIn,
+    /// Credentials are present and structurally usable.
+    SignedIn,
+    /// A credentials file exists but is EMPTY — an OAuth abandoned
+    /// halfway in this dir ("Sign-in didn't finish").
+    Partial,
+    /// Credentials exist with a PAST expiry claim (the documented
+    /// field is parsed; token contents are never read or logged).
+    Expired,
+    /// An SSO session marker exists without completed credentials —
+    /// finish in the browser/IdP window, then return.
+    SsoPending,
+    /// An API-key account (settings metadata NAMES a key — the value
+    /// is never read; subscription rings never apply).
+    ApiKey,
     /// No credentials found for this config dir.
     LoggedOut,
+    /// The probe itself failed (unreadable dir) — NEVER renders as
+    /// [`LoginState::LoggedOut`] (AJ-E308 Req.1).
+    Unknown,
+}
+
+/// Current epoch seconds (std-only).
+fn epoch_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| i64::try_from(since.as_secs()).unwrap_or(i64::MAX))
+        .unwrap_or_default()
 }
 
 impl ClaudeCodeAdapter {
@@ -400,17 +450,66 @@ impl ClaudeCodeAdapter {
     /// simply reports `LoggedOut`; the user re-runs the vendor's own login.
     #[must_use]
     pub fn login_state(&self, state_dir: &Path) -> LoginState {
+        // AJ-E308 Req.1: the seven-state classification — structure
+        // and metadata only; credential CONTENTS are never read or
+        // logged (ADR-0003).
+        if std::fs::read_dir(state_dir).is_err() {
+            return LoginState::Unknown; // probe failure ≠ logged out
+        }
+        if state_dir.join("claude-sso-session.json").exists() {
+            return LoginState::SsoPending;
+        }
         let credentials = state_dir.join(".credentials.json");
-        if let Ok(meta) = std::fs::metadata(&credentials)
-            && meta.len() > 0
-        {
-            return LoginState::LoggedIn;
+        if let Ok(meta) = std::fs::metadata(&credentials) {
+            if meta.len() == 0 {
+                return LoginState::Partial;
+            }
+            if Self::credential_expiry_passed(&credentials) {
+                return LoginState::Expired;
+            }
+            return LoginState::SignedIn;
+        }
+        if Self::settings_name_an_api_key(&state_dir.join("settings.json")) {
+            return LoginState::ApiKey;
         }
         #[cfg(target_os = "macos")]
         if keychain_entry_exists(&namespaced_service(state_dir)) {
-            return LoginState::LoggedIn;
+            return LoginState::SignedIn;
         }
         LoginState::LoggedOut
+    }
+
+    /// True when the credentials file's expiry claim is in the past
+    /// (the documented field only; the token is never read or logged).
+    fn credential_expiry_passed(path: &Path) -> bool {
+        let Ok(raw) = std::fs::read_to_string(path) else {
+            return false;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            return false;
+        };
+        value
+            .get("expires_at")
+            .or_else(|| value.get("expiry"))
+            .and_then(serde_json::Value::as_i64)
+            .is_some_and(|at| at < epoch_secs())
+    }
+
+    /// True when settings.json carries a non-empty API-key FIELD
+    /// (existence only — the value is never read, ADR-0003).
+    fn settings_name_an_api_key(path: &Path) -> bool {
+        let Ok(raw) = std::fs::read_to_string(path) else {
+            return false;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            return false;
+        };
+        value
+            .get("primaryApiKey")
+            .or_else(|| value.get("apiKey"))
+            .or_else(|| value.get("api_key"))
+            .and_then(|key| key.as_str())
+            .is_some_and(|text| !text.is_empty())
     }
 
     /// Builds the launch spec for the vendor's own interactive login flow —

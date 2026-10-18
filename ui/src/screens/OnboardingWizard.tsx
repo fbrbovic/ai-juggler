@@ -2,7 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Card, Chip } from "../components/primitives";
 import { IconJuggler, IconProfiles, IconTerminal } from "../components/icons";
 import { funnelStep } from "../lib/funnel";
-import { pickDirectory, sourceInspect } from "../lib/bridge";
+import { LoginQueueCard } from "../components/LoginQueueCard";
+import { pickDirectory, sourceInspect,
+  signedIn,
+} from "../lib/bridge";
 import type { SourceInspectInfo } from "../types/generated/SourceInspectInfo";
 import {
   accountImport,
@@ -24,6 +27,8 @@ import {
   type ImportResult,
   type ProviderInstallData,
   errorText,
+  isolationCheck,
+  type IsolationRowData,
 } from "../lib/bridge";
 
 const PLANS: { id: string | null; label: string; hint: string }[] = [
@@ -495,6 +500,19 @@ export function OnboardingWizard({
   const [inspect, setInspect] = useState<SourceInspectInfo | null>(null);
   const [manualSource, setManualSource] = useState<string | null>(null);
   const [degradedChoice, setDegradedChoice] = useState(false);
+  // AJ-E308 Req.7: the isolation checklist on the set Summary.
+  const [isolation, setIsolation] = useState<IsolationRowData[] | null>(null);
+  useEffect(() => {
+    if (step !== "summary" || setSummary === null || isolation !== null) return;
+    let cancelled = false;
+    void isolationCheck("__preview__").then((rows) => {
+      if (!cancelled) setIsolation(rows);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, setSummary]);
   const [importError, setImportError] = useState<
     { kind: "duplicate" | "moved" | "other"; text: string } | null
   >(null);
@@ -508,8 +526,6 @@ export function OnboardingWizard({
     | null
   >(null);
   const [signinIndex, setSigninIndex] = useState(0);
-  const [signinCommand, setSigninCommand] = useState("");
-  const [signinCopied, setSigninCopied] = useState(false);
   // AJ-E305 Req.2: the zero-found collapse may re-target this run at
   // another installed Provider (the picker writes the override).
   const [providerOverride, setProviderOverride] = useState<string | null>(null);
@@ -627,7 +643,7 @@ export function OnboardingWizard({
         if (item.action === "import" && item.path) {
           const imported = await accountImport(item.provider, item.path, item.label, null);
           results.push({ label: item.label, state: "done" });
-          if (imported.login !== "logged_in") {
+          if (!signedIn(imported.login)) {
             queue.push({
               accountId: imported.account.id,
               label: imported.account.label,
@@ -638,7 +654,7 @@ export function OnboardingWizard({
         } else {
           const created = await createAccount(item.provider, item.label, null);
           results.push({ label: item.label, state: "done" });
-          if (created.login_state !== "logged_in") {
+          if (!signedIn(created.login_state)) {
             queue.push({
               accountId: created.id,
               label: created.label,
@@ -685,19 +701,7 @@ export function OnboardingWizard({
     };
   }, [step, activeSource, activeProvider]);
 
-  // The current sign-in card's vendor command (fetched lazily).
   const currentSignin = signinQueue !== null ? signinQueue[signinIndex] ?? null : null;
-  useEffect(() => {
-    if (step !== "signins" || currentSignin === null) return;
-    let cancelled = false;
-    setSigninCommand("");
-    void accountLoginCommand(currentSignin.accountId).then((found) => {
-      if (!cancelled) setSigninCommand(found);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [step, currentSignin]);
 
   // A finished (or skipped-through) queue lands on the Summary — the
   // queue itself never blocks it.
@@ -1413,7 +1417,7 @@ export function OnboardingWizard({
                 <div className="rounded-xl border border-hairline bg-canvas px-4 py-3 text-xs leading-relaxed text-muted">
                   Importing from{" "}
                   <span className="font-mono text-[11px]">{importing.path}</span>
-                  {importing.login === "logged_in" &&
+                  {signedIn(importing.login) &&
                     " — your settings and session history come along."}
                   {importing.login === "logged_out" &&
                     " — its settings come along; you'll sign in after."}
@@ -1477,7 +1481,7 @@ export function OnboardingWizard({
           {/* ---------------------------------------------------- login */}
           {step === "login" && account && (
             <div className="flex flex-col gap-4">
-              {loginState === "logged_in" || account.login_state === "logged_in" ? (
+              {signedIn(loginState) || signedIn(account.login_state) ? (
                 <div className="flex flex-col items-center gap-3 py-6 text-center">
                   <span className="dot-live size-2.5 rounded-full bg-success" />
                   <p className="text-sm font-medium">Signed in and ready</p>
@@ -1563,72 +1567,23 @@ export function OnboardingWizard({
                     : "to finish setting up"}
                 </p>
                 <p className="mt-1 text-xs leading-relaxed text-muted">
-                  Each account signs in with the vendor's own login — AI Juggler never sees
-                  your credentials. Skipping is fine; you can sign in anytime from Accounts.
+                  Skipping is fine; you can sign in anytime from Accounts.
                 </p>
               </div>
               {currentSignin !== null && (
-                <div
-                  className="flex flex-col gap-3 rounded-xl border border-hairline bg-canvas px-4 py-3.5"
-                  data-testid="signin-card"
-                >
-                  <p className="text-xs">
-                    <span className="font-medium text-ink">{currentSignin.label}</span>
-                    <span className="text-muted">
-                      {" "}
-                      ·{" "}
-                      {installs?.find((row) => row.provider === currentSignin.provider)
-                        ?.display_name ?? currentSignin.provider}
-                    </span>
-                  </p>
-                  {currentSignin.loginNote && (
-                    <p className="text-[11px] leading-relaxed text-muted">
-                      {currentSignin.loginNote}
-                    </p>
-                  )}
-                  <div className="rounded-lg border border-hairline px-3 py-2 font-mono text-[11px] leading-relaxed text-success">
-                    {signinCommand || "…"}
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      size="sm"
-                      variant="primary"
-                      onClick={async () => {
-                        const terminal = await terminalSpawnLogin(currentSignin.accountId);
-                        openLoginTerminal(terminal.id, `Sign in · ${currentSignin.label}`);
-                      }}
-                    >
-                      <IconTerminal width={14} height={14} />
-                      Sign in
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => void loginOpenWeb(currentSignin.provider)}
-                    >
-                      Open vendor page
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={async () => {
-                        await navigator.clipboard.writeText(signinCommand);
-                        setSigninCopied(true);
-                        window.setTimeout(() => setSigninCopied(false), 1500);
-                      }}
-                    >
-                      {signinCopied ? "Copied" : "Copy command"}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => setSigninIndex((index) => index + 1)}
-                      data-testid="signin-skip"
-                    >
-                      Skip for now
-                    </Button>
-                  </div>
-                </div>
+                <LoginQueueCard
+                  key={currentSignin.accountId}
+                  accountId={currentSignin.accountId}
+                  label={currentSignin.label}
+                  providerName={currentSignin.provider}
+                  initialState="logged_out"
+                  loginNote={currentSignin.loginNote}
+                  onSpawned={(terminalId) =>
+                    openLoginTerminal(terminalId, `Sign in · ${currentSignin.label}`)
+                  }
+                  onReady={() => setSigninIndex((index) => index + 1)}
+                  onSkip={() => setSigninIndex((index) => index + 1)}
+                />
               )}
               {signinQueue.length > 1 && (
                 <p className="text-[11px] text-muted">
@@ -1658,6 +1613,33 @@ export function OnboardingWizard({
                   </li>
                 ))}
               </ul>
+              {isolation !== null && (
+                <div className="flex flex-col gap-1.5" data-testid="isolation-checklist">
+                  <p className="text-[11px] font-medium text-muted">
+                    Isolation verified — every account fenced
+                  </p>
+                  <ul className="flex flex-col gap-0.5">
+                    {isolation.map((row) => (
+                      <li
+                        key={row.id}
+                        className="flex items-center gap-2 text-[11px]"
+                        data-testid="isolation-row"
+                        data-pass={row.pass ? "true" : "false"}
+                      >
+                        <span className={row.pass ? "text-success" : "text-danger"}>
+                          {row.pass ? "✓" : "✕"}
+                        </span>
+                        <span className="text-muted">{row.label}</span>
+                        {!row.pass && (
+                          <span className="text-danger" role="alert">
+                            {row.detail}
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               {recommendation?.start_here && (
                 <p className="text-xs text-muted" data-testid="start-here">
                   Start here: <span className="font-mono text-ink">{recommendation.start_here}</span>{" "}
@@ -1671,6 +1653,12 @@ export function OnboardingWizard({
                   ref={primaryRef}
                   size="sm"
                   variant="primary"
+                  disabled={isolation?.some((row) => !row.pass) ?? false}
+                  title={
+                    isolation?.some((row) => !row.pass)
+                      ? `Isolation check failed: ${isolation.find((row) => !row.pass)!.label}`
+                      : undefined
+                  }
                   onClick={() => {
                     window.sessionStorage.removeItem(persistKey);
                     onAccountCreated();
@@ -1835,7 +1823,7 @@ export function OnboardingWizard({
                 goto("summary");
               }}
             >
-              {loginState === "logged_in" ? "Continue" : "I'll sign in later"}
+              {signedIn(loginState) ? "Continue" : "I'll sign in later"}
             </Button>
           )}
           {step === "signins" && (
@@ -1858,7 +1846,7 @@ export function OnboardingWizard({
                 onClose();
               }}
             >
-              {loginState === "logged_in" ? "Continue" : "Done"}
+              {signedIn(loginState) ? "Continue" : "Done"}
             </Button>
           )}
         </div>

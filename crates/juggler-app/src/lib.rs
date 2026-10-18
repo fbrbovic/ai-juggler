@@ -128,6 +128,7 @@ pub fn run() {
             commands::environment_scan,
             commands::account_import,
             commands::source_inspect,
+            commands::isolation_check,
             commands::login_open_web,
             commands::profiles_list,
             commands::legacy_aliases::profiles_list_alias,

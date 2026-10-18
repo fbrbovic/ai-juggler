@@ -578,7 +578,11 @@ export async function accountLoginCommand(accountId: string): Promise<string> {
 
 export async function accountLoginState(accountId: string): Promise<string> {
   if (!hasBackend) {
-    return "logged_out";
+    // AJ-E308 test seam: specs inject the probed state.
+    return (
+      (window as unknown as { __AIJ_LOGIN_STATE__?: string }).__AIJ_LOGIN_STATE__ ??
+      "logged_out"
+    );
   }
   return invoke<string>("account_login_state", { accountId });
 }
@@ -2363,6 +2367,42 @@ export function errorText(cause: unknown): string {
   }
   const text = String(cause);
   return text === "[object Object]" ? "Something went wrong — try again." : text;
+}
+
+/** AJ-E308 Req.7: one named isolation-checklist row. */
+export interface IsolationRowData {
+  id: string;
+  label: string;
+  pass: boolean;
+  detail: string;
+}
+
+/** AJ-E308 Req.7: the post-import isolation checklist (6 rows). */
+export async function isolationCheck(accountId: string): Promise<IsolationRowData[]> {
+  if (!hasBackend) {
+    return (
+      (window as unknown as { __AIJ_ISOLATION__?: IsolationRowData[] })
+        .__AIJ_ISOLATION__ ?? [
+        { id: "managed_dir_private", label: "Account folder is owner-only (0700)", pass: true, detail: "checked" },
+        { id: "marker_present", label: "The managed-folder marker is present", pass: true, detail: "checked" },
+        { id: "launch_env_managed_only", label: "Launch environment points only at this account's folder", pass: true, detail: "checked" },
+        { id: "source_free_of_juggler_writes", label: "The imported-from folder is untouched (no AI Juggler writes)", pass: true, detail: "checked" },
+        { id: "probe_independence", label: "Login state reads only this account's folder", pass: true, detail: "checked" },
+        { id: "no_writes_outside_managed", label: "No stray files outside managed folders", pass: true, detail: "checked" },
+      ]
+    );
+  }
+  return invoke<IsolationRowData[]>("isolation_check", { accountId });
+}
+
+/**
+ * AJ-E308: the ready-check across login-state generations — the
+ * taxonomy's `signed_in` plus the legacy `logged_in` string (scan
+ * candidates still carry it). Everything else (partial / expired /
+ * sso_pending / api_key / logged_out / unknown) is not ready.
+ */
+export function signedIn(state: string | null | undefined): boolean {
+  return state === "signed_in" || state === "logged_in";
 }
 
 /** True when the coded rejection says a retry can succeed. */

@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking", "28-switch", "29-door", "30-switchback", "31-redaction", "32-graph", "33-beta", "34-wizard", "35-candidates", "36-recommend", "37-flows", "38-flows-cde", "39-import"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking", "28-switch", "29-door", "30-switchback", "31-redaction", "32-graph", "33-beta", "34-wizard", "35-candidates", "36-recommend", "37-flows", "38-flows-cde", "39-import", "40-login"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -4574,5 +4574,131 @@ for (const theme of THEMES) {
         fullPage: true,
       });
     });
+  }
+}
+
+/**
+ * AJ-E308 gallery 40 — the shared login card's states (Waiting /
+ * Partial / Expired / SSO / ApiKey / SignedIn) via the Ready Home
+ * door, plus the Summary's isolation checklist (pass + a forced
+ * fail that blocks Launch) — 1280×800 + 390×844 × light+dark.
+ */
+for (const theme of THEMES) {
+  for (const vp of CDE_VP) {
+    for (const state of ["logged_out", "partial", "expired", "sso_pending", "api_key", "signed_in"] as const) {
+      test(`login card — ${state} — ${vp.name} — ${theme}`, async ({ page }) => {
+        await page.addInitScript(
+          ({ fixture, state: loginState, theme: t }) => {
+            const w = window as unknown as Record<string, unknown>;
+            w.__AIJ_FIXTURE__ = fixture;
+            w.__AIJ_LOGIN_STATE__ = loginState;
+            // Ready Home IS the surface — do not skip it.
+            localStorage.setItem("aij.theme", t);
+          },
+          { fixture: readyHome, state, theme },
+        );
+        await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme as "dark" | "light" });
+        await page.setViewportSize({ width: vp.width, height: vp.height });
+        await page.goto("/");
+        // Ready Home lists the not-signed account; expanding its
+        // card renders the shared queue card in the probed state.
+        const signIn = page.getByRole("button", { name: /^Sign in$/ }).first();
+        await expect(signIn).toBeVisible();
+        await signIn.click();
+        const card = page.getByTestId("login-queue-card");
+        await expect(card).toBeVisible();
+        await expect(card).toHaveAttribute("data-state", state);
+        await page.screenshot({
+          path: resolve(GALLERY, `40-login/card-${state}-${vp.name}-${theme}.png`),
+          fullPage: true,
+        });
+      });
+    }
+  }
+}
+
+/** The isolation rows (pass + one forced fail) for the Summary. */
+const isolationRows = (fail: boolean) => [
+  { id: "managed_dir_private", label: "Account folder is owner-only (0700)", pass: true, detail: "checked" },
+  { id: "marker_present", label: "The managed-folder marker is present", pass: true, detail: "checked" },
+  { id: "launch_env_managed_only", label: "Launch environment points only at this account's folder", pass: true, detail: "checked" },
+  { id: "source_free_of_juggler_writes", label: "The imported-from folder is untouched (no AI Juggler writes)", pass: true, detail: "checked" },
+  { id: "probe_independence", label: "Login state reads only this account's folder", pass: true, detail: "checked" },
+  {
+    id: "no_writes_outside_managed",
+    label: "No stray files outside managed folders",
+    pass: !fail,
+    detail: fail ? "stray.txt found at the accounts root" : "checked",
+  },
+];
+
+for (const theme of THEMES) {
+  for (const vp of CDE_VP) {
+    for (const fail of [false, true]) {
+      test(`isolation checklist — ${fail ? "forced fail blocks Launch" : "6/6 pass"} — ${vp.name} — ${theme}`, async ({ page }) => {
+        await page.addInitScript(
+          ({ fixture, rows, theme: t }) => {
+            const w = window as unknown as Record<string, unknown>;
+            w.__AIJ_FIXTURE__ = fixture;
+            w.__AIJ_PROVIDER_INSTALLS__ = [
+              {
+                provider: "claude-code",
+                display_name: "Claude Code",
+                install_url: "https://claude.com/download",
+                status: "installed",
+                version: "2.1.296",
+                binary: "/usr/local/bin/claude",
+                notes: [],
+              },
+            ];
+            w.__AIJ_RECOMMENDATION__ = {
+              items: [
+                {
+                  provider: "claude-code",
+                  label: "Work",
+                  action: "import",
+                  rationale: "Signed in — import keeps history",
+                  default_on: true,
+                  path: "/Users/you/.claude-work",
+                },
+              ],
+              summary: "Your juggling set: Claude ×1 (Work — signed in).",
+              start_here: null,
+            };
+            w.__AIJ_ISOLATION__ = rows;
+            w.__AIJ_LOGIN_STATE__ = "signed_in";
+            localStorage.setItem("aij.theme", t);
+            sessionStorage.setItem("aij.ready.skipped", "1");
+          },
+          { fixture: honestEmpty, theme, rows: isolationRows(fail) },
+        );
+        await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme as "dark" | "light" });
+        await page.setViewportSize({ width: vp.width, height: vp.height });
+        await page.goto("/");
+        await page.getByTestId("install-continue").click();
+        await expect(page.getByTestId("proposal-teaser")).toBeVisible();
+        await page.getByTestId("use-recommended").click();
+        await page.getByTestId("accept-setup").click();
+        // The queued card's poll reads the injected signed-in state
+        // and AUTO-ADVANCES to the Summary (Req.2 — "we detect it").
+        await expect(page.getByTestId("isolation-checklist")).toBeVisible({ timeout: 15_000 });
+        const failing = page.locator("[data-testid='isolation-row'][data-pass='false']");
+        if (fail) {
+          await expect(failing).toHaveCount(1);
+          await expect(failing).toContainText("stray.txt");
+          await expect(page.getByTestId("launch-first-session")).toBeDisabled();
+        } else {
+          await expect(failing).toHaveCount(0);
+          await expect(page.getByTestId("launch-first-session")).toBeEnabled();
+        }
+        await page.screenshot({
+          path: resolve(
+            GALLERY,
+            `40-login/summary-${fail ? "fail" : "pass"}-${vp.name}-${theme}.png`,
+          ),
+          fullPage: true,
+        });
+      });
+    }
   }
 }

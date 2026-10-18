@@ -154,11 +154,12 @@ fn login_state_is_metadata_only() {
     // Presence of a non-empty credentials file reads as logged-in.
     // Content is intentionally never read — size metadata only.
     std::fs::write(state.join(".credentials.json"), b"x").unwrap();
-    assert_eq!(adapter.login_state(&state), LoginState::LoggedIn);
+    assert_eq!(adapter.login_state(&state), LoginState::SignedIn);
 
-    // An empty file does not count.
+    // An empty file is PARTIAL — an OAuth abandoned halfway
+    // (AJ-E308 Req.1), a distinct state from a clean LoggedOut.
     std::fs::write(state.join(".credentials.json"), b"").unwrap();
-    assert_eq!(adapter.login_state(&state), LoginState::LoggedOut);
+    assert_eq!(adapter.login_state(&state), LoginState::Partial);
 }
 
 #[test]

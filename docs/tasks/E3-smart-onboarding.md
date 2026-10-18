@@ -363,7 +363,7 @@ Trap: marker-first writes mean a failed import still looks
 managed; cleanup must key off the import session id, not the
 marker alone.
 
-### AJ-E308 Login-state taxonomy, auto-detected sign-in queue, and isolation verification | Status: TODO | Priority P0 | Effort L | Depends: AJ-E301
+### AJ-E308 Login-state taxonomy, auto-detected sign-in queue, and isolation verification | Status: DONE-EVIDENCED | Priority P0 | Effort L | Depends: AJ-E301
 **Goal**:
 Replace the binary signed-in chip with a login taxonomy
 (signed-in / partial / expired / SSO-pending / API-key), auto-

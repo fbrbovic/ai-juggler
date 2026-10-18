@@ -5,23 +5,21 @@ import { Field, Input, Modal } from "../components/form";
 import { IconProfiles, IconTerminal } from "../components/icons";
 import { OnboardingWizard } from "./OnboardingWizard";
 import { AddProviderSheet } from "./AddProviderSheet";
+import { LoginQueueCard } from "../components/LoginQueueCard";
 import { BetaMatrix } from "../components/BetaMatrix";
 import {
-  accountLoginCommand,
-  accountLoginState,
   accountsList,
   createProfile,
   deleteProfile,
-  hasLiveBackend,
   launchSession,
-  loginOpenWeb,
-  terminalSpawnLogin,
   launchRecipesList,
   type AccountInfo,
   type LaunchRecipeInfo,
   redactionPolicyGet,
   redactionPolicySetOverride,
-  type RedactionInfoData, errorText,} from "../lib/bridge";
+  type RedactionInfoData, errorText,
+  signedIn,
+} from "../lib/bridge";
 
 /**
  * Profiles screen (M1-3): accounts with isolated state + one-click profile
@@ -187,10 +185,9 @@ export function ProfilesScreen({
         <LoginModal
           account={loginFor}
           openTerminal={openTerminal}
-          onClose={() => setLoginFor(null)}
-          onRecheck={async () => {
-            await accountLoginState(loginFor.id);
-            await refresh();
+          onClose={() => {
+            setLoginFor(null);
+            void refresh();
           }}
         />
       )}
@@ -299,7 +296,7 @@ function RedactionOverrideRow({ provider }: { provider: string }) {
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const onToggleSettings = () => setSettingsOpen((v) => !v);
-  const loggedIn = account.login_state === "logged_in";
+  const loggedIn = signedIn(account.login_state);
   const loginTone: ChipTone = loggedIn ? "success" : "warning";
   return (
     <Card className="overflow-hidden">
@@ -486,73 +483,31 @@ function LoginModal({
   account,
   openTerminal,
   onClose,
-  onRecheck,
 }: {
   account: AccountInfo;
   openTerminal: (id: string, title: string) => void;
   onClose: () => void;
-  onRecheck: () => Promise<void>;
 }) {
-  const [command, setCommand] = useState("…");
-  const [copied, setCopied] = useState(false);
-  const [starting, setStarting] = useState(false);
-
-  useEffect(() => {
-    void accountLoginCommand(account.id).then(setCommand);
-  }, [account.id]);
-
-  const preview = !hasLiveBackend();
-
-  const signInHere = async () => {
-    setStarting(true);
-    try {
-      const terminal = await terminalSpawnLogin(account.id);
-      openTerminal(terminal.id, `Sign in · ${account.label}`);
-      onClose();
-    } catch (cause) {
-      setStarting(false);
-      window.alert(`Could not start the login terminal: ${errorText(cause)}`);
-    }
-  };
-
   return (
     <Modal
       title={`Log in · ${account.label}`}
       subtitle="Claude's own sign-in, opened for you — AI Juggler never sees your credentials."
       onClose={onClose}
     >
-      <div className="flex flex-col gap-4">
-        <div className="rounded-xl border border-hairline bg-canvas px-3 py-2.5 font-mono text-[11px] leading-relaxed text-live">
-          {command}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="primary" onClick={() => void signInHere()} disabled={starting}>
-            <IconTerminal width={14} height={14} />
-            {starting ? "Opening…" : preview ? "Sign in (preview)" : "Sign in inside AI Juggler"}
-          </Button>
-          <Button size="sm" variant="secondary" onClick={() => void loginOpenWeb(account.provider)}>
-            Open claude.ai
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={async () => {
-              await navigator.clipboard.writeText(command);
-              setCopied(true);
-              window.setTimeout(() => setCopied(false), 1500);
-            }}
-          >
-            {copied ? "Copied" : "Copy command"}
-          </Button>
-          <Button size="sm" variant="secondary" onClick={() => void onRecheck()}>
-            Re-check login
-          </Button>
-        </div>
-        <p className="text-[11px] text-faint">
-          The isolated login terminal opens at the bottom of the window —
-          complete Anthropic's sign-in there and you're done.
-        </p>
-      </div>
+      {/* AJ-E308 Req.3: the ONE shared queue card — no alerts, no
+          unhandled rejections; polls and auto-detects. */}
+      <LoginQueueCard
+        accountId={account.id}
+        label={account.label}
+        providerName="claude-code"
+        initialState={account.login_state}
+        onSpawned={(terminalId) => {
+          openTerminal(terminalId, `Sign in · ${account.label}`);
+          onClose();
+        }}
+        onDone={onClose}
+      />
     </Modal>
   );
 }
+
