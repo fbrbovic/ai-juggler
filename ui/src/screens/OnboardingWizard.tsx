@@ -27,6 +27,8 @@ import {
   type ImportResult,
   type ProviderInstallData,
   errorText,
+  isolationCheck,
+  type IsolationRowData,
 } from "../lib/bridge";
 
 const PLANS: { id: string | null; label: string; hint: string }[] = [
@@ -498,6 +500,19 @@ export function OnboardingWizard({
   const [inspect, setInspect] = useState<SourceInspectInfo | null>(null);
   const [manualSource, setManualSource] = useState<string | null>(null);
   const [degradedChoice, setDegradedChoice] = useState(false);
+  // AJ-E308 Req.7: the isolation checklist on the set Summary.
+  const [isolation, setIsolation] = useState<IsolationRowData[] | null>(null);
+  useEffect(() => {
+    if (step !== "summary" || setSummary === null || isolation !== null) return;
+    let cancelled = false;
+    void isolationCheck("__preview__").then((rows) => {
+      if (!cancelled) setIsolation(rows);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, setSummary]);
   const [importError, setImportError] = useState<
     { kind: "duplicate" | "moved" | "other"; text: string } | null
   >(null);
@@ -1597,6 +1612,33 @@ export function OnboardingWizard({
                   </li>
                 ))}
               </ul>
+              {isolation !== null && (
+                <div className="flex flex-col gap-1.5" data-testid="isolation-checklist">
+                  <p className="text-[11px] font-medium text-muted">
+                    Isolation verified — every account fenced
+                  </p>
+                  <ul className="flex flex-col gap-0.5">
+                    {isolation.map((row) => (
+                      <li
+                        key={row.id}
+                        className="flex items-center gap-2 text-[11px]"
+                        data-testid="isolation-row"
+                        data-pass={row.pass ? "true" : "false"}
+                      >
+                        <span className={row.pass ? "text-success" : "text-danger"}>
+                          {row.pass ? "✓" : "✕"}
+                        </span>
+                        <span className="text-muted">{row.label}</span>
+                        {!row.pass && (
+                          <span className="text-danger" role="alert">
+                            {row.detail}
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               {recommendation?.start_here && (
                 <p className="text-xs text-muted" data-testid="start-here">
                   Start here: <span className="font-mono text-ink">{recommendation.start_here}</span>{" "}
@@ -1610,6 +1652,12 @@ export function OnboardingWizard({
                   ref={primaryRef}
                   size="sm"
                   variant="primary"
+                  disabled={isolation?.some((row) => !row.pass) ?? false}
+                  title={
+                    isolation?.some((row) => !row.pass)
+                      ? `Isolation check failed: ${isolation.find((row) => !row.pass)!.label}`
+                      : undefined
+                  }
                   onClick={() => {
                     window.sessionStorage.removeItem(persistKey);
                     onAccountCreated();

@@ -2365,6 +2365,32 @@ export function errorText(cause: unknown): string {
   return text === "[object Object]" ? "Something went wrong — try again." : text;
 }
 
+/** AJ-E308 Req.7: one named isolation-checklist row. */
+export interface IsolationRowData {
+  id: string;
+  label: string;
+  pass: boolean;
+  detail: string;
+}
+
+/** AJ-E308 Req.7: the post-import isolation checklist (6 rows). */
+export async function isolationCheck(accountId: string): Promise<IsolationRowData[]> {
+  if (!hasBackend) {
+    return (
+      (window as unknown as { __AIJ_ISOLATION__?: IsolationRowData[] })
+        .__AIJ_ISOLATION__ ?? [
+        { id: "managed_dir_private", label: "Account folder is owner-only (0700)", pass: true, detail: "checked" },
+        { id: "marker_present", label: "The managed-folder marker is present", pass: true, detail: "checked" },
+        { id: "launch_env_managed_only", label: "Launch environment points only at this account's folder", pass: true, detail: "checked" },
+        { id: "source_free_of_juggler_writes", label: "The imported-from folder is untouched (no AI Juggler writes)", pass: true, detail: "checked" },
+        { id: "probe_independence", label: "Login state reads only this account's folder", pass: true, detail: "checked" },
+        { id: "no_writes_outside_managed", label: "No stray files outside managed folders", pass: true, detail: "checked" },
+      ]
+    );
+  }
+  return invoke<IsolationRowData[]>("isolation_check", { accountId });
+}
+
 /**
  * AJ-E308: the ready-check across login-state generations — the
  * taxonomy's `signed_in` plus the legacy `logged_in` string (scan
