@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Card, Chip } from "../components/primitives";
 import { IconProjects, IconTerminal } from "../components/icons";
 import { funnelStep } from "../lib/funnel";
+import { ExpertSetup } from "../components/ExpertSetup";
 import { OnboardingWizard } from "./OnboardingWizard";
 import {
   launchRecipesList,
@@ -68,6 +69,7 @@ export function NewProjectSheet({
   onLaunched,
   openLoginTerminal,
   onAccountsChanged,
+  onManageLaunchSettings,
 }: {
   projects: ProjectInfo[];
   accounts: AccountInfo[];
@@ -76,6 +78,8 @@ export function NewProjectSheet({
   onLaunched: (sessionId: string, title: string) => void;
   openLoginTerminal: (id: string, title: string) => void;
   onAccountsChanged: () => void;
+  /** AJ-E309 Req.5: the Expert hatch's [Manage Launch settings →]. */
+  onManageLaunchSettings?: () => void;
 }) {
   const [directory, setDirectory] = useState<string | null>(initialDirectory);
   const [recipes, setRecipes] = useState<LaunchRecipeInfo[] | null>(null);
@@ -354,6 +358,18 @@ export function NewProjectSheet({
                   </div>
                 )}
               </div>
+              {/* AJ-E309 Req.5: the expert hatch for the recommended
+                  account (folder, shell line, env overrides). */}
+              {recommended !== null && (
+                <div className="mt-3">
+                  <ExpertSetup
+                    provider={recommended.provider}
+                    accounts={[{ id: recommended.account_id, label: recommended.account_label }]}
+                    surface="new-project"
+                    onManageLaunchSettings={onManageLaunchSettings}
+                  />
+                </div>
+              )}
             </>
           )}
 

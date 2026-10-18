@@ -14,10 +14,25 @@ import type { ProviderInstallData, ScanReportData } from "../lib/bridge";
 
 const w = () => window as unknown as Record<string, unknown>;
 
+/** A user who already chose a pack policy (an earlier run / Accounts)
+ * — the wizard asks nothing. Tests of the first-run question delete
+ * this seam to start from the honest "unset". */
+const POLICY_CHOSEN = {
+  global: "strip",
+  override: null,
+  effective: "strip",
+  source: "global",
+  line: "Redaction for claude-code: Strip — replace keys with ••• (your global choice)",
+};
+
 beforeEach(() => {
   delete w().__AIJ_PROVIDER_INSTALLS__;
   delete w().__AIJ_ENVIRONMENT_SCAN__;
   delete w().__AIJ_SCAN_REPORT__;
+  delete w().__AIJ_FUNNEL_EVENTS__;
+  delete w().__AIJ_REDACTION_SET_GLOBAL__;
+  delete w().__AIJ_RENEWAL_SET__;
+  w().__AIJ_REDACTION_POLICY__ = { ...POLICY_CHOSEN };
 });
 
 const DENIED_REPORT: ScanReportData = {
@@ -563,7 +578,9 @@ describe("AJ-E305 flow (a) — first install in ≤5 primary clicks, 0 typed fie
     return mounted;
   };
 
-  it("the primary path is 4 primary-button clicks, 0 typed fields, and ends on the three Summary exits", async () => {
+  it("the primary path is 4 primary-button clicks + 1 policy answer (≤ 5), 0 typed fields, and ends on the three Summary exits", async () => {
+    // A TRUE first run: no pack policy chosen yet (AJ-E309).
+    delete w().__AIJ_REDACTION_POLICY__;
     const launch = vi.fn();
     const close = vi.fn();
     const addAnother = vi.fn();
@@ -577,9 +594,23 @@ describe("AJ-E305 flow (a) — first install in ≤5 primary clicks, 0 typed fie
     await waitFor(() =>
       expect(container.querySelector("[data-testid='accept-setup']")).not.toBeNull(),
     );
+    // AJ-E309: the policy question rides the Confirm (no extra step);
+    // nothing is pre-selected and Accept waits for an answer.
+    await waitFor(() =>
+      expect(container.querySelector("[data-testid='policy-panel']")).not.toBeNull(),
+    );
+    const radios = Array.from(
+      container.querySelectorAll<HTMLInputElement>("[data-testid='policy-panel'] input[type='radio']"),
+    );
+    expect(radios.length).toBe(4);
+    expect(radios.some((radio) => radio.checked)).toBe(false);
+    expect(container.querySelector<HTMLButtonElement>("[data-testid='accept-setup']")!.disabled).toBe(true);
+    // Click 2 (the policy answer — a deliberate choice, no ⌘↩).
+    fireEvent.click(radios.find((radio) => radio.value === "strip")!);
+    expect(container.querySelector<HTMLButtonElement>("[data-testid='accept-setup']")!.disabled).toBe(false);
     // No typing anywhere on the path: the proposal carries labels;
     // nothing requires an input.
-    // Click 2 (primary): Accept setup →.
+    // Click 3 (primary): Accept setup →.
     await act(async () => {
       fireEvent.click(container.querySelector("[data-testid='accept-setup']")!);
     });
@@ -600,7 +631,13 @@ describe("AJ-E305 flow (a) — first install in ≤5 primary clicks, 0 typed fie
     await waitFor(() =>
       expect(container.querySelector("[data-testid='summary-exits']")).not.toBeNull(),
     );
-    // Click 3 (primary): Launch first session → carries Start here.
+    // The Summary restates the choice (Nielsen H3), written ONCE on
+    // the accept click.
+    expect(container.querySelector("[data-testid='policy-restatement']")!.textContent).toBe(
+      "Packs: strip secrets (all Providers)",
+    );
+    expect(w().__AIJ_REDACTION_SET_GLOBAL__).toEqual(["strip"]);
+    // Click 4 (primary): Launch first session → carries Start here.
     fireEvent.click(container.querySelector("[data-testid='launch-first-session']")!);
     expect(launch).toHaveBeenCalledWith("-users-dev-api");
     expect(close).toHaveBeenCalled();

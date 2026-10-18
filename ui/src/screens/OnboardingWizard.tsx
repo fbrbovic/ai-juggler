@@ -1,8 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Button, Card, Chip } from "../components/primitives";
 import { IconJuggler, IconProfiles, IconTerminal } from "../components/icons";
-import { funnelStep } from "../lib/funnel";
+import { funnelEvent, funnelStep, reasonCode } from "../lib/funnel";
 import { LoginQueueCard } from "../components/LoginQueueCard";
+import { ExpertSetup } from "../components/ExpertSetup";
+import {
+  PackPolicyChooser,
+  packPolicyRestatement,
+  type PackPolicyChoice,
+  type PackPolicyWire,
+} from "../components/PackPolicyChooser";
 import { pickDirectory, sourceInspect,
   signedIn,
 } from "../lib/bridge";
@@ -29,6 +36,9 @@ import {
   errorText,
   isolationCheck,
   type IsolationRowData,
+  accountSetRenewal,
+  redactionPolicyGet,
+  redactionPolicySetGlobal,
 } from "../lib/bridge";
 
 const PLANS: { id: string | null; label: string; hint: string }[] = [
@@ -354,36 +364,127 @@ function CandidateCards({
   );
 }
 
+/** Today's LOCAL calendar date as `YYYY-MM-DD` (renewal dates are
+ * local calendar days, never timezone-converted — AJ-E411). */
+function localToday(): string {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+/** AJ-E309 Req.3 (D-12): the optional renewal date on a Confirm row —
+ * collapsed to "expiry unknown" until the user opens it; a native
+ * date input; [Skip] clears it without penalty (Apple HIG: optional
+ * means skippable). Never inferred. */
+function RenewalField({
+  value,
+  onChange,
+  accountLabel,
+  testId = "renewal-date",
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  accountLabel: string;
+  testId?: string;
+}): JSX.Element {
+  const [open, setOpen] = useState(value.length > 0);
+  const inputId = useId();
+  if (!open) {
+    return (
+      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted" data-testid={testId} data-state="unknown">
+        <span>Expiry unknown</span>
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="rounded text-[11px] text-accent-hi underline-offset-2 outline-none hover:underline focus-visible:ring-1 focus-visible:ring-accent/60"
+          aria-label={`Add a renewal date for ${accountLabel} (optional)`}
+          data-testid={`${testId}-add`}
+        >
+          ＋ Renewal date
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-1" data-testid={testId} data-state={value ? "set" : "open"}>
+      <label htmlFor={inputId} className="text-[11px] text-muted">
+        Renewal date (optional) — we'll warn you before it
+      </label>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          id={inputId}
+          type="date"
+          // A renewal in the past is almost always a typo — the native
+          // picker starts at today (local calendar, never UTC).
+          min={localToday()}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          aria-label={`Renewal date for ${accountLabel} (optional)`}
+          className="w-fit rounded-lg border border-hairline bg-canvas px-2 py-1 text-xs text-ink outline-none focus:border-accent/50"
+          data-testid={`${testId}-input`}
+        />
+        <button
+          type="button"
+          onClick={() => {
+            onChange("");
+            setOpen(false);
+          }}
+          className="rounded-md px-2 py-1 text-[11px] text-muted outline-none hover:bg-surface hover:text-ink focus-visible:ring-1 focus-visible:ring-accent/60"
+          data-testid={`${testId}-skip`}
+        >
+          Skip
+        </button>
+      </div>
+      {value === "" && (
+        <span className="text-[11px] text-muted">Left empty, expiry stays unknown — never guessed.</span>
+      )}
+    </div>
+  );
+}
+
 /** The Customise view (§5): per-item toggles — the default-ON set
  * first, quiet items under "Found but quiet", fresh adds listed;
- * every item shows its one-line rationale. Accept executes the
- * chosen set sequentially (⌘↩ accepts). */
+ * every item shows its one-line rationale and (AJ-E309) an optional
+ * renewal date. Accept executes the chosen set sequentially (⌘↩
+ * accepts once the policy question, when asked, is answered). */
 function ProposalBlock({
   recommendation,
   choices,
   onChoice,
   onAccept,
+  renewals,
+  onRenewal,
+  policySlot,
+  acceptBlocked,
 }: {
   recommendation: RecommendationData;
   choices: Record<number, boolean>;
   onChoice: (index: number, on: boolean) => void;
   onAccept: () => void;
+  renewals: Record<number, string>;
+  onRenewal: (index: number, date: string) => void;
+  /** The first-run policy chooser (merged with Confirm). */
+  policySlot?: JSX.Element | null;
+  /** Why Accept is unavailable (the unanswered policy), or null. */
+  acceptBlocked: string | null;
 }): JSX.Element {
+  const hintId = useId();
   const on = recommendation.items.filter((_, index) => choices[index]);
   const quiet = recommendation.items.filter((item) => !item.default_on);
   const row = (item: RecommendationData["items"][number], index: number): JSX.Element => {
     const isQuiet = !item.default_on;
+    const checked = choices[index] ?? item.default_on;
     return (
       <li
         key={`${item.provider}-${item.label}-${index}`}
-        className="flex flex-col gap-0.5 border-b border-hairline/50 pb-1.5 last:border-0 last:pb-0"
+        className="flex flex-col gap-1 border-b border-hairline/50 pb-1.5 last:border-0 last:pb-0"
         data-testid="proposal-item"
         data-quiet={isQuiet ? "true" : "false"}
       >
         <label className="flex items-center gap-2 text-xs">
           <input
             type="checkbox"
-            checked={choices[index] ?? item.default_on}
+            checked={checked}
             onChange={(event) => onChoice(index, event.target.checked)}
             className="size-3.5 accent-[var(--color-accent)]"
             data-testid="proposal-toggle"
@@ -392,6 +493,15 @@ function ProposalBlock({
           <span className="font-medium">{item.label}</span>
           <span className="text-muted">{item.rationale}</span>
         </label>
+        {checked && (
+          <div className="pl-5">
+            <RenewalField
+              value={renewals[index] ?? ""}
+              onChange={(date) => onRenewal(index, date)}
+              accountLabel={item.label}
+            />
+          </div>
+        )}
       </li>
     );
   };
@@ -426,11 +536,25 @@ function ProposalBlock({
           </ul>
         </div>
       )}
-      <div className="flex items-center gap-2">
-        <Button size="sm" variant="primary" onClick={onAccept} data-testid="accept-setup">
+      {policySlot}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          variant="primary"
+          onClick={onAccept}
+          disabled={acceptBlocked !== null}
+          aria-describedby={acceptBlocked !== null ? hintId : undefined}
+          data-testid="accept-setup"
+        >
           Accept setup → ({on.length})
         </Button>
-        <span className="text-[10px] text-muted">⌘↩ accepts</span>
+        {acceptBlocked !== null ? (
+          <span id={hintId} className="text-[11px] text-muted" data-testid="accept-blocked">
+            {acceptBlocked}
+          </span>
+        ) : (
+          <span className="text-[10px] text-muted">⌘↩ accepts</span>
+        )}
       </div>
     </div>
   );
@@ -500,6 +624,29 @@ export function OnboardingWizard({
   const [inspect, setInspect] = useState<SourceInspectInfo | null>(null);
   const [manualSource, setManualSource] = useState<string | null>(null);
   const [degradedChoice, setDegradedChoice] = useState(false);
+  // AJ-E309 Req.1 (D-14): the pack policy choice — asked on the first
+  // run only while NO global choice exists; nothing is pre-selected,
+  // and "Decide later" writes nothing (no pack is staged until the
+  // user chooses). The write happens on the accept/create click.
+  const [policyChoice, setPolicyChoice] = useState<PackPolicyChoice | null>(null);
+  const [policyKnown, setPolicyKnown] = useState<{
+    global: PackPolicyWire | null;
+    effective: PackPolicyWire | null;
+    source: "global" | "override" | "unset";
+  } | null>(null);
+  const [policyWriteFailed, setPolicyWriteFailed] = useState(false);
+  // AJ-E309 Req.3 (D-12): optional, user-entered renewal dates — the
+  // single-account Confirm row, and one per proposal item on the set
+  // path. Empty persists as unknown ("expiry unknown").
+  const [renewalDate, setRenewalDate] = useState("");
+  const [renewals, setRenewals] = useState<Record<number, string>>({});
+  // The Accounts this run created (Summary restatement + Expert setup).
+  const [created, setCreated] = useState<
+    { id: string; label: string; renewal: string | null; renewalSaved: boolean }[]
+  >([]);
+  // Funnel bookkeeping — each of these is emitted once per run.
+  const [proposalCustomised, setProposalCustomised] = useState(false);
+  const emittedRef = useRef<Set<string>>(new Set());
   // AJ-E308 Req.7: the isolation checklist on the set Summary.
   const [isolation, setIsolation] = useState<IsolationRowData[] | null>(null);
   useEffect(() => {
@@ -567,12 +714,27 @@ export function OnboardingWizard({
   useEffect(() => {
     if (step !== "detect" || report !== null) return;
     let cancelled = false;
+    const providers = Math.max(1, installs?.length ?? 1);
+    funnelEvent("scan_started", { providers });
     void environmentScanFull((done, total) => {
       if (!cancelled) setProgress({ done, total });
     }).then((found) => {
       if (!cancelled) {
         setReport(found);
         setProgress(null);
+        // AJ-E309 Req.6/7: counts and a health word only — never the
+        // paths or the inferred names themselves.
+        const health = found.cancelled
+          ? "cancelled"
+          : found.probes.some((probe) => probe.health === "denied")
+            ? "denied"
+            : found.probes.some((probe) => probe.health === "partial")
+              ? "partial"
+              : "ok";
+        funnelEvent("scan_completed", { providers, found: found.installs.length, health });
+        for (const candidate of found.installs) {
+          if (!candidate.managed) funnelEvent("inference_shown", { field: "purpose" });
+        }
       }
     });
     return () => {
@@ -591,6 +753,9 @@ export function OnboardingWizard({
     let cancelled = false;
     void recommendationFor().then((proposal) => {
       if (!cancelled) {
+        if (proposal.items.length > 0) {
+          funnelEvent("proposal_shown", { items: proposal.items.length });
+        }
         setRecommendation(proposal);
         setChoices(
           Object.fromEntries(proposal.items.map((item, index) => [index, item.default_on])),
@@ -602,11 +767,50 @@ export function OnboardingWizard({
     };
   }, [step, recommendation]);
 
-  // ⌘↩ accepts the proposal when it is open (pass2/03 §5).
+  // AJ-E309: what the user already chose (any earlier run, the
+  // switch chooser, or Accounts → Pack secrets). Only an UNSET global
+  // is asked about — and only on the first-run flow (a): the locked
+  // add-Provider/add-Account flows keep their click budgets and say
+  // the active choice on Summary instead.
+  useEffect(() => {
+    let alive = true;
+    void redactionPolicyGet(activeProvider)
+      .then((info) => {
+        if (!alive) return;
+        const asWire = (value: string | null): PackPolicyWire | null =>
+          value === "strip" || value === "keep" || value === "ask" ? value : null;
+        setPolicyKnown({
+          global: asWire(info.global),
+          effective: asWire(info.effective),
+          source: info.source === "override" || info.source === "global" ? info.source : "unset",
+        });
+      })
+      .catch(() => {
+        if (alive) setPolicyKnown({ global: null, effective: null, source: "unset" });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [activeProvider]);
+  const policyNeeded = !locked && policyKnown !== null && policyKnown.global === null;
+  // Deliberate choices get no fast-path: the accept/create stays
+  // disabled until the user picks an option (Decide later counts) —
+  // and, on the first-run flow, while the stored choice is still
+  // being read (a fast click must never skip the question).
+  const policyBlocking =
+    !locked && (policyKnown === null || (policyNeeded && policyChoice === null));
+
+  // ⌘↩ accepts the proposal when it is open (pass2/03 §5) — never
+  // while the policy is still unanswered.
   useEffect(() => {
     if (!proposalOpen) return;
     const onKey = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && acceptRun === null) {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.key === "Enter" &&
+        acceptRun === null &&
+        !policyBlocking
+      ) {
         event.preventDefault();
         void acceptTheSetup();
       }
@@ -614,35 +818,80 @@ export function OnboardingWizard({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [proposalOpen, acceptRun, choices]);
+  }, [proposalOpen, acceptRun, choices, policyBlocking, policyChoice, renewals]);
+
+  // AJ-E309 Req.2: the global policy writes ONLY on the explicit
+  // accept/create click. "Decide later" writes nothing.
+  const commitPolicy = async () => {
+    if (!policyNeeded || policyChoice === null) return;
+    if (!emittedRef.current.has("policy")) {
+      emittedRef.current.add("policy");
+      funnelEvent("policy_chosen", { choice: policyChoice });
+    }
+    if (policyChoice === "decide_later") return;
+    try {
+      await redactionPolicySetGlobal(policyChoice);
+      setPolicyKnown({ global: policyChoice, effective: policyChoice, source: "global" });
+      setPolicyWriteFailed(false);
+    } catch {
+      // The accounts still get set up; Summary says the choice wasn't
+      // saved and where to make it.
+      setPolicyWriteFailed(true);
+    }
+  };
+
+  // D-12: a user-entered date only; failures are reported per Account
+  // on Summary, never silently dropped.
+  const saveRenewal = async (accountId: string, date: string | null): Promise<boolean> => {
+    if (date === null) return true;
+    try {
+      await accountSetRenewal(accountId, date);
+      return true;
+    } catch {
+      return false;
+    }
+  };
 
   // Accept executes the chosen set SEQUENTIALLY with per-item
   // progress; a failed item degrades ITSELF only (Req.6). Accounts
   // that still need the vendor login queue for the sign-ins step
   // (AJ-E305 Req.3) — Skip there never blocks the Summary.
   const acceptTheSetup = async () => {
-    if (!recommendation) return;
+    if (!recommendation || policyBlocking) return;
     // The accept IS the identity confirmation on the set path — the
     // labels arrived pre-filled from inference and commit here.
     funnelStep("a-first-install", "confirm");
+    await commitPolicy();
     const picked = recommendation.items
       .map((item, index) => ({ item, index }))
       .filter(({ index }) => choices[index]);
+    funnelEvent("proposal_accepted", { items: picked.length });
     setAcceptRun(
       picked.map(({ item }) => ({ label: item.label, state: "pending" as const })),
     );
     const results: { label: string; state: "done" | "failed"; error?: string }[] = [];
+    const made: { id: string; label: string; renewal: string | null; renewalSaved: boolean }[] = [];
     const queue: {
       accountId: string;
       label: string;
       provider: string;
       loginNote: string | null;
     }[] = [];
-    for (const { item } of picked) {
+    for (const { item, index } of picked) {
+      const renewal = renewals[index]?.trim() ? renewals[index]!.trim() : null;
       try {
         if (item.action === "import" && item.path) {
+          funnelEvent("import_started");
           const imported = await accountImport(item.provider, item.path, item.label, null);
+          funnelEvent("import_completed", { degraded: imported.degraded === true });
           results.push({ label: item.label, state: "done" });
+          made.push({
+            id: imported.account.id,
+            label: imported.account.label,
+            renewal,
+            renewalSaved: await saveRenewal(imported.account.id, renewal),
+          });
+          if (imported.login === "expired") funnelEvent("login_expired");
           if (!signedIn(imported.login)) {
             queue.push({
               accountId: imported.account.id,
@@ -652,32 +901,41 @@ export function OnboardingWizard({
             });
           }
         } else {
-          const created = await createAccount(item.provider, item.label, null);
+          const createdAccount = await createAccount(item.provider, item.label, null);
           results.push({ label: item.label, state: "done" });
-          if (!signedIn(created.login_state)) {
+          made.push({
+            id: createdAccount.id,
+            label: createdAccount.label,
+            renewal,
+            renewalSaved: await saveRenewal(createdAccount.id, renewal),
+          });
+          if (!signedIn(createdAccount.login_state)) {
             queue.push({
-              accountId: created.id,
-              label: created.label,
+              accountId: createdAccount.id,
+              label: createdAccount.label,
               provider: item.provider,
               loginNote: null,
             });
           }
         }
       } catch (cause) {
+        if (item.action === "import") funnelEvent("import_failed", { reason_code: reasonCode(cause) });
         results.push({ label: item.label, state: "failed", error: errorText(cause) });
       }
       setAcceptRun(
-        picked.map(({ item: pickedItem }, index) => ({
+        picked.map(({ item: pickedItem }, at) => ({
           label: pickedItem.label,
-          state: index < results.length ? results[index]!.state : "pending",
-          error: index < results.length ? results[index]!.error : undefined,
+          state: at < results.length ? results[at]!.state : "pending",
+          error: at < results.length ? results[at]!.error : undefined,
         })),
       );
     }
+    if (queue.length > 0) funnelEvent("login_queued", { count: queue.length });
     onAccountCreated();
     setAcceptRun(null);
     setImporting(null);
     setAccount(null);
+    setCreated(made);
     setSetSummary(results);
     setSigninQueue(queue);
     setSigninIndex(0);
@@ -797,11 +1055,22 @@ export function OnboardingWizard({
   }, [importing]);
 
   const createTheAccount = async () => {
+    if (policyBlocking) return;
     setBusy(true);
     setError(null);
     setImportError(null);
+    await commitPolicy();
+    // D-12: user-entered only; empty stays unknown.
+    const renewal = renewalDate.trim().length > 0 ? renewalDate.trim() : null;
     try {
       if (activeSource !== null) {
+        // AJ-E309 Req.7: the inferred name was overridden when the
+        // committed label differs from it (the field only, never the
+        // value).
+        if (importing !== null && label.trim() !== importing.inference.purpose) {
+          funnelEvent("inference_edit", { field: "purpose" });
+        }
+        funnelEvent("import_started");
         try {
           const result = await accountImport(
             activeProvider,
@@ -811,9 +1080,20 @@ export function OnboardingWizard({
             activeOrigin,
             degradedChoice,
           );
+          funnelEvent("import_completed", { degraded: result.degraded === true });
+          if (result.login === "expired") funnelEvent("login_expired");
           setImportResult(result);
           setAccount(result.account);
+          setCreated([
+            {
+              id: result.account.id,
+              label: result.account.label,
+              renewal,
+              renewalSaved: await saveRenewal(result.account.id, renewal),
+            },
+          ]);
         } catch (cause) {
+          funnelEvent("import_failed", { reason_code: reasonCode(cause) });
           const text = errorText(cause);
           setBusy(false);
           setDegradedChoice(false);
@@ -832,8 +1112,16 @@ export function OnboardingWizard({
           return;
         }
       } else {
-        const created = await createAccount(activeProvider, label.trim(), plan);
-        setAccount(created);
+        const createdAccount = await createAccount(activeProvider, label.trim(), plan);
+        setAccount(createdAccount);
+        setCreated([
+          {
+            id: createdAccount.id,
+            label: createdAccount.label,
+            renewal,
+            renewalSaved: await saveRenewal(createdAccount.id, renewal),
+          },
+        ]);
       }
       setBusy(false);
       goto("login");
@@ -846,6 +1134,20 @@ export function OnboardingWizard({
       );
       setError(errorText(cause));
     }
+  };
+
+  // AJ-E307: the manual-folder entry — native picker, metadata-
+  // inspected at Confirm before anything is copied. Shared by the
+  // Detect link and the Expert-setup hatch.
+  const importSpecificFolder = async () => {
+    const picked = await pickDirectory();
+    if (picked === null) return;
+    setManualSource(picked);
+    setImporting(null);
+    // Zero typed fields on the manual path too — a sensible default
+    // label, editable at Confirm.
+    setLabel((current) => (current.trim().length > 0 ? current : "Main"));
+    goto("identity");
   };
 
   const recheck = async () => {
@@ -889,6 +1191,45 @@ export function OnboardingWizard({
     funnelStep("a-first-install", locked ? "scan" : "gate");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // AJ-E309 (Nielsen H3): the Summary restates the ACTIVE pack policy
+  // and each new Account's renewal date ("expiry unknown" when empty —
+  // never inferred, D-12).
+  const restatement = (
+    <div className="flex flex-col gap-1 rounded-xl border border-hairline px-4 py-3" data-testid="choices-restated">
+      <p className="text-xs text-ink" data-testid="policy-restatement">
+        {packPolicyRestatement(
+          policyKnown?.effective ?? null,
+          policyKnown?.source ?? "unset",
+          providerName,
+        )}
+      </p>
+      {policyWriteFailed && (
+        <p className="text-[11px] text-danger" role="alert">
+          Your pack choice couldn't be saved — set it in Accounts → Pack secrets.
+        </p>
+      )}
+      {created.map((entry) => (
+        <p key={entry.id} className="text-[11px] text-muted" data-testid="renewal-restatement">
+          {entry.label}:{" "}
+          {entry.renewal === null
+            ? "expiry unknown"
+            : entry.renewalSaved
+              ? `renews ${entry.renewal} — we'll warn you before it`
+              : `renewal date ${entry.renewal} couldn't be saved — add it in Accounts`}
+        </p>
+      ))}
+      <p className="text-[11px] text-muted">Change these anytime in Accounts.</p>
+    </div>
+  );
+  const expertAfter = (
+    <ExpertSetup
+      provider={activeProvider}
+      accounts={created.map((entry) => ({ id: entry.id, label: entry.label }))}
+      surface="wizard"
+      showMetricsExport
+    />
+  );
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6 backdrop-blur-sm">
@@ -1010,7 +1351,13 @@ export function OnboardingWizard({
                     <Button
                       size="sm"
                       variant="secondary"
-                      onClick={() => setProposalOpen((open) => !open)}
+                      onClick={() => {
+                        setProposalOpen((open) => !open);
+                        if (!proposalCustomised) {
+                          setProposalCustomised(true);
+                          funnelEvent("proposal_customised");
+                        }
+                      }}
                       data-testid="proposal-customise"
                       aria-expanded={proposalOpen}
                     >
@@ -1023,23 +1370,30 @@ export function OnboardingWizard({
                 <ProposalBlock
                   recommendation={recommendation}
                   choices={choices}
-                  onChoice={(index, on) => setChoices((current) => ({ ...current, [index]: on }))}
+                  onChoice={(index, on) => {
+                    setChoices((current) => ({ ...current, [index]: on }));
+                    if (!proposalCustomised) {
+                      setProposalCustomised(true);
+                      funnelEvent("proposal_customised");
+                    }
+                  }}
                   onAccept={() => void acceptTheSetup()}
+                  renewals={renewals}
+                  onRenewal={(index, date) =>
+                    setRenewals((current) => ({ ...current, [index]: date }))
+                  }
+                  policySlot={
+                    policyNeeded ? (
+                      <PackPolicyChooser value={policyChoice} onChange={setPolicyChoice} />
+                    ) : null
+                  }
+                  acceptBlocked={
+                    policyBlocking ? "Choose how packs handle secrets first — or Decide later." : null
+                  }
                 />
               )}
 
-              {report === null ? (
-                <div
-                  className="flex items-center gap-3 rounded-xl border border-hairline px-4 py-5"
-                  aria-live="polite"
-                  data-testid="scan-progress"
-                >
-                  <span className="dot-live size-2 rounded-full bg-live" />
-                  <span className="text-xs text-muted">
-                    Checking your machine… {progress ? `${progress.done} of ${progress.total} checks` : "…"}
-                  </span>
-                </div>
-              ) : acceptRun !== null ? (
+              {acceptRun !== null ? (
                 <ul className="flex flex-col gap-1.5" data-testid="accept-progress" aria-live="polite">
                   {acceptRun.map((entry) => (
                     <li
@@ -1073,6 +1427,17 @@ export function OnboardingWizard({
                     </li>
                   ))}
                 </ul>
+              ) : report === null ? (
+                <div
+                  className="flex items-center gap-3 rounded-xl border border-hairline px-4 py-5"
+                  aria-live="polite"
+                  data-testid="scan-progress"
+                >
+                  <span className="dot-live size-2 rounded-full bg-live" />
+                  <span className="text-xs text-muted">
+                    Checking your machine… {progress ? `${progress.done} of ${progress.total} checks` : "…"}
+                  </span>
+                </div>
               ) : reportDeniedCount(report.probes) > 0 ? (
                 <div
                   className="flex flex-col gap-2 rounded-xl border border-hairline px-4 py-4"
@@ -1244,20 +1609,7 @@ export function OnboardingWizard({
                 <>
                   <button
                     type="button"
-                    onClick={async () => {
-                      // AJ-E307: the manual-folder entry — native
-                      // picker, metadata-inspected before accepting.
-                      const picked = await pickDirectory();
-                      if (picked === null) return;
-                      setManualSource(picked);
-                      setImporting(null);
-                      // Zero typed fields on the manual path too — a
-                      // sensible default label, editable at Confirm.
-                      setLabel((current) =>
-                        current.trim().length > 0 ? current : "Main",
-                      );
-                      goto("identity");
-                    }}
+                    onClick={() => void importSpecificFolder()}
                     data-testid="import-specific-folder"
                     className="self-start text-xs text-muted underline-offset-2 hover:text-ink hover:underline"
                   >
@@ -1298,6 +1650,12 @@ export function OnboardingWizard({
                       </ul>
                     )}
                   </div>
+                  <ExpertSetup
+                    provider={activeProvider}
+                    surface="wizard"
+                    showMetricsExport
+                    onImportFolder={() => void importSpecificFolder()}
+                  />
                 </>
               )}
             </div>
@@ -1461,6 +1819,29 @@ export function OnboardingWizard({
                 </div>
               </div>
 
+              {/* AJ-E309 Req.3 (D-12): optional, user-entered only. */}
+              <RenewalField
+                value={renewalDate}
+                onChange={setRenewalDate}
+                accountLabel={label.trim() || "this account"}
+              />
+
+              {/* AJ-E309 Req.1: the first-run policy choice, merged
+                  with Confirm — no extra step; nothing pre-selected. */}
+              {policyNeeded && (
+                <PackPolicyChooser value={policyChoice} onChange={setPolicyChoice} />
+              )}
+
+              {/* AJ-E309 Req.5: the expert hatch (no account yet —
+                  the Provider's folder; the shell line follows once
+                  the account exists). */}
+              <ExpertSetup
+                provider={activeProvider}
+                surface="wizard"
+                showMetricsExport
+                onImportFolder={() => void importSpecificFolder()}
+              />
+
               {error && (
                 <div className="flex flex-col gap-1.5" data-testid="wizard-error">
                   <p className="text-xs text-danger">{error}</p>
@@ -1581,8 +1962,14 @@ export function OnboardingWizard({
                   onSpawned={(terminalId) =>
                     openLoginTerminal(terminalId, `Sign in · ${currentSignin.label}`)
                   }
-                  onReady={() => setSigninIndex((index) => index + 1)}
-                  onSkip={() => setSigninIndex((index) => index + 1)}
+                  onReady={() => {
+                    funnelEvent("login_completed");
+                    setSigninIndex((index) => index + 1);
+                  }}
+                  onSkip={() => {
+                    funnelEvent("login_skipped");
+                    setSigninIndex((index) => index + 1);
+                  }}
                 />
               )}
               {signinQueue.length > 1 && (
@@ -1640,6 +2027,7 @@ export function OnboardingWizard({
                   </ul>
                 </div>
               )}
+              {restatement}
               {recommendation?.start_here && (
                 <p className="text-xs text-muted" data-testid="start-here">
                   Start here: <span className="font-mono text-ink">{recommendation.start_here}</span>{" "}
@@ -1689,6 +2077,7 @@ export function OnboardingWizard({
                   Done
                 </Button>
               </div>
+              {expertAfter}
             </div>
           )}
           {step === "summary" && account && setSummary === null && (
@@ -1709,7 +2098,7 @@ export function OnboardingWizard({
                       (importResult && importResult.skipped.length > 0
                         ? ` — ${importResult.skipped.length} cache folders skipped`
                         : "")
-                    : `Created a private, isolated ${providerName} account with a “Main” profile`}
+                    : `Created a private, isolated ${providerName} account with default Launch settings`}
                 </li>
                 {importing && (
                   <li className="flex gap-2">
@@ -1726,8 +2115,11 @@ export function OnboardingWizard({
                 </li>
               </ul>
 
+              {restatement}
+              {expertAfter}
+
               {!hasLiveBackend() && (
-                <p className="text-[11px] text-faint">(preview mode — data shown is sample data)</p>
+                <p className="text-[11px] text-muted">(preview mode — data shown is sample data)</p>
               )}
             </div>
           )}
@@ -1774,11 +2166,17 @@ export function OnboardingWizard({
           inspect.is_config &&
           inspect.total_bytes > inspect.ceiling_bytes ? (
             <>
+              {policyBlocking && (
+                <span id="wizard-policy-hint" className="text-[11px] text-muted" data-testid="create-blocked">
+                  Choose how packs handle secrets first.
+                </span>
+              )}
               <Button
                 ref={primaryRef}
                 size="sm"
                 variant="primary"
-                disabled={busy || label.trim().length === 0}
+                disabled={busy || label.trim().length === 0 || policyBlocking}
+                aria-describedby={policyBlocking ? "wizard-policy-hint" : undefined}
                 onClick={() => {
                   setDegradedChoice(true);
                   void createTheAccount();
@@ -1803,15 +2201,24 @@ export function OnboardingWizard({
               </Button>
             </>
           ) : step === "identity" ? (
-            <Button
-              ref={primaryRef}
-              size="sm"
-              variant="primary"
-              disabled={busy || label.trim().length === 0}
-              onClick={() => void createTheAccount()}
-            >
-              {busy ? "Setting up…" : activeSource !== null ? "Import account" : "Create account"}
-            </Button>
+            <>
+              {policyBlocking && (
+                <span id="wizard-policy-hint" className="text-[11px] text-muted" data-testid="create-blocked">
+                  Choose how packs handle secrets first.
+                </span>
+              )}
+              <Button
+                ref={primaryRef}
+                size="sm"
+                variant="primary"
+                disabled={busy || label.trim().length === 0 || policyBlocking}
+                aria-describedby={policyBlocking ? "wizard-policy-hint" : undefined}
+                onClick={() => void createTheAccount()}
+                data-testid="create-account"
+              >
+                {busy ? "Setting up…" : activeSource !== null ? "Import account" : "Create account"}
+              </Button>
+            </>
           ) : null}
           {step === "login" && (
             <Button
@@ -1819,6 +2226,9 @@ export function OnboardingWizard({
               size="sm"
               variant="primary"
               onClick={() => {
+                funnelEvent(
+                  signedIn(loginState) || signedIn(account?.login_state) ? "login_completed" : "login_skipped",
+                );
                 onAccountCreated();
                 goto("summary");
               }}

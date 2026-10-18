@@ -1931,10 +1931,19 @@ pub fn account_login_command(
     account_id: String,
 ) -> AppResult<String> {
     let account = find_account(&state, &account_id)?;
-    Ok(format!(
-        "CLAUDE_CONFIG_DIR='{}' claude",
-        account.state_dir.display()
-    ))
+    let adapter = state
+        .registry
+        .get(&account.harness)
+        .ok_or_else(|| AppError::UnknownHarness(account.harness.to_string()))?;
+    juggler_adapter::adapter::shell_snippet(
+        adapter.as_ref(),
+        &account.state_dir,
+        &std::collections::BTreeMap::new(),
+    )
+    .ok_or_else(|| AppError::Validation {
+        subject: "sign-in",
+        message: format!("{} has no terminal sign-in command", account.harness),
+    })
 }
 
 /// Scans the machine for existing harness setups the onboarding wizard can
@@ -2038,6 +2047,439 @@ pub struct SourceInspectInfo {
     /// Keychain-bound login (signed in, no credentials file) — the
     /// re-login note shows at Confirm-source time (Req.8).
     pub keychain_bound: bool,
+}
+
+/// AJ-E309: the install moment the funnel measures from — written
+/// once, on the first funnel event this data dir ever records.
+const FUNNEL_INSTALL_AT_KEY: &str = "funnel_install_at_ms";
+
+/// AJ-E309: set once the first Instance launch has been recorded
+/// (`first_launch` is a once-per-install event).
+const FUNNEL_FIRST_LAUNCH_KEY: &str = "funnel_first_launch_recorded";
+
+/// Maps a core validation rejection to the coded `validation` wire
+/// (not retryable); everything else stays a storage failure.
+fn core_to_app(error: juggler_core::CoreError) -> AppError {
+    match error {
+        juggler_core::CoreError::Validation { subject, message } => {
+            AppError::Validation { subject, message }
+        }
+        other => AppError::Core(other),
+    }
+}
+
+/// AJ-E309 Req.6: appends one funnel event to the LOCAL store. Runs
+/// on a blocking worker — never on the UI thread — and the UI never
+/// awaits it on a user path.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] on a schema violation (coded
+/// `validation`) or a storage/I/O failure.
+#[tauri::command]
+pub async fn funnel_event(
+    state: tauri::State<'_, Arc<AppState>>,
+    kind: String,
+    fields: std::collections::BTreeMap<String, String>,
+) -> AppResult<()> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        funnel_event_impl(
+            &state,
+            &kind,
+            fields,
+            juggler_core::model::Timestamp::now().millis(),
+        )
+    })
+    .await
+    .map_err(|error| AppError::Io {
+        context: "funnel event",
+        message: error.to_string(),
+    })?
+}
+
+/// Core implementation shared with integration tests (`now_ms` is
+/// injected so the dry-run export is deterministic).
+///
+/// The first event ever recorded stamps the install moment;
+/// `first_launch` is recorded once per install, with
+/// `seconds_since_install` computed HERE (the UI never supplies it).
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] per [`funnel_event`].
+pub fn funnel_event_impl(
+    state: &Arc<AppState>,
+    kind: &str,
+    fields: std::collections::BTreeMap<String, String>,
+    now_ms: i64,
+) -> AppResult<()> {
+    let mut event = juggler_core::funnel_events::FunnelEvent {
+        kind: kind.to_owned(),
+        at_ms: now_ms,
+        fields,
+    };
+    juggler_core::funnel_events::validate(&event).map_err(core_to_app)?;
+    let first_launch = kind == "first_launch";
+    {
+        let storage = lock_storage_arc(state)?;
+        let settings = storage.app_settings();
+        let stored = settings
+            .get(FUNNEL_INSTALL_AT_KEY)?
+            .and_then(|raw| raw.parse::<i64>().ok());
+        let install_at = if let Some(at) = stored {
+            at
+        } else {
+            settings.set(FUNNEL_INSTALL_AT_KEY, &now_ms.to_string())?;
+            now_ms
+        };
+        if first_launch {
+            if settings.get(FUNNEL_FIRST_LAUNCH_KEY)?.is_some() {
+                return Ok(());
+            }
+            event.fields.clear();
+            event.fields.insert(
+                "seconds_since_install".to_owned(),
+                ((now_ms - install_at).max(0) / 1000).to_string(),
+            );
+        }
+    }
+    juggler_core::funnel_events::FunnelLog::open(&state.data_dir)
+        .append(&event)
+        .map_err(core_to_app)?;
+    if first_launch {
+        lock_storage_arc(state)?
+            .app_settings()
+            .set(FUNNEL_FIRST_LAUNCH_KEY, "1")?;
+    }
+    Ok(())
+}
+
+/// AJ-E309 Req.7: the LOCAL funnel export — counts per kind, flow
+/// steps reached, policy choices, time to first Instance, and the
+/// per-field inference-override rates (> 30% flagged). Markdown text
+/// returned to the webview, which saves it on the user's click; no
+/// network call exists.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] on storage failure.
+#[tauri::command]
+pub fn funnel_export(state: tauri::State<'_, Arc<AppState>>) -> AppResult<String> {
+    funnel_export_impl(state.inner())
+}
+
+/// Core implementation shared with integration tests.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] on storage failure.
+pub fn funnel_export_impl(state: &Arc<AppState>) -> AppResult<String> {
+    let events = juggler_core::funnel_events::FunnelLog::open(&state.data_dir)
+        .read()
+        .map_err(core_to_app)?;
+    Ok(juggler_core::funnel_events::report(&events))
+}
+
+/// AJ-E309 Req.5: what the [Expert setup…] panel shows for one
+/// Provider — or one Account (and optionally one of its Launch
+/// settings). Every path comes from AI Juggler's own state, never
+/// from the caller.
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct ExpertSetupInfo {
+    /// The Provider id.
+    pub provider: String,
+    /// The Account this describes; `null` = the Provider's folder
+    /// (before any Account exists in this flow).
+    pub account_id: Option<String>,
+    /// The managed state folder (read-only display).
+    pub state_dir: String,
+    /// Whether that folder exists yet.
+    pub exists: bool,
+    /// The copyable shell line reproducing the setup (isolation env +
+    /// Launch-settings overrides + the vendor's command); `null`
+    /// before an Account exists or for Providers without a CLI.
+    pub shell_snippet: Option<String>,
+    /// Environment keys Launch-settings overrides may never set.
+    pub protected_env_keys: Vec<String>,
+    /// One plain sentence on what the folder is.
+    pub note: String,
+}
+
+/// AJ-E309 Req.5: the Expert-setup facts.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] for an unknown Provider, Account,
+/// or Launch settings (or Launch settings of another Account).
+#[tauri::command]
+pub fn expert_setup_info(
+    state: tauri::State<'_, Arc<AppState>>,
+    provider: String,
+    account_id: Option<String>,
+    recipe_id: Option<String>,
+) -> AppResult<ExpertSetupInfo> {
+    expert_setup_info_impl(
+        state.inner(),
+        &provider,
+        account_id.as_deref(),
+        recipe_id.as_deref(),
+    )
+}
+
+/// Core implementation shared with integration tests.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] per [`expert_setup_info`].
+pub fn expert_setup_info_impl(
+    state: &Arc<AppState>,
+    provider: &str,
+    account_id: Option<&str>,
+    recipe_id: Option<&str>,
+) -> AppResult<ExpertSetupInfo> {
+    let Some(account_id) = account_id else {
+        let adapter = state
+            .registry
+            .get(&juggler_core::model::HarnessId::new(provider))
+            .ok_or_else(|| AppError::UnknownHarness(provider.to_owned()))?;
+        let dir = state.accounts_dir().join(provider);
+        return Ok(ExpertSetupInfo {
+            provider: provider.to_owned(),
+            account_id: None,
+            exists: dir.is_dir(),
+            state_dir: dir.to_string_lossy().into_owned(),
+            shell_snippet: None,
+            protected_env_keys: adapter
+                .isolation_env_keys()
+                .iter()
+                .map(|key| (*key).to_owned())
+                .collect(),
+            note: "Each new account gets its own isolated folder in here — the shell line \
+                   appears once the account exists."
+                .to_owned(),
+        });
+    };
+    let account = find_account_arc(state, account_id)?;
+    let adapter = state
+        .registry
+        .get(&account.harness)
+        .ok_or_else(|| AppError::UnknownHarness(account.harness.to_string()))?;
+    let extra_env = match recipe_id {
+        Some(recipe_id) => {
+            let (recipe, owner) = find_profile_with_account_arc(state, recipe_id)?;
+            if owner.id != account.id {
+                return Err(AppError::Validation {
+                    subject: "launch settings",
+                    message: "those Launch settings belong to another account".to_owned(),
+                });
+            }
+            recipe.settings_overlay.env
+        }
+        None => std::collections::BTreeMap::new(),
+    };
+    Ok(ExpertSetupInfo {
+        provider: account.harness.to_string(),
+        account_id: Some(account.id.to_string()),
+        exists: account.state_dir.is_dir(),
+        state_dir: account.state_dir.to_string_lossy().into_owned(),
+        shell_snippet: juggler_adapter::adapter::shell_snippet(
+            adapter.as_ref(),
+            &account.state_dir,
+            &extra_env,
+        ),
+        protected_env_keys: adapter
+            .isolation_env_keys()
+            .iter()
+            .map(|key| (*key).to_owned())
+            .collect(),
+        note: format!(
+            "“{}” keeps all of its state here — isolated from your other accounts and \
+             from your own install.",
+            account.label
+        ),
+    })
+}
+
+/// AJ-E309 Req.5: [Reveal in Finder] for a managed folder. The path
+/// is resolved from AI Juggler's own state (an Account's folder, or
+/// the Provider's accounts folder) — never caller-supplied — and the
+/// nearest existing folder inside the data dir is revealed when the
+/// target does not exist yet. Read-only: nothing is created.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] for unknown ids or when Finder
+/// cannot be opened.
+#[tauri::command]
+pub fn expert_reveal(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    provider: String,
+    account_id: Option<String>,
+) -> AppResult<()> {
+    let target = expert_reveal_target(state.inner(), &provider, account_id.as_deref())?;
+    app.opener()
+        .reveal_item_in_dir(&target)
+        .map_err(|error| AppError::Io {
+            context: "reveal in Finder",
+            message: error.to_string(),
+        })
+}
+
+/// The folder [`expert_reveal`] would show (shared with tests): the
+/// requested managed folder, or its nearest existing ancestor inside
+/// the data dir.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] for unknown ids.
+pub fn expert_reveal_target(
+    state: &Arc<AppState>,
+    provider: &str,
+    account_id: Option<&str>,
+) -> AppResult<std::path::PathBuf> {
+    let info = expert_setup_info_impl(state, provider, account_id, None)?;
+    let mut target = std::path::PathBuf::from(info.state_dir);
+    while !target.is_dir() && target != state.data_dir {
+        if !target.pop() {
+            break;
+        }
+    }
+    if !target.starts_with(&state.data_dir) {
+        target.clone_from(&state.data_dir);
+    }
+    Ok(target)
+}
+
+/// `_`-delimited key segments that mark an environment key as
+/// credential-shaped (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`)
+/// — whole segments, so `CLAUDE_CODE_MAX_OUTPUT_TOKENS` stays allowed.
+const CREDENTIAL_KEY_SEGMENTS: &[&str] = &[
+    "KEY",
+    "APIKEY",
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "PASSWD",
+    "CREDENTIAL",
+    "CREDENTIALS",
+    "AUTH",
+    "OAUTH",
+    "BEARER",
+    "COOKIE",
+];
+
+/// The most overrides one Launch settings may carry.
+const ENV_OVERLAY_MAX: usize = 32;
+
+/// AJ-E309: validates a Launch-settings environment overlay. Keys are
+/// shell-style (`[A-Z_][A-Z0-9_]*`, ≤ 64); values are one line
+/// (≤ 1024 bytes). Isolation keys are refused (they would repoint the
+/// Account's folder), and so are credential-shaped keys — vendor
+/// credentials are never stored by AI Juggler; the vendor's own
+/// sign-in owns them.
+///
+/// # Errors
+///
+/// Returns [`AppError::Validation`] naming the first offending key.
+pub fn validate_env_overlay(
+    protected: &[&str],
+    env: &std::collections::BTreeMap<String, String>,
+) -> AppResult<()> {
+    let refuse = |message: String| AppError::Validation {
+        subject: "environment override",
+        message,
+    };
+    if env.len() > ENV_OVERLAY_MAX {
+        return Err(refuse(format!(
+            "at most {ENV_OVERLAY_MAX} overrides per Launch settings"
+        )));
+    }
+    for (key, value) in env {
+        let mut bytes = key.bytes();
+        let shaped = matches!(bytes.next(), Some(b'A'..=b'Z' | b'_'))
+            && key.len() <= 64
+            && bytes.all(|b| matches!(b, b'A'..=b'Z' | b'0'..=b'9' | b'_'));
+        if !shaped {
+            return Err(refuse(format!(
+                "“{key}” isn't a valid variable name — use capitals, digits and _"
+            )));
+        }
+        if protected.contains(&key.as_str()) {
+            return Err(refuse(format!(
+                "{key} is managed by AI Juggler — it keeps this account isolated"
+            )));
+        }
+        if key
+            .split('_')
+            .any(|segment| CREDENTIAL_KEY_SEGMENTS.contains(&segment))
+        {
+            return Err(refuse(format!(
+                "{key} looks like a credential — sign in with the vendor's own flow instead; \
+                 AI Juggler never stores credentials"
+            )));
+        }
+        if value.len() > 1024 || value.contains(['\0', '\n', '\r']) {
+            return Err(refuse(format!(
+                "the value for {key} must be a single line under 1 KB"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// AJ-E309 Req.5: one Launch settings' environment overrides.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] for an unknown id.
+#[tauri::command]
+pub fn launch_recipe_env_get(
+    state: tauri::State<'_, Arc<AppState>>,
+    recipe_id: String,
+) -> AppResult<std::collections::BTreeMap<String, String>> {
+    let (recipe, _) = find_profile_with_account_arc(state.inner(), &recipe_id)?;
+    Ok(recipe.settings_overlay.env)
+}
+
+/// AJ-E309 Req.5: replaces one Launch settings' environment
+/// overrides (the env overlay editor's Save). Validated first —
+/// nothing is written on a refusal.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] for an unknown id, a refused
+/// overlay, or a storage failure.
+#[tauri::command]
+pub fn launch_recipe_env_set(
+    state: tauri::State<'_, Arc<AppState>>,
+    recipe_id: String,
+    env: std::collections::BTreeMap<String, String>,
+) -> AppResult<std::collections::BTreeMap<String, String>> {
+    launch_recipe_env_set_impl(state.inner(), &recipe_id, env)
+}
+
+/// Core implementation shared with integration tests.
+///
+/// # Errors
+///
+/// Returns the typed [`AppError`] per [`launch_recipe_env_set`].
+pub fn launch_recipe_env_set_impl(
+    state: &Arc<AppState>,
+    recipe_id: &str,
+    env: std::collections::BTreeMap<String, String>,
+) -> AppResult<std::collections::BTreeMap<String, String>> {
+    let (mut recipe, account) = find_profile_with_account_arc(state, recipe_id)?;
+    let adapter = state
+        .registry
+        .get(&account.harness)
+        .ok_or_else(|| AppError::UnknownHarness(account.harness.to_string()))?;
+    validate_env_overlay(adapter.isolation_env_keys(), &env)?;
+    recipe.settings_overlay.env = env;
+    lock_storage_arc(state)?.profiles().update(&recipe)?;
+    Ok(recipe.settings_overlay.env)
 }
 
 /// AJ-E308 Req.7: one named isolation-checklist row.
@@ -11240,7 +11682,7 @@ pub fn pack_export_impl(state: &Arc<AppState>, epoch_id: &str) -> AppResult<Stri
         juggler_handover::redaction::resolve_policy(redaction_global_of(&storage), None)
             .ok_or_else(|| AppError::Io {
                 context: "export pack",
-                message: "Choose how secrets are handled in packs first (Settings → Privacy)"
+                message: "Choose how secrets are handled in packs first (Accounts → Pack secrets)"
                     .to_owned(),
             })?
     };

@@ -27,6 +27,7 @@ import { ProfilesScreen } from "./screens/Profiles";
 import { OnboardingWizard } from "./screens/OnboardingWizard";
 import { NewSessionModal } from "./screens/NewSession";
 import { NewProjectSheet } from "./screens/NewProjectSheet";
+import { funnelEvent } from "./lib/funnel";
 import { ReadyHome } from "./screens/ReadyHome";
 import { SessionPanel } from "./screens/WorkPanels";
 import { CostMatrix } from "./components/CostMatrix";
@@ -879,11 +880,19 @@ export default function App() {
             setNewSessionDir(null);
           }}
           onLaunched={(sessionId) => {
+            // AJ-E309 Req.6: once per install (the backend dedupes and
+            // computes seconds_since_install itself).
+            funnelEvent("first_launch");
             setNewSession(false);
             setNewSessionDir(null);
             setTab("sessions");
             void refresh();
             selectSession(sessionId);
+          }}
+          onManageLaunchSettings={() => {
+            setNewSession(false);
+            setNewSessionDir(null);
+            setGlobal("accounts");
           }}
         />
       )}
@@ -897,6 +906,7 @@ export default function App() {
           initialDirectory={newProjectDir === "" ? null : newProjectDir}
           onClose={() => setNewProjectDir(null)}
           onLaunched={(sessionId) => {
+            funnelEvent("first_launch");
             setNewProjectDir(null);
             setTab("sessions");
             void refresh();
@@ -904,6 +914,10 @@ export default function App() {
           }}
           openLoginTerminal={openLoginTerminal}
           onAccountsChanged={() => void refresh()}
+          onManageLaunchSettings={() => {
+            setNewProjectDir(null);
+            setGlobal("accounts");
+          }}
         />
       )}
     </div>

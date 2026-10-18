@@ -42,4 +42,15 @@ pub enum CoreError {
         /// The missing identifier.
         id: String,
     },
+    /// Filesystem failure with context (the funnel store's JSONL).
+    #[error("filesystem: {0}")]
+    Io(String),
+    /// Caller-supplied input failed validation (honest rejection).
+    #[error("invalid {subject}: {message}")]
+    Validation {
+        /// What was being validated.
+        subject: &'static str,
+        /// Why it was rejected.
+        message: String,
+    },
 }

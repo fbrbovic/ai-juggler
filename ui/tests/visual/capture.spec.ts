@@ -15,7 +15,7 @@ import { resolve } from "node:path";
 
 // Playwright runs with cwd = config dir (ui/).
 const GALLERY_ROOT = resolve(process.cwd(), "../docs/qa/evidence/_gallery");
-import { allStatuses, honestEmpty, readyHome } from "./fixtures";
+import { allStatuses, answerPolicy, honestEmpty, readyHome } from "./fixtures";
 
 const GALLERY = GALLERY_ROOT;
 const NOT_CAPTURETED = resolve(GALLERY, "not-captured.md");
@@ -40,7 +40,7 @@ function noteNotCaptured(screen: string, state: string, reason: string) {
 
 test.beforeAll(() => {
   mkdirSync(GALLERY, { recursive: true });
-  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking", "28-switch", "29-door", "30-switchback", "31-redaction", "32-graph", "33-beta", "34-wizard", "35-candidates", "36-recommend", "37-flows", "38-flows-cde", "39-import", "40-login"]) {
+  for (const screen of ["01-rail", "01-rail-density", "01-rail-sort", "05-session-panel", "06-inspector", "07-inspector-content", "08-inspector-aggregate", "09-quality", "10-processes", "11-renewal", "12-model", "13-desktop", "14-focus", "15-preview", "16-onboarding-detect", "17-ledger", "18-ports", "19-cleanup", "20-kill", "21-tiers", "22-recovery", "23-alerts", "24-fleet", "25-costs", "26-quota", "27-ranking", "28-switch", "29-door", "30-switchback", "31-redaction", "32-graph", "33-beta", "34-wizard", "35-candidates", "36-recommend", "37-flows", "38-flows-cde", "39-import", "40-login", "41-policy"]) {
     mkdirSync(resolve(GALLERY, screen), { recursive: true });
   }
   writeFileSync(NOT_CAPTURETED, "# Not captured (explicit omissions)\n\n| Screen | State | Reason |\n|---|---|---|\n");
@@ -3491,6 +3491,7 @@ for (const theme of THEMES) {
     await page.getByTestId("install-continue").click();
     await page.getByRole("button", { name: /fresh account/ }).click();
     await page.getByPlaceholder("e.g. Work, Personal, Side project").fill("Work");
+    await answerPolicy(page);
     await page.getByRole("button", { name: /Create account/ }).click();
     await page.getByRole("button", { name: "Close setup" }).click({ force: true });
     await expect(page.getByTestId("onboarding-wizard")).toBeVisible();
@@ -3895,6 +3896,7 @@ for (const theme of THEMES) {
     }) => {
       await openProposalDetect(page, theme, vp, { __AIJ_CREATE_HANG__: true });
       await page.getByTestId("use-recommended").click();
+      await answerPolicy(page);
       await page.getByTestId("accept-setup").click();
       await expect(page.getByTestId("accept-progress")).toBeVisible();
       await expect(page.getByTestId("accept-item")).toHaveCount(4);
@@ -3918,6 +3920,7 @@ for (const theme of THEMES) {
         __AIJ_IMPORT_FAIL_PATHS__: ["personal"],
       });
       await page.getByTestId("use-recommended").click();
+      await answerPolicy(page);
       await page.getByTestId("accept-setup").click();
       // AJ-E305: the three logged_out successes queue for sign-ins —
       // Skip walks through (never blocks the Summary).
@@ -4039,6 +4042,7 @@ for (const theme of THEMES) {
         path: resolve(GALLERY, `37-flows/a3-confirm-${vp.name}-${theme}.png`),
         fullPage: true,
       });
+      await answerPolicy(page);
       await page.getByTestId("accept-setup").click();
       // 4: the queued sign-ins.
       await expect(page.getByTestId("signin-queue")).toBeVisible();
@@ -4566,6 +4570,7 @@ for (const theme of THEMES) {
       await page.getByTestId("import-specific-folder").click();
       await expect(page.getByTestId("confirm-source")).toBeVisible();
       // The folder label arrives prefilled; attempt the import.
+      await answerPolicy(page);
       await page.getByRole("button", { name: "Import account" }).click();
       await expect(page.getByTestId("duplicate-blocked")).toBeVisible();
       await expect(page.getByTestId("duplicate-blocked")).toContainText("Already imported");
@@ -4678,6 +4683,7 @@ for (const theme of THEMES) {
         await page.getByTestId("install-continue").click();
         await expect(page.getByTestId("proposal-teaser")).toBeVisible();
         await page.getByTestId("use-recommended").click();
+        await answerPolicy(page);
         await page.getByTestId("accept-setup").click();
         // The queued card's poll reads the injected signed-in state
         // and AUTO-ADVANCES to the Summary (Req.2 — "we detect it").
@@ -4700,5 +4706,169 @@ for (const theme of THEMES) {
         });
       });
     }
+  }
+}
+
+// ---------------------------------------------------------------------
+// AJ-E309 — 41-policy: the first-run pack-policy question (unchosen /
+// chosen / Decide later), the Confirm row with and without a renewal
+// date, [Expert setup…] open, the Summary restatement, and Accounts →
+// Pack secrets — at 1280×800 and 390×844, both themes.
+// ---------------------------------------------------------------------
+
+const POLICY_INSTALLS = [
+  {
+    provider: "claude-code",
+    display_name: "Claude Code",
+    install_url: "https://claude.com/download",
+    status: "installed",
+    version: "2.1.296",
+    binary: "/usr/local/bin/claude",
+    notes: [],
+  },
+];
+
+const POLICY_RECOMMENDATION = {
+  items: [
+    { provider: "claude-code", label: "Work", action: "import", rationale: "Signed in — import keeps history", default_on: true, path: "/Users/you/.claude-work" },
+    { provider: "claude-code", label: "Side", action: "import", rationale: "Active — you'll sign in after import", default_on: true, path: "/Users/you/.claude-side" },
+  ],
+  summary: "Your juggling set: Claude ×2 (Work — signed in; Side — needs sign-in).",
+  start_here: "/Users/you/dev-api",
+};
+
+const openPolicyRun = async (
+  page: import("@playwright/test").Page,
+  theme: string,
+  vp: { width: number; height: number },
+  recommendation: unknown = POLICY_RECOMMENDATION,
+) => {
+  await page.addInitScript(
+    ({ fixture, installs, rec, t }) => {
+      const w = window as unknown as Record<string, unknown>;
+      w.__AIJ_FIXTURE__ = fixture;
+      w.__AIJ_PROVIDER_INSTALLS__ = installs;
+      w.__AIJ_RECOMMENDATION__ = rec;
+      w.__AIJ_SCAN_REPORT__ = { installs: [], probes: [], seeds: [], desktop_apps: [], cancelled: false };
+      w.__AIJ_LOGIN_STATE__ = "signed_in";
+      localStorage.setItem("aij.theme", t);
+      sessionStorage.setItem("aij.ready.skipped", "1");
+    },
+    { fixture: honestEmpty, installs: POLICY_INSTALLS, rec: recommendation, t: theme },
+  );
+  await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme as "dark" | "light" });
+  await page.setViewportSize({ width: vp.width, height: vp.height });
+  await page.goto("/");
+  await page.getByTestId("install-continue").click();
+};
+
+const shot41 = (page: import("@playwright/test").Page, name: string) =>
+  page.screenshot({ path: resolve(GALLERY, `41-policy/${name}.png`), fullPage: true });
+
+for (const theme of THEMES) {
+  for (const vp of CDE_VP) {
+    test(`41 policy — unchosen (Accept waits) — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openPolicyRun(page, theme, vp);
+      await page.getByTestId("use-recommended").click();
+      await expect(page.getByTestId("policy-panel")).toBeVisible();
+      await expect(page.locator("[data-testid='policy-panel'] input:checked")).toHaveCount(0);
+      await expect(page.getByTestId("accept-setup")).toBeDisabled();
+      await page.getByTestId("policy-panel").scrollIntoViewIfNeeded();
+      await shot41(page, `policy-unchosen-${vp.name}-${theme}`);
+    });
+
+    test(`41 policy — chosen (Strip) — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openPolicyRun(page, theme, vp);
+      await page.getByTestId("use-recommended").click();
+      await answerPolicy(page, "strip");
+      await expect(page.getByTestId("accept-setup")).toBeEnabled();
+      await shot41(page, `policy-chosen-${vp.name}-${theme}`);
+    });
+
+    test(`41 policy — Decide later — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openPolicyRun(page, theme, vp);
+      await page.getByTestId("use-recommended").click();
+      await answerPolicy(page, "decide_later");
+      await expect(page.getByTestId("accept-setup")).toBeEnabled();
+      await shot41(page, `policy-decide-later-${vp.name}-${theme}`);
+    });
+
+    test(`41 policy — Confirm row, no renewal date — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openPolicyRun(page, theme, vp, { items: [], summary: "", start_here: null });
+      await page.getByTestId("zero-found-provider").first().click();
+      await expect(page.getByTestId("renewal-date")).toHaveAttribute("data-state", "unknown");
+      await expect(page.getByTestId("create-account")).toBeDisabled();
+      await shot41(page, `confirm-renewal-empty-${vp.name}-${theme}`);
+    });
+
+    test(`41 policy — Confirm row with a renewal date — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openPolicyRun(page, theme, vp, { items: [], summary: "", start_here: null });
+      await page.getByTestId("zero-found-provider").first().click();
+      await page.getByTestId("renewal-date-add").click();
+      await page.getByTestId("renewal-date-input").fill("2026-11-30");
+      await answerPolicy(page, "strip");
+      await expect(page.getByTestId("create-account")).toBeEnabled();
+      await shot41(page, `confirm-renewal-set-${vp.name}-${theme}`);
+    });
+
+    test(`41 policy — Expert setup open — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openPolicyRun(page, theme, vp);
+      await expect(page.getByTestId("expert-hatch")).toBeVisible();
+      await page.getByTestId("expert-hatch").click();
+      await expect(page.getByTestId("expert-state-dir")).toBeVisible();
+      await page.getByTestId("expert-panel").scrollIntoViewIfNeeded();
+      await shot41(page, `expert-open-${vp.name}-${theme}`);
+    });
+
+    test(`41 policy — Summary restatement — ${vp.name} — ${theme}`, async ({ page }) => {
+      await openPolicyRun(page, theme, vp);
+      await page.getByTestId("use-recommended").click();
+      await page.getByTestId("renewal-date-add").first().click();
+      await page.getByTestId("renewal-date-input").fill("2026-11-30");
+      await answerPolicy(page, "strip");
+      await page.getByTestId("accept-setup").click();
+      await expect(page.getByTestId("summary-exits")).toBeVisible({ timeout: 15_000 });
+      await expect(page.getByTestId("policy-restatement")).toHaveText(
+        "Packs: strip secrets (all Providers)",
+      );
+      await expect(page.getByTestId("renewal-restatement").nth(1)).toHaveText("Side: expiry unknown");
+      await shot41(page, `summary-restated-${vp.name}-${theme}`);
+    });
+
+  }
+}
+
+// Accounts is a main-shell screen: captured at the desktop sizes the
+// Tauri window allows (its minimum is 1024×680), not phone width.
+const ACCOUNTS_VP = [
+  { name: "1280x800", width: 1280, height: 800 },
+  { name: "1024x680", width: 1024, height: 680 },
+] as const;
+
+for (const theme of THEMES) {
+  for (const vp of ACCOUNTS_VP) {
+    test(`41 policy — Accounts → Pack secrets + env overrides — ${vp.name} — ${theme}`, async ({ page }) => {
+      await page.addInitScript(
+        ({ fixture, t }) => {
+          const w = window as unknown as Record<string, unknown>;
+          w.__AIJ_FIXTURE__ = fixture;
+          w.__AIJ_RECIPE_ENV__ = { "p-1": { CLAUDE_CODE_MAX_OUTPUT_TOKENS: "8000" } };
+          localStorage.setItem("aij.theme", t);
+          localStorage.setItem("aij.onboarding.dismissed", "1");
+          sessionStorage.setItem("aij.ready.skipped", "1");
+        },
+        { fixture: allStatuses, t: theme },
+      );
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme as "dark" | "light" });
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await page.getByRole("button", { name: "Accounts" }).first().click();
+      await expect(page.getByTestId("pack-secrets")).toBeVisible();
+      await expect(page.getByTestId("pack-secrets-unset")).toBeVisible();
+      await page.getByRole("button", { name: /Edit launch settings/ }).first().click();
+      await page.getByTestId("recipe-env-toggle").first().click();
+      await expect(page.getByTestId("env-overlay-editor")).toBeVisible();
+      await shot41(page, `accounts-pack-secrets-${vp.name}-${theme}`);
+    });
   }
 }

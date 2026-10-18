@@ -16,6 +16,7 @@ pub mod alerts;
 pub mod cost_ledger;
 pub mod error;
 pub mod fs;
+pub mod funnel_events;
 pub mod model;
 pub mod quality;
 pub mod quota;

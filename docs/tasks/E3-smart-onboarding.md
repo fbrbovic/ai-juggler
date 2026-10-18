@@ -447,7 +447,7 @@ already consume LoggedIn/LoggedOut. Trap: the Detect chip
 describes the source's login, the Summary must describe the
 copy's; keychain installs differ (Deep-03 §2.3).
 
-### AJ-E309 First-run policy choice (D-14/D-12 hook), expert hatches, and onboarding metrics | Status: TODO | Priority P1 | Effort M | Depends: AJ-E305, AJ-E308
+### AJ-E309 First-run policy choice (D-14/D-12 hook), expert hatches, and onboarding metrics | Status: DONE-EVIDENCED | Priority P1 | Effort M | Depends: AJ-E305, AJ-E308
 **Goal**:
 First run explicitly asks the two settled policy choices —
 pack secret handling (D-14) and optional renewal dates (D-12)
@@ -541,6 +541,18 @@ the switching epic consumes the policy and must display the
 destination Provider's active policy before executing (D-14).
 Trap: never backfill a policy default for existing users;
 absence of a choice means "ask before first pack", not strip.
+**Task-text fix (2026-10-18, AJ-E309 implementer)**: the policy
+STORAGE already exists — AJ-E208 shipped the remembered global +
+per-Provider override (`juggler_handover::redaction::RedactionPolicy`,
+app settings, `redaction_policy_*` commands) and the switch flow
+consumes it. A second store would split the source of truth, so this
+task writes E208's store from the first run and the option words are
+E208's (Strip / Keep / Ask each time — "final copy from the pack
+epic") plus "Decide later" (writes nothing). The persistence evidence
+is therefore `cargo test -p juggler-app --test redaction_policy` +
+`--test onboarding_policy_metrics` (no `juggler-core policy` module
+exists). "Provider settings" is Accounts → Pack secrets (global choice
++ one override row per Provider in use).
 
 **Status report (2026-10-16, AJ-E301)**: DONE-EVIDENCED — evidence
 `docs/qa/evidence/AJ-E301/manifest.md`. One wizard shell for every
@@ -744,3 +756,35 @@ contrast fixes text-faint→text-muted), verify green, clippy 0.
 PARTIAL-BY-DESIGN (recorded): per-number perf instrumentation is
 bounded-by-construction; the live maintainer cc-switch dogfood table
 lands with the maintainer driving (live-user-data constraint).
+**Status report (2026-10-18, AJ-E309)**: DONE-EVIDENCED — evidence
+`docs/qa/evidence/AJ-E309/manifest.md`. The first run asks the pack
+secret policy (D-14) on the Confirm it already has — the set accept
+and the single-account Confirm — with AJ-E208's words (Strip / Keep /
+Ask each time) plus a real "Decide later"; nothing is pre-selected
+(copy lint), Accept waits with a stated reason, ⌘↩ never answers it,
+and the choice writes E208's store ONCE on the accept click (Decide
+later writes nothing; no backfill — pinned). Flow (a) = 4 primary +
+1 policy click ≤ 5, 0 typed; locked flows (c)/(d) never ask and keep
+their budgets. Summary restates the active choice ("Packs: strip
+secrets (all Providers)") and each Account's renewal ("renews …" /
+"expiry unknown"). Every Confirm row offers an optional native-date
+renewal with Skip (D-12, user-entered only); the D-12 note is filed
+with per-Provider URLs + access dates ("no source found" ×4).
+[Expert setup…] is on the wizard, launch sheet, New project sheet and
+every Accounts card: backend-resolved state folder + Reveal, a quoted
+shell line from new adapter seams (the hard-coded claude login line
+is gone), env overrides per Launch settings (isolation and
+credential-shaped keys refused; isolation applied last at launch),
+Manage Launch settings, Import from folder, and the local metrics
+export. Funnel events go to an allow-list-schema local store (2×5 MB),
+off the UI thread; first_launch is computed once by the backend;
+override rate = edits ÷ shown, > 30% flagged; dry-run export stored
+and regression-checked. Accounts → Pack secrets hosts the global +
+per-Provider override. Course corrections to the inherited WIP (a
+duplicate policy store, a Reveal button that opened the vendor login
+page) and in-passing fixes (the AJ-E806 light-theme contrast flash
+root cause, "Profiles"/"profile" copy, the lint's case gap) are in
+the manifest. core funnel 6/6, onboarding_policy_metrics 5/5, vitest
+311/311, Playwright 596/596 (gallery 41-policy = 32, a11y +4).
+PARTIAL-BY-DESIGN (recorded): the < 5 min fresh-install wall-clock
+and per-number perf timings ride the maintainer dogfood window.

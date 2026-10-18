@@ -208,3 +208,20 @@ export const readyHome: FixtureSet = {
   projects: [],
   stats: { accounts: 2, profiles: 0, active_sessions: 0, ledger_degraded: false },
 };
+
+/**
+ * AJ-E309: answers the first-run pack-policy question (it rides the
+ * Confirm of the UNLOCKED wizard while no global choice exists — every
+ * first-run spec meets it). Auto-waits for the radio; returns once
+ * the choice is made. Default "strip" — specs about other behaviour
+ * just need the question answered.
+ */
+export async function answerPolicy(
+  page: import("@playwright/test").Page,
+  value: "strip" | "keep" | "ask" | "decide_later" = "strip",
+): Promise<void> {
+  await page
+    .getByTestId("policy-panel")
+    .locator(`input[type='radio'][value='${value}']`)
+    .check();
+}

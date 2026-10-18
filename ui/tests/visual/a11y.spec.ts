@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import { allStatuses, honestEmpty, type FixtureSet } from "./fixtures";
+import { allStatuses, answerPolicy, honestEmpty, type FixtureSet } from "./fixtures";
 
 /**
  * AJ-E402 quality gate: axe-core reports 0 critical/serious violations on
@@ -1579,6 +1579,8 @@ for (const theme of ["dark", "light"] as const) {
     await page.getByTestId("proposal-customise").click();
     await expect(page.getByTestId("proposal-block")).toBeVisible();
     expect(await scanSeriousWithConfirm(page)).toHaveLength(0);
+    // AJ-E309: the first-run policy question rides this Confirm.
+    await answerPolicy(page, "strip");
     await page.getByTestId("accept-setup").click();
     await expect(page.getByTestId("signin-queue")).toBeVisible();
     expect(await scanSeriousWithConfirm(page)).toHaveLength(0);
@@ -1779,3 +1781,108 @@ for (const theme of ["dark", "light"] as const) {
     expect(confirmed).toHaveLength(0);
   });
 }
+
+/**
+ * AJ-E309 a11y gates (D-16, both themes): the policy question is a
+ * labelled radio group (fieldset + legend, every option's consequence
+ * wired by aria-describedby); the renewal date input is labelled; the
+ * Expert hatch is a disclosure (aria-expanded/aria-controls); the
+ * Summary restatement and Accounts → Pack secrets scan axe-clean.
+ */
+for (const theme of ["dark", "light"] as const) {
+  test(`first-run policy, renewal, expert, summary — axe 0 — ${theme}`, async ({ page }) => {
+    await page.addInitScript(
+      ({ fixture, theme: t }) => {
+        const w = window as unknown as Record<string, unknown>;
+        w.__AIJ_FIXTURE__ = fixture;
+        w.__AIJ_PROVIDER_INSTALLS__ = [
+          {
+            provider: "claude-code",
+            display_name: "Claude Code",
+            install_url: "https://claude.com/download",
+            status: "installed",
+            version: "2.1.296",
+            binary: "/usr/local/bin/claude",
+            notes: [],
+          },
+        ];
+        w.__AIJ_RECOMMENDATION__ = {
+          items: [
+            { provider: "claude-code", label: "Work", action: "import", rationale: "Signed in — import keeps history", default_on: true, path: "/Users/you/.claude-work" },
+          ],
+          summary: "Your juggling set: Claude ×1 (Work — signed in).",
+          start_here: null,
+        };
+        w.__AIJ_LOGIN_STATE__ = "signed_in";
+        localStorage.setItem("aij.theme", t);
+        sessionStorage.setItem("aij.ready.skipped", "1");
+      },
+      { fixture: honestEmpty, theme },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+    await page.getByTestId("install-continue").click();
+    await page.getByTestId("use-recommended").click();
+
+    // The radio group: a named group, four labelled radios, none checked.
+    const group = page.getByRole("group", { name: "How should context packs handle secrets?" });
+    await expect(group).toBeVisible();
+    await expect(group.getByRole("radio")).toHaveCount(4);
+    await expect(group.getByRole("radio", { checked: true })).toHaveCount(0);
+    await expect(group.getByRole("radio", { name: "Strip — replace keys with •••" })).toHaveAccessibleDescription(
+      /replaced with •••/,
+    );
+    await expect(page.getByTestId("accept-setup")).toHaveAccessibleDescription(/Decide later/);
+
+    // The renewal date: a labelled native date input.
+    await page.getByTestId("renewal-date-add").click();
+    await expect(page.getByLabel("Renewal date for Work (optional)")).toHaveAttribute("type", "date");
+    expect(await scanSeriousWithConfirm(page)).toHaveLength(0);
+
+    // The Expert hatch: a disclosure whose panel scans clean.
+    const hatch = page.getByTestId("expert-hatch");
+    await hatch.click();
+    await expect(hatch).toHaveAttribute("aria-expanded", "true");
+    const controls = await hatch.getAttribute("aria-controls");
+    expect(controls).toBeTruthy();
+    await expect(page.locator(`[id="${controls}"]`)).toBeVisible();
+    await expect(page.getByLabel("State folder (read-only)")).toHaveAttribute("readonly", "");
+    expect(await scanSeriousWithConfirm(page)).toHaveLength(0);
+
+    // Keyboard: the radios are reachable and choosable by keyboard.
+    await group.getByRole("radio").first().focus();
+    await page.keyboard.press("Space");
+    await expect(group.getByRole("radio", { checked: true })).toHaveCount(1);
+    await page.getByTestId("accept-setup").click();
+    await expect(page.getByTestId("summary-exits")).toBeVisible();
+    await expect(page.getByTestId("policy-restatement")).toBeVisible();
+    expect(await scanSeriousWithConfirm(page)).toHaveLength(0);
+  });
+
+  test(`Accounts → Pack secrets + env overrides — axe 0 — ${theme}`, async ({ page }) => {
+    await page.addInitScript(
+      ({ fixture, theme: t }) => {
+        const w = window as unknown as Record<string, unknown>;
+        w.__AIJ_FIXTURE__ = fixture;
+        w.__AIJ_RECIPE_ENV__ = { "p-1": { CLAUDE_CODE_MAX_OUTPUT_TOKENS: "8000" } };
+        localStorage.setItem("aij.theme", t);
+        localStorage.setItem("aij.onboarding.dismissed", "1");
+        sessionStorage.setItem("aij.ready.skipped", "1");
+      },
+      { fixture: allStatuses, theme },
+    );
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Accounts" }).first().click();
+    await expect(page.getByRole("group", { name: "Your choice (all Providers)" })).toBeVisible();
+    await page.getByRole("button", { name: /Edit launch settings/ }).first().click();
+    await page.getByTestId("recipe-env-toggle").first().click();
+    await expect(page.getByLabel("Variable name 1")).toHaveValue("CLAUDE_CODE_MAX_OUTPUT_TOKENS");
+    await page.getByTestId("expert-hatch").first().click();
+    await expect(page.getByTestId("expert-panel").first()).toBeVisible();
+    expect(await scanSeriousWithConfirm(page)).toHaveLength(0);
+  });
+}
+
