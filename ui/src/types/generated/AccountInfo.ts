@@ -43,12 +43,12 @@ preview_opt_in: boolean,
  * origin / imported-at). `None` = provenance-unknown (pre-E307
  * accounts — never guessed).
  */
-import_source_path: string | null, 
+import_source_path?: string | null, 
 /**
  * The discovery origin (`cc-switch|t3|alias|home-pattern|manual`).
  */
-import_origin: string | null, 
+import_origin?: string | null, 
 /**
  * Import completion time, epoch ms (None = never imported).
  */
-imported_at: bigint | null, };
+imported_at?: bigint | null, };

@@ -1395,10 +1395,13 @@ pub struct AccountInfo {
     /// AJ-E307 Req.1/2: import provenance (source canonical path /
     /// origin / imported-at). `None` = provenance-unknown (pre-E307
     /// accounts — never guessed).
+    #[ts(optional = nullable)]
     pub import_source_path: Option<String>,
     /// The discovery origin (`cc-switch|t3|alias|home-pattern|manual`).
+    #[ts(optional = nullable)]
     pub import_origin: Option<String>,
     /// Import completion time, epoch ms (None = never imported).
+    #[ts(optional = nullable)]
     pub imported_at: Option<i64>,
 }
 
